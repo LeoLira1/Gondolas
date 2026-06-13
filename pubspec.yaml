@@ -9,9 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  three_js: ^0.3.0
-  three_js_geometry: ^0.3.0
-  three_js_helpers: ^0.3.0
 
 dev_dependencies:
   flutter_test:
