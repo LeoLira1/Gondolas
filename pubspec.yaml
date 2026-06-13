@@ -1,0 +1,21 @@
+name: gondola_camda
+description: Protótipo 3D Gôndola CAMDA — visualizador octogonal 3 andares
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  three_js: ^0.3.0
+  three_js_geometry: ^0.3.0
+  three_js_helpers: ^0.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
