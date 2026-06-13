@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:three_js/three_js.dart' as three;
 import 'package:three_js_geometry/three_js_geometry.dart';
+import 'package:three_js_helpers/three_js_helpers.dart';
 
 class GondolaScene extends StatefulWidget {
   const GondolaScene({super.key});
@@ -90,7 +91,7 @@ class _GondolaSceneState extends State<GondolaScene> {
 
   void _montarChao() {
     // Disco escuro recebendo a gôndola
-    final geoChao = CircleGeometry(9, 32);
+    final geoChao = CircleGeometry(radius: 9, segments: 32);
     final matChao = three.MeshLambertMaterial.fromMap({'color': 0x12181e});
     final chao = three.Mesh(geoChao, matChao);
     chao.rotation.x = -math.pi / 2;
