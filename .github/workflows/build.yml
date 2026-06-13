@@ -46,6 +46,27 @@ jobs:
 
           cp -r /tmp/scaffold/android .
 
+      - name: Install CMake 3.31.4
+        # flutter_angle (dependência do three_js) exige CMake 3.31.4.
+        # O runner não tem essa versão no SDK Android, então instalamos
+        # direto do Kitware e apontamos via cmake.dir em local.properties.
+        run: |
+          CMAKE_VERSION="3.31.4"
+          CMAKE_INSTALL="/opt/cmake-${CMAKE_VERSION}"
+
+          wget -q \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+            -O /tmp/cmake.tar.gz
+
+          sudo mkdir -p "${CMAKE_INSTALL}"
+          sudo tar -xzf /tmp/cmake.tar.gz -C "${CMAKE_INSTALL}" --strip-components=1
+
+          # Adiciona ao PATH para uso geral
+          echo "${CMAKE_INSTALL}/bin" >> "$GITHUB_PATH"
+
+          # Aponta o AGP para esta instalação via local.properties
+          echo "cmake.dir=${CMAKE_INSTALL}" >> android/local.properties
+
       - name: Install dependencies
         run: flutter pub get
 
