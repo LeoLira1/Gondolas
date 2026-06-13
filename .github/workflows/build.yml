@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "claude/gondola-3d-flutter-prototype-9637uw"
+      - "claude/new-session-n5jyhk"
   workflow_dispatch:
 
 jobs:
