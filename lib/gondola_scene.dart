@@ -13,28 +13,26 @@ class GondolaScene extends StatefulWidget {
 
 class _GondolaSceneState extends State<GondolaScene> {
   late three.ThreeJS threeJs;
-  late three.OrbitControls controls;
+  three.OrbitControls? _controls;
 
   @override
   void initState() {
     super.initState();
+    // Sem renderOptions customizadas: o `samples: 4` (MSAA) força um
+    // framebuffer multiamostrado que muitos GPUs Android não suportam,
+    // resultando em "framebuffer incompleto" e crash imediato na abertura.
+    // Os defaults do three_js são seguros em todos os dispositivos.
     threeJs = three.ThreeJS(
       onSetupComplete: () { setState(() {}); },
       setup: _setup,
-      settings: three.Settings(
-        renderOptions: {
-          "minFilter": three.LinearFilter,
-          "magFilter": three.LinearFilter,
-          "format": three.RGBAFormat,
-          "samples": 4,
-        },
-      ),
     );
   }
 
   @override
   void dispose() {
-    controls.dispose();
+    // `_controls` pode ser nulo se o setup falhar antes de inicializá-lo;
+    // o null-safe evita um LateInitializationError em cascata no dispose.
+    _controls?.dispose();
     threeJs.dispose();
     super.dispose();
   }
@@ -54,7 +52,8 @@ class _GondolaSceneState extends State<GondolaScene> {
     threeJs.camera.position.setValues(0, 4.5, 14);
 
     // ── OrbitControls com damping — fluidez essencial no tablet ──
-    controls = three.OrbitControls(threeJs.camera, threeJs.globalKey);
+    final controls = three.OrbitControls(threeJs.camera, threeJs.globalKey);
+    _controls = controls;
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = false;
