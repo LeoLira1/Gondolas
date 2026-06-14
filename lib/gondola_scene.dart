@@ -306,6 +306,7 @@ class GondolaScene extends StatefulWidget {
   final String? produtoSelecionadoId;
   final Map<String, Color> corPorProduto;
   final void Function(int andar, double x, double z)? onTapAndar;
+  final String? destacadoCodigo;
 
   const GondolaScene({
     super.key,
@@ -314,6 +315,7 @@ class GondolaScene extends StatefulWidget {
     this.produtoSelecionadoId,
     this.corPorProduto = const {},
     this.onTapAndar,
+    this.destacadoCodigo,
   });
 
   @override
@@ -423,7 +425,10 @@ class _GondolaSceneState extends State<GondolaScene> {
     // Build box faces from current gondola's placed boxes
     final extraFaces = <_Face>[];
     for (final caixa in widget.caixas) {
-      final cor   = widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888);
+      final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
+      final cor = isHighlighted
+          ? const Color(0xFFe87722)
+          : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final shelf = GondolaGeometry.andares[caixa.andar];
       GondolaGeometry.addBox(extraFaces,
           cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor);
