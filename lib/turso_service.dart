@@ -63,9 +63,13 @@ class TursoService {
   Future<List<Produto>> fetchProdutos() async {
     if (!_connected || _client == null) return [];
     try {
-      final rows = await _client!.query(
-        'SELECT codigo, produto, categoria FROM estoque_mestre ORDER BY produto LIMIT 300',
+      // Use prepare() so the return type is consistent with fetchLayout.
+      // The bare client.query() returns a different type in libsql_dart 0.9.x
+      // and silently fails the cast, yielding an empty list.
+      final stmt = await _client!.prepare(
+        'SELECT codigo, produto, categoria FROM estoque_mestre ORDER BY produto LIMIT 5000',
       );
+      final rows = await stmt.query();
       return (rows as List<dynamic>).map((dynamic row) {
         final r      = row as Map<String, dynamic>;
         final cat    = r['categoria'] as String? ?? '';
