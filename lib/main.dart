@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'gondola_scene.dart';
 
@@ -50,27 +51,72 @@ class GondolaPage extends StatefulWidget {
 }
 
 class _GondolaPageState extends State<GondolaPage> {
-  // Central state — gondola number is the single source of truth that
-  // GondolaScene, the selector and the future Turso integration all read from.
-  int _gondolaAtual = 1;
-
-  // null = nenhum produto selecionado
+  int     _gondolaAtual         = 1;
   String? _produtoSelecionadoId;
+
+  // Box layout per gondola: gondola number → list of placed boxes
+  final Map<int, List<CaixaColocada>> _caixas = {};
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  List<CaixaColocada> get _caixasAtuais => _caixas[_gondolaAtual] ?? const [];
+
+  Map<String, Color> get _corPorProduto =>
+      {for (final p in catalogoProdutos) p.id: p.cor};
 
   Produto? get _produtoAtual => _produtoSelecionadoId == null
       ? null
       : catalogoProdutos.firstWhere((p) => p.id == _produtoSelecionadoId);
 
+  // ── Actions ────────────────────────────────────────────────────────────────
+
   void _trocarGondola(int delta) =>
       setState(() => _gondolaAtual = (_gondolaAtual + delta).clamp(1, 12));
 
   void _selecionarProduto(String id) => setState(() {
-        // Toque no produto já selecionado deseleciona
-        _produtoSelecionadoId = _produtoSelecionadoId == id ? null : id;
+        _produtoSelecionadoId =
+            _produtoSelecionadoId == id ? null : id;
       });
+
+  void _onTapAndar(int andar, double x, double z) {
+    if (_produtoSelecionadoId == null) return;
+    final caixa = CaixaColocada(
+      andar: andar,
+      produtoId: _produtoSelecionadoId!,
+      x: x,
+      z: z,
+    );
+    setState(() {
+      _caixas[_gondolaAtual] = [..._caixasAtuais, caixa];
+    });
+  }
+
+  void _limparGondola() => setState(() => _caixas.remove(_gondolaAtual));
+
+  void _salvarLayout() {
+    // TODO: POST para Turso aqui — substituir o print pelo request HTTP
+    final payload = {
+      for (final e in _caixas.entries)
+        '${e.key}': e.value.map((c) => c.toJson()).toList(),
+    };
+    // ignore: avoid_print
+    print('Layout JSON:\n${const JsonEncoder.withIndent('  ').convert(payload)}');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Layout salvo no console (Turso em breve)'),
+        backgroundColor: Color(0xFF2e6b46),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
+    final temCaixas = _caixasAtuais.isNotEmpty;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0e1014),
       appBar: AppBar(
@@ -117,16 +163,22 @@ class _GondolaPageState extends State<GondolaPage> {
 
           // ── Cena 3D ─────────────────────────────────────────────────────
           Expanded(
-            child: GondolaScene(gondolaAtual: _gondolaAtual),
+            child: GondolaScene(
+              gondolaAtual:           _gondolaAtual,
+              caixas:                 _caixasAtuais,
+              produtoSelecionadoId:   _produtoSelecionadoId,
+              corPorProduto:          _corPorProduto,
+              onTapAndar:             _onTapAndar,
+            ),
           ),
 
-          // ── Dica + barra de produto ──────────────────────────────────────
+          // ── Dica ────────────────────────────────────────────────────────
           Padding(
-            padding: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.only(top: 4, bottom: 2),
             child: Text(
               _produtoAtual == null
                   ? 'selecione um produto abaixo'
-                  : '${_produtoAtual!.nome} selecionado — toque num andar para adicionar',
+                  : '${_produtoAtual!.nome} selecionado  ·  toque num andar para adicionar',
               style: const TextStyle(
                 color: Color(0x99ffffff),
                 fontSize: 11,
@@ -134,10 +186,44 @@ class _GondolaPageState extends State<GondolaPage> {
               ),
             ),
           ),
+
+          // ── Barra de produtos ───────────────────────────────────────────
           _BarraProdutos(
-            catalogo: catalogoProdutos,
+            catalogo:     catalogoProdutos,
             selecionadoId: _produtoSelecionadoId,
-            onSelecionar: _selecionarProduto,
+            onSelecionar:  _selecionarProduto,
+          ),
+
+          // ── Botões Limpar / Salvar ──────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+            child: Row(
+              children: [
+                // Limpar — só ativo se há caixas
+                OutlinedButton.icon(
+                  onPressed: temCaixas ? _limparGondola : null,
+                  icon: const Icon(Icons.delete_outline, size: 16),
+                  label: const Text('Limpar'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFe57373),
+                    side: const BorderSide(color: Color(0xFF3a2020)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
+                ),
+                const Spacer(),
+                // Salvar layout
+                ElevatedButton.icon(
+                  onPressed: _salvarLayout,
+                  icon: const Icon(Icons.save_outlined, size: 16),
+                  label: const Text('Salvar layout'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2e6b46),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -145,7 +231,7 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 }
 
-// ── Gondola selector widget ───────────────────────────────────────────────────
+// ── Gondola selector ──────────────────────────────────────────────────────────
 
 class _GondolaSelector extends StatelessWidget {
   final int gondolaAtual;
@@ -240,7 +326,7 @@ class _ArrowBtn extends StatelessWidget {
   }
 }
 
-// ── Product selection bar ─────────────────────────────────────────────────────
+// ── Product bar ───────────────────────────────────────────────────────────────
 
 class _BarraProdutos extends StatelessWidget {
   final List<Produto> catalogo;
@@ -257,7 +343,7 @@ class _BarraProdutos extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFF0d1117),
-      padding: const EdgeInsets.fromLTRB(6, 8, 6, 12),
+      padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
       child: Row(
         children: catalogo.map((p) {
           final sel = p.id == selecionadoId;
@@ -270,8 +356,7 @@ class _BarraProdutos extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 decoration: BoxDecoration(
                   color: sel
-                      ? Color.fromARGB(64,
-                          p.cor.red, p.cor.green, p.cor.blue)
+                      ? Color.lerp(const Color(0xFF141a22), p.cor, 0.25)
                       : const Color(0xFF141a22),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
@@ -279,13 +364,10 @@ class _BarraProdutos extends StatelessWidget {
                     width: sel ? 2 : 1,
                   ),
                   boxShadow: sel
-                      ? [
-                          BoxShadow(
-                            color: Color.fromARGB(
-                                80, p.cor.red, p.cor.green, p.cor.blue),
-                            blurRadius: 8,
-                          ),
-                        ]
+                      ? [BoxShadow(
+                          color: Color.lerp(Colors.transparent, p.cor, 0.35)!,
+                          blurRadius: 8,
+                        )]
                       : null,
                 ),
                 child: Column(
@@ -308,8 +390,7 @@ class _BarraProdutos extends StatelessWidget {
                       style: TextStyle(
                         color: sel ? Colors.white : const Color(0xFF8a9aa8),
                         fontSize: 9.5,
-                        fontWeight:
-                            sel ? FontWeight.bold : FontWeight.normal,
+                        fontWeight: sel ? FontWeight.bold : FontWeight.normal,
                         letterSpacing: 0.1,
                       ),
                       textAlign: TextAlign.center,
