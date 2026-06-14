@@ -433,11 +433,15 @@ class _GondolaPageState extends State<GondolaPage> {
             children: [
               // Hint quando nenhum expander está aberto
               if (_expanderAberto == null)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Text(
-                    'Selecione uma ação abaixo',
-                    style: TextStyle(
+                    _carregandoProdutos
+                        ? 'Carregando produtos...'
+                        : _dbConectado
+                            ? '${_produtos.length} produto(s) disponíve${_produtos.length == 1 ? 'l' : 'is'}'
+                            : 'Selecione uma ação abaixo',
+                    style: const TextStyle(
                       color: Color(0x55ffffff),
                       fontSize: 11,
                       letterSpacing: 0.3,
