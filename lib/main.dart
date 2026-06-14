@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'configuracao_page.dart';
 import 'gondola_scene.dart';
@@ -48,6 +49,8 @@ class GondolaPage extends StatefulWidget {
 class _GondolaPageState extends State<GondolaPage> {
   int     _gondolaAtual        = 1;
   String? _produtoSelecionadoId;
+  String? _destacadoCodigo;
+  Timer?  _highlightTimer;
 
   final Map<int, List<CaixaColocada>> _caixas = {};
 
@@ -56,6 +59,18 @@ class _GondolaPageState extends State<GondolaPage> {
   bool          _carregandoProdutos = false;
   bool          _carregandoLayout   = false;
   bool          _salvando           = false;
+
+  // null = nenhum aberto, 1 = Adicionar, 2 = Buscar
+  int? _expanderAberto;
+
+  // Expander 1 — Adicionar
+  final _ctrl1 = TextEditingController();
+  List<Produto> _sugestoes1 = [];
+  Produto? _produtoChip;
+
+  // Expander 2 — Buscar
+  final _ctrl2 = TextEditingController();
+  List<Produto> _sugestoes2 = [];
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -67,13 +82,15 @@ class _GondolaPageState extends State<GondolaPage> {
   Map<String, Color> get _corPorProduto =>
       {for (final p in _catalogoAtual) p.codigo: p.cor};
 
-  Produto? get _produtoAtual {
-    if (_produtoSelecionadoId == null) return null;
-    try {
-      return _catalogoAtual.firstWhere((p) => p.codigo == _produtoSelecionadoId);
-    } catch (_) {
-      return null;
-    }
+  List<Produto> _filtrarProdutos(String query) {
+    if (query.length < 2) return [];
+    final q = query.toLowerCase();
+    return _catalogoAtual
+        .where((p) =>
+            p.nome.toLowerCase().contains(q) ||
+            p.codigo.toLowerCase().contains(q))
+        .take(8)
+        .toList();
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -82,6 +99,14 @@ class _GondolaPageState extends State<GondolaPage> {
   void initState() {
     super.initState();
     _inicializar();
+  }
+
+  @override
+  void dispose() {
+    _highlightTimer?.cancel();
+    _ctrl1.dispose();
+    _ctrl2.dispose();
+    super.dispose();
   }
 
   Future<void> _inicializar() async {
@@ -117,8 +142,8 @@ class _GondolaPageState extends State<GondolaPage> {
   void _trocarGondola(int delta) {
     final nova = (_gondolaAtual + delta).clamp(1, 12);
     setState(() {
-      _gondolaAtual      = nova;
-      _carregandoLayout  = _dbConectado;
+      _gondolaAtual     = nova;
+      _carregandoLayout = _dbConectado;
     });
     if (_dbConectado) _carregarLayout(nova);
   }
@@ -139,11 +164,6 @@ class _GondolaPageState extends State<GondolaPage> {
     });
   }
 
-  void _selecionarProduto(String codigo) => setState(() {
-        _produtoSelecionadoId =
-            _produtoSelecionadoId == codigo ? null : codigo;
-      });
-
   void _onTapAndar(int andar, double x, double z) {
     if (_produtoSelecionadoId == null) return;
     setState(() {
@@ -163,13 +183,11 @@ class _GondolaPageState extends State<GondolaPage> {
 
   Future<void> _salvarLayout() async {
     if (!_dbConectado) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configure o banco em ⚙️ para salvar no Turso'),
-          backgroundColor: Color(0xFF1a3040),
-          duration: Duration(seconds: 3),
-        ),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Configure o banco em ⚙️ para salvar no Turso'),
+        backgroundColor: Color(0xFF1a3040),
+        duration: Duration(seconds: 3),
+      ));
       return;
     }
 
@@ -193,14 +211,100 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
     setState(() => _salvando = false);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(ok ? 'Layout salvo ✓' : 'Erro ao salvar'),
-        backgroundColor:
-            ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-        duration: const Duration(seconds: 2),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? 'Layout salvo ✓' : 'Erro ao salvar'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
+  Future<void> _buscarProduto(Produto produto) async {
+    if (!_dbConectado) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Configure o banco em ⚙️ para buscar no Turso'),
+        backgroundColor: Color(0xFF1a3040),
+        duration: Duration(seconds: 3),
+      ));
+      return;
+    }
+
+    final encontrado = await TursoService().buscarProduto(produto.codigo);
+    if (!mounted) return;
+
+    if (encontrado == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          '${produto.nome} não encontrado em nenhuma gôndola.\n'
+          'Use "Adicionar produto" para cadastrar.',
+        ),
+        backgroundColor: const Color(0xFF5a1a1a),
+        duration: const Duration(seconds: 3),
+      ));
+      return;
+    }
+
+    // Navigate to the gondola and load its layout
+    setState(() {
+      _gondolaAtual     = encontrado.gondolaNum;
+      _carregandoLayout = true;
+      _expanderAberto   = null;
+      _sugestoes2       = [];
+    });
+    _ctrl2.clear();
+
+    final layouts = await TursoService().fetchLayout(encontrado.gondolaNum);
+    if (!mounted) return;
+
+    _highlightTimer?.cancel();
+    setState(() {
+      _caixas[encontrado.gondolaNum] = layouts
+          .map((l) => CaixaColocada(
+                andar:     l.andar,
+                produtoId: l.produtoCodigo,
+                x:         l.posX,
+                z:         l.posZ,
+              ))
+          .toList();
+      _carregandoLayout = false;
+      _destacadoCodigo  = produto.codigo;
+    });
+
+    _highlightTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _destacadoCodigo = null);
+    });
+
+    final andarNome = ['Base', 'Meio', 'Topo'][encontrado.andar.clamp(0, 2)];
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+        '📍 ${produto.nome} → Gôndola ${encontrado.gondolaNum}, Andar $andarNome',
       ),
-    );
+      backgroundColor: const Color(0xFF1a3a2a),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  void _abrirExpander(int num) {
+    setState(() {
+      if (_expanderAberto == num) {
+        _expanderAberto = null;
+        _limparEstadoExpander(num);
+      } else {
+        if (_expanderAberto != null) _limparEstadoExpander(_expanderAberto!);
+        _expanderAberto = num;
+      }
+    });
+  }
+
+  void _limparEstadoExpander(int num) {
+    if (num == 1) {
+      _produtoSelecionadoId = null;
+      _produtoChip          = null;
+      _sugestoes1           = [];
+      _ctrl1.clear();
+    } else {
+      _sugestoes2 = [];
+      _ctrl2.clear();
+    }
   }
 
   Future<void> _abrirConfiguracoes() async {
@@ -208,11 +312,19 @@ class _GondolaPageState extends State<GondolaPage> {
       context,
       MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
     );
-    // Re-initialize after possible credential change
+    // Reset after possible credential change
     setState(() {
       _caixas.clear();
       _produtoSelecionadoId = null;
+      _produtoChip          = null;
+      _expanderAberto       = null;
+      _sugestoes1           = [];
+      _sugestoes2           = [];
+      _destacadoCodigo      = null;
     });
+    _ctrl1.clear();
+    _ctrl2.clear();
+    _highlightTimer?.cancel();
     _inicializar();
   }
 
@@ -220,43 +332,38 @@ class _GondolaPageState extends State<GondolaPage> {
 
   @override
   Widget build(BuildContext context) {
-    final temCaixas = _caixasAtuais.isNotEmpty;
-
     return Scaffold(
       backgroundColor: const Color(0xFF0e1014),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0e1014),
         elevation: 0,
         titleSpacing: 12,
-        title: Row(
-          children: [
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2e6b46),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: const Text(
-                'CAMDA',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  letterSpacing: 0.5,
-                ),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2e6b46),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Text(
+              'CAMDA',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                letterSpacing: 0.5,
               ),
             ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Layout de Gôndola',
-                style: TextStyle(color: Colors.white, fontSize: 15),
-                overflow: TextOverflow.ellipsis,
-              ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Layout de Gôndola',
+              style: TextStyle(color: Colors.white, fontSize: 15),
+              overflow: TextOverflow.ellipsis,
             ),
-          ],
-        ),
+          ),
+        ]),
         actions: [
           if (_dbConectado)
             const Padding(
@@ -271,119 +378,406 @@ class _GondolaPageState extends State<GondolaPage> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // ── Indicador de carregamento fino ─────────────────────────────
-          if (_carregandoLayout || _carregandoProdutos)
-            const LinearProgressIndicator(
-              minHeight: 2,
-              backgroundColor: Color(0xFF0d1117),
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2e6b46)),
-            ),
+      body: Column(children: [
+        // ── Indicador de carregamento fino ────────────────────────────────
+        if (_carregandoLayout || _carregandoProdutos)
+          const LinearProgressIndicator(
+            minHeight: 2,
+            backgroundColor: Color(0xFF0d1117),
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2e6b46)),
+          ),
 
-          // ── Banner: banco não configurado ───────────────────────────────
-          if (!_dbConectado && !_carregandoProdutos)
-            Container(
-              width: double.infinity,
-              color: const Color(0xFF0d1a24),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline,
-                      color: Color(0xFF4a7a9b), size: 13),
-                  const SizedBox(width: 6),
-                  const Expanded(
-                    child: Text(
-                      'Banco não configurado — usando dados de exemplo  ·  toque em ⚙️',
-                      style: TextStyle(
-                          color: Color(0xFF4a7a9b), fontSize: 11),
+        // ── Banner: banco não configurado ─────────────────────────────────
+        if (!_dbConectado && !_carregandoProdutos)
+          Container(
+            width: double.infinity,
+            color: const Color(0xFF0d1a24),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            child: Row(children: [
+              const Icon(Icons.info_outline,
+                  color: Color(0xFF4a7a9b), size: 13),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Banco não configurado — usando dados de exemplo  ·  toque em ⚙️',
+                  style: TextStyle(color: Color(0xFF4a7a9b), fontSize: 11),
+                ),
+              ),
+            ]),
+          ),
+
+        // ── Seletor de gôndola ────────────────────────────────────────────
+        _GondolaSelector(
+          gondolaAtual: _gondolaAtual,
+          onPrev: _gondolaAtual > 1  ? () => _trocarGondola(-1) : null,
+          onNext: _gondolaAtual < 12 ? () => _trocarGondola(1)  : null,
+        ),
+
+        // ── Cena 3D ───────────────────────────────────────────────────────
+        Expanded(
+          child: GondolaScene(
+            gondolaAtual:         _gondolaAtual,
+            caixas:               _caixasAtuais,
+            produtoSelecionadoId: _produtoSelecionadoId,
+            corPorProduto:        _corPorProduto,
+            onTapAndar:           _onTapAndar,
+            destacadoCodigo:      _destacadoCodigo,
+          ),
+        ),
+
+        // ── Painel inferior ───────────────────────────────────────────────
+        Container(
+          color: const Color(0xFF0d1117),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Hint quando nenhum expander está aberto
+              if (_expanderAberto == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'Selecione uma ação abaixo',
+                    style: TextStyle(
+                      color: Color(0x55ffffff),
+                      fontSize: 11,
+                      letterSpacing: 0.3,
                     ),
                   ),
-                ],
+                ),
+
+              // Expander 1 — Adicionar produto
+              _Expander(
+                title: '➕ Adicionar produto',
+                isOpen: _expanderAberto == 1,
+                onToggle: () => _abrirExpander(1),
+                child: _buildConteudoAdicionar(),
               ),
-            ),
 
-          // ── Seletor de gôndola ──────────────────────────────────────────
-          _GondolaSelector(
-            gondolaAtual: _gondolaAtual,
-            onPrev: _gondolaAtual > 1  ? () => _trocarGondola(-1) : null,
-            onNext: _gondolaAtual < 12 ? () => _trocarGondola(1)  : null,
-          ),
+              const SizedBox(height: 4),
 
-          // ── Cena 3D ─────────────────────────────────────────────────────
-          Expanded(
-            child: GondolaScene(
-              gondolaAtual:         _gondolaAtual,
-              caixas:               _caixasAtuais,
-              produtoSelecionadoId: _produtoSelecionadoId,
-              corPorProduto:        _corPorProduto,
-              onTapAndar:           _onTapAndar,
-            ),
-          ),
-
-          // ── Dica ────────────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 2),
-            child: Text(
-              _produtoAtual == null
-                  ? 'selecione um produto abaixo'
-                  : '${_produtoAtual!.nome} selecionado  ·  toque num andar para adicionar',
-              style: const TextStyle(
-                color: Color(0x99ffffff),
-                fontSize: 11,
-                letterSpacing: 0.2,
+              // Expander 2 — Buscar produto
+              _Expander(
+                title: '🔍 Buscar produto',
+                isOpen: _expanderAberto == 2,
+                onToggle: () => _abrirExpander(2),
+                child: _buildConteudoBuscar(),
               ),
+
+              // Botões Limpar / Salvar
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                child: Row(children: [
+                  OutlinedButton.icon(
+                    onPressed:
+                        _caixasAtuais.isNotEmpty ? _limparGondola : null,
+                    icon: const Icon(Icons.delete_outline, size: 16),
+                    label: const Text('Limpar'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFe57373),
+                      side: const BorderSide(color: Color(0xFF3a2020)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                    ),
+                  ),
+                  const Spacer(),
+                  ElevatedButton.icon(
+                    onPressed: _salvando ? null : _salvarLayout,
+                    icon: _salvando
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.save_outlined, size: 16),
+                    label: const Text('Salvar layout'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2e6b46),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 8),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── Conteúdo Expander 1 ────────────────────────────────────────────────────
+
+  Widget _buildConteudoAdicionar() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Chip: produto selecionado
+        if (_produtoChip != null)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF162416),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFF2e6b46)),
             ),
-          ),
-
-          // ── Barra de produtos ───────────────────────────────────────────
-          _BarraProdutos(
-            catalogo:      _catalogoAtual,
-            selecionadoId: _produtoSelecionadoId,
-            onSelecionar:  _selecionarProduto,
-          ),
-
-          // ── Botões Limpar / Salvar ──────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-            child: Row(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: temCaixas ? _limparGondola : null,
-                  icon: const Icon(Icons.delete_outline, size: 16),
-                  label: const Text('Limpar'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFe57373),
-                    side: const BorderSide(color: Color(0xFF3a2020)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
+            child: Row(children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: _produtoChip!.cor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '✓ ${_produtoChip!.nome} — toque num andar para adicionar',
+                  style: const TextStyle(
+                    color: Color(0xFF6fcf97),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  onPressed: _salvando ? null : _salvarLayout,
-                  icon: _salvando
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.save_outlined, size: 16),
-                  label: const Text('Salvar layout'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2e6b46),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 8),
-                  ),
-                ),
-              ],
-            ),
+              ),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _produtoChip          = null;
+                  _produtoSelecionadoId = null;
+                }),
+                child: const Icon(Icons.close,
+                    size: 14, color: Color(0xFF8a9aa8)),
+              ),
+            ]),
           ),
-        ],
+
+        _CampoAutocomplete(
+          controller: _ctrl1,
+          onChanged: (q) =>
+              setState(() => _sugestoes1 = _filtrarProdutos(q)),
+        ),
+
+        if (_sugestoes1.isNotEmpty)
+          _SugestoesList(
+            sugestoes: _sugestoes1,
+            onSelecionar: (p) => setState(() {
+              _produtoSelecionadoId = p.codigo;
+              _produtoChip          = p;
+              _sugestoes1           = [];
+              _ctrl1.clear();
+            }),
+          ),
+      ],
+    );
+  }
+
+  // ── Conteúdo Expander 2 ────────────────────────────────────────────────────
+
+  Widget _buildConteudoBuscar() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _CampoAutocomplete(
+          controller: _ctrl2,
+          onChanged: (q) =>
+              setState(() => _sugestoes2 = _filtrarProdutos(q)),
+        ),
+        if (_sugestoes2.isNotEmpty)
+          _SugestoesList(
+            sugestoes: _sugestoes2,
+            onSelecionar: (p) {
+              setState(() => _sugestoes2 = []);
+              _ctrl2.clear();
+              _buscarProduto(p);
+            },
+          ),
+      ],
+    );
+  }
+}
+
+// ── Campo de autocomplete (compartilhado) ─────────────────────────────────────
+
+class _CampoAutocomplete extends StatelessWidget {
+  final TextEditingController controller;
+  final ValueChanged<String>  onChanged;
+
+  const _CampoAutocomplete({
+    required this.controller,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      onChanged:  onChanged,
+      style: const TextStyle(color: Colors.white, fontSize: 13),
+      decoration: InputDecoration(
+        hintText:  'Buscar por nome ou código...',
+        hintStyle: const TextStyle(color: Color(0x44ffffff), fontSize: 13),
+        prefixIcon:
+            const Icon(Icons.search, color: Color(0xFF8a9aa8), size: 18),
+        filled:    true,
+        fillColor: const Color(0xFF161c22),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF232f3a)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF232f3a)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide:
+              const BorderSide(color: Color(0xFF2e6b46), width: 1.5),
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
       ),
+    );
+  }
+}
+
+// ── Lista de sugestões ────────────────────────────────────────────────────────
+
+class _SugestoesList extends StatelessWidget {
+  final List<Produto>            sugestoes;
+  final void Function(Produto)   onSelecionar;
+
+  const _SugestoesList({
+    required this.sugestoes,
+    required this.onSelecionar,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      constraints: const BoxConstraints(maxHeight: 200),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161c22),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF232f3a)),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: sugestoes.length,
+        separatorBuilder: (_, __) =>
+            const Divider(height: 1, color: Color(0xFF232f3a)),
+        itemBuilder: (context, i) {
+          final p = sugestoes[i];
+          return InkWell(
+            onTap: () => onSelecionar(p),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(children: [
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: p.cor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  p.codigo,
+                  style: const TextStyle(
+                    color: Color(0xFF8a9aa8),
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    p.nome,
+                    style:
+                        const TextStyle(color: Colors.white, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ]),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── Expander shell ────────────────────────────────────────────────────────────
+
+class _Expander extends StatelessWidget {
+  final String       title;
+  final bool         isOpen;
+  final VoidCallback onToggle;
+  final Widget       child;
+
+  const _Expander({
+    required this.title,
+    required this.isOpen,
+    required this.onToggle,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111820),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isOpen
+              ? const Color(0xFF2e6b46)
+              : const Color(0xFF1e2830),
+        ),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        GestureDetector(
+          onTap: onToggle,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: isOpen ? Colors.white : const Color(0xFF8a9aa8),
+                  fontSize: 13,
+                  fontWeight:
+                      isOpen ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+              const Spacer(),
+              Icon(
+                isOpen ? Icons.expand_less : Icons.expand_more,
+                color: isOpen
+                    ? const Color(0xFF2e6b46)
+                    : const Color(0xFF5a6a78),
+                size: 20,
+              ),
+            ]),
+          ),
+        ),
+        if (isOpen)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: child,
+          ),
+      ]),
     );
   }
 }
@@ -391,7 +785,7 @@ class _GondolaPageState extends State<GondolaPage> {
 // ── Gondola selector ──────────────────────────────────────────────────────────
 
 class _GondolaSelector extends StatelessWidget {
-  final int gondolaAtual;
+  final int           gondolaAtual;
   final VoidCallback? onPrev;
   final VoidCallback? onNext;
 
@@ -409,39 +803,36 @@ class _GondolaSelector extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _ArrowBtn(icon: Icons.chevron_left, onTap: onPrev),
+          _ArrowBtn(icon: Icons.chevron_left,  onTap: onPrev),
           const SizedBox(width: 24),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'GÔNDOLA',
-                style: TextStyle(
-                  color: Color(0xFF8a9aa8),
-                  fontSize: 10,
-                  letterSpacing: 2.0,
-                  fontWeight: FontWeight.w600,
-                ),
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text(
+              'GÔNDOLA',
+              style: TextStyle(
+                color: Color(0xFF8a9aa8),
+                fontSize: 10,
+                letterSpacing: 2.0,
+                fontWeight: FontWeight.w600,
               ),
-              Text(
-                '$gondolaAtual',
-                style: const TextStyle(
-                  color: Color(0xFFe8a022),
-                  fontSize: 58,
-                  fontWeight: FontWeight.bold,
-                  height: 0.95,
-                ),
+            ),
+            Text(
+              '$gondolaAtual',
+              style: const TextStyle(
+                color: Color(0xFFe8a022),
+                fontSize: 58,
+                fontWeight: FontWeight.bold,
+                height: 0.95,
               ),
-              const Text(
-                'de 12',
-                style: TextStyle(
-                  color: Color(0xFF5a6a78),
-                  fontSize: 10,
-                  letterSpacing: 0.5,
-                ),
+            ),
+            const Text(
+              'de 12',
+              style: TextStyle(
+                color: Color(0xFF5a6a78),
+                fontSize: 10,
+                letterSpacing: 0.5,
               ),
-            ],
-          ),
+            ),
+          ]),
           const SizedBox(width: 24),
           _ArrowBtn(icon: Icons.chevron_right, onTap: onNext),
         ],
@@ -451,7 +842,7 @@ class _GondolaSelector extends StatelessWidget {
 }
 
 class _ArrowBtn extends StatelessWidget {
-  final IconData icon;
+  final IconData      icon;
   final VoidCallback? onTap;
 
   const _ArrowBtn({required this.icon, required this.onTap});
@@ -466,9 +857,7 @@ class _ArrowBtn extends StatelessWidget {
         width: 52,
         height: 52,
         decoration: BoxDecoration(
-          color: active
-              ? const Color(0xFF1a2530)
-              : const Color(0xFF111518),
+          color: active ? const Color(0xFF1a2530) : const Color(0xFF111518),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: active
@@ -484,95 +873,6 @@ class _ArrowBtn extends StatelessWidget {
               : const Color(0xFF2e3d48),
           size: 30,
         ),
-      ),
-    );
-  }
-}
-
-// ── Product bar ───────────────────────────────────────────────────────────────
-
-class _BarraProdutos extends StatelessWidget {
-  final List<Produto> catalogo;
-  final String? selecionadoId;
-  final void Function(String codigo) onSelecionar;
-
-  const _BarraProdutos({
-    required this.catalogo,
-    required this.selecionadoId,
-    required this.onSelecionar,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: const Color(0xFF0d1117),
-      padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
-      height: 86,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: catalogo.length,
-        itemBuilder: (_, i) {
-          final p   = catalogo[i];
-          final sel = p.codigo == selecionadoId;
-          return GestureDetector(
-            onTap: () => onSelecionar(p.codigo),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: 80,
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              decoration: BoxDecoration(
-                color: sel
-                    ? Color.lerp(const Color(0xFF141a22), p.cor, 0.25)
-                    : const Color(0xFF141a22),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: sel ? p.cor : const Color(0xFF232f3a),
-                  width: sel ? 2 : 1,
-                ),
-                boxShadow: sel
-                    ? [
-                        BoxShadow(
-                          color:
-                              Color.lerp(Colors.transparent, p.cor, 0.35)!,
-                          blurRadius: 8,
-                        )
-                      ]
-                    : null,
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 22,
-                    height: 22,
-                    decoration: BoxDecoration(
-                      color: p.cor,
-                      borderRadius: BorderRadius.circular(4),
-                      border: sel
-                          ? Border.all(color: Colors.white, width: 1.5)
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    p.nome,
-                    style: TextStyle(
-                      color: sel ? Colors.white : const Color(0xFF8a9aa8),
-                      fontSize: 9.5,
-                      fontWeight:
-                          sel ? FontWeight.bold : FontWeight.normal,
-                      letterSpacing: 0.1,
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
       ),
     );
   }

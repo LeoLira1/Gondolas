@@ -140,4 +140,29 @@ class TursoService {
       return false;
     }
   }
+
+  Future<CaixaLayout?> buscarProduto(String produtoCodigo) async {
+    if (!_connected || _client == null) return null;
+    try {
+      final stmt = await _client!.prepare(
+        'SELECT gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex '
+        'FROM gondola_layout WHERE produto_codigo = ? LIMIT 1',
+      );
+      final rows = await stmt.query(positional: [produtoCodigo]);
+      final list = rows as List<dynamic>;
+      if (list.isEmpty) return null;
+      final r = list.first as Map<String, dynamic>;
+      return CaixaLayout(
+        gondolaNum:    r['gondola_num']    as int?    ?? 0,
+        andar:         r['andar']          as int?    ?? 0,
+        produtoCodigo: r['produto_codigo'] as String? ?? produtoCodigo,
+        produtoNome:   r['produto_nome']   as String? ?? '',
+        posX:          (r['pos_x']  as num?)?.toDouble() ?? 0,
+        posZ:          (r['pos_z']  as num?)?.toDouble() ?? 0,
+        corHex:        r['cor_hex']        as String? ?? '#888888',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
