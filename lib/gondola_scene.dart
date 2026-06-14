@@ -86,7 +86,6 @@ class GondolaGeometry {
   static const _corCorpo  = Color(0xFF2e6b46);
   static const _corColuna = Color(0xFF1f4a30);
   static const _corBorda  = Color(0xFF4a9d6a);
-  static const _corChao   = Color(0xFF12181e);
 
   // Shelf Y-centres and radii — exposed so hit-testing (Part 2) can reuse them
   static const List<({double yTop, double r})> andares = [
@@ -97,9 +96,6 @@ class GondolaGeometry {
 
   static List<_Face> buildFaces() {
     final faces = <_Face>[];
-
-    // Floor disc
-    _disk(faces, r: 9.0, y: 0.0, color: _corChao);
 
     // 8 feet
     for (var i = 0; i < 8; i++) {
@@ -162,33 +158,11 @@ class GondolaGeometry {
       ], color));
     }
 
-    // Top cap: center → v_i+1 → v_i gives upward (+Y) normal
-    final top = Vec3(cx, y1, cz);
-    for (var i = 0; i < sides; i++) {
-      final a0 = angles[i], a1 = angles[(i + 1) % sides];
-      faces.add(_Face([
-        top,
-        Vec3(cx + r * math.cos(a1), y1, cz + r * math.sin(a1)),
-        Vec3(cx + r * math.cos(a0), y1, cz + r * math.sin(a0)),
-      ], color));
-    }
-  }
-
-  /// Flat polygon fan for the floor disc.
-  static void _disk(List<_Face> faces,
-      {required double r, required double y, required Color color}) {
-    const sides = 8;
-    final center = Vec3(0, y, 0);
-    for (var i = 0; i < sides; i++) {
-      final a0 = i * 2 * math.pi / sides;
-      final a1 = (i + 1) * 2 * math.pi / sides;
-      // center → v1 → v0 gives upward (+Y) normal
-      faces.add(_Face([
-        center,
-        Vec3(r * math.cos(a1), y, r * math.sin(a1)),
-        Vec3(r * math.cos(a0), y, r * math.sin(a0)),
-      ], color));
-    }
+    // Top cap as single polygon (reverse angle order → +Y normal, no internal edge lines)
+    faces.add(_Face([
+      for (var i = sides - 1; i >= 0; i--)
+        Vec3(cx + r * math.cos(angles[i]), y1, cz + r * math.sin(angles[i]))
+    ], color));
   }
 }
 
