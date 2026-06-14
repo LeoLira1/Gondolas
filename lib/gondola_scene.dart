@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Vec3 — lightweight 3-D vector
+// Vec3
 // ──────────────────────────────────────────────────────────────────────────────
 
 class Vec3 {
@@ -33,8 +33,8 @@ class Vec3 {
 // ──────────────────────────────────────────────────────────────────────────────
 
 class Camera {
-  final double rotY; // azimuth
-  final double rotX; // elevation (~11° up matches original three_js initial pos)
+  final double rotY;
+  final double rotX;
   final double dist;
   final Vec3 target;
 
@@ -63,7 +63,7 @@ class Camera {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// _Face — polygon in world space, projected lazily
+// _Face — polygon in world space, projected by the painter
 // ──────────────────────────────────────────────────────────────────────────────
 
 class _Face {
@@ -77,9 +77,27 @@ class _Face {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// GondolaGeometry — builds static gondola faces
-// The faces list is passed to the painter each frame; boxes (Part 2) will be
-// appended to the same list before projection so they share the same pipeline.
+// CaixaColocada — a product box placed on a shelf
+// ──────────────────────────────────────────────────────────────────────────────
+
+class CaixaColocada {
+  final int andar;       // 0=base, 1=meio, 2=topo
+  final String produtoId;
+  final double x, z;    // position at shelf surface centre
+
+  const CaixaColocada({
+    required this.andar,
+    required this.produtoId,
+    required this.x,
+    required this.z,
+  });
+
+  Map<String, dynamic> toJson() =>
+      {'andar': andar, 'produtoId': produtoId, 'x': x, 'z': z};
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GondolaGeometry — static gondola faces + box helper
 // ──────────────────────────────────────────────────────────────────────────────
 
 class GondolaGeometry {
@@ -87,11 +105,12 @@ class GondolaGeometry {
   static const _corColuna = Color(0xFF1f4a30);
   static const _corBorda  = Color(0xFF4a9d6a);
 
-  // Shelf Y-centres and radii — exposed so hit-testing (Part 2) can reuse them
+  // yTop = top of shelf surface including the 0.06 accent-ring.
+  // This is the Y at which boxes sit and what hit-testing tests against.
   static const List<({double yTop, double r})> andares = [
-    (yTop: 0.675 + 0.35 / 2, r: 3.4), // andar 0 — base
-    (yTop: 2.15  + 0.30 / 2, r: 2.4), // andar 1 — meio
-    (yTop: 3.43  + 0.26 / 2, r: 1.5), // andar 2 — topo
+    (yTop: 0.675 + 0.35 / 2 + 0.06, r: 3.4), // andar 0 — base  (y≈0.91)
+    (yTop: 2.15  + 0.30 / 2 + 0.06, r: 2.4), // andar 1 — meio  (y≈2.36)
+    (yTop: 3.43  + 0.26 / 2 + 0.06, r: 1.5), // andar 2 — topo  (y≈3.62)
   ];
 
   static List<_Face> buildFaces() {
@@ -107,19 +126,17 @@ class GondolaGeometry {
           color: _corColuna);
     }
 
-    // Shelf 0 — base (radius 3.4)
+    // Shelf 0 — base
     _shelf(faces, r: 3.4, yc: 0.675, h: 0.35);
-    // Column 0→1
     _prism(faces, cx: 0, cz: 0, y0: 0.85, y1: 2.0,
         r: 0.28, sides: 8, color: _corColuna);
 
-    // Shelf 1 — meio (radius 2.4)
+    // Shelf 1 — meio
     _shelf(faces, r: 2.4, yc: 2.15, h: 0.30);
-    // Column 1→2
     _prism(faces, cx: 0, cz: 0, y0: 2.30, y1: 3.30,
         r: 0.28, sides: 8, color: _corColuna);
 
-    // Shelf 2 — topo (radius 1.5)
+    // Shelf 2 — topo
     _shelf(faces, r: 1.5, yc: 3.43, h: 0.26);
 
     return faces;
@@ -127,18 +144,15 @@ class GondolaGeometry {
 
   static void _shelf(List<_Face> faces,
       {required double r, required double yc, required double h}) {
-    const rot = math.pi / 8; // align flat face forward
+    const rot = math.pi / 8;
     _prism(faces,
         cx: 0, cz: 0, y0: yc - h / 2, y1: yc + h / 2,
         r: r, sides: 8, color: _corCorpo, rotOff: rot);
-    // Accent border ring on top
     _prism(faces,
         cx: 0, cz: 0, y0: yc + h / 2, y1: yc + h / 2 + 0.06,
         r: r + 0.13, sides: 8, color: _corBorda, rotOff: rot);
   }
 
-  /// Builds an n-sided prism (side faces + top cap).
-  /// Winding chosen for outward side normals and upward top normals.
   static void _prism(List<_Face> faces, {
     required double cx, required double cz,
     required double y0, required double y1,
@@ -151,28 +165,48 @@ class GondolaGeometry {
       final a0 = angles[i], a1 = angles[(i + 1) % sides];
       final x0 = cx + r * math.cos(a0), z0 = cz + r * math.sin(a0);
       final x1 = cx + r * math.cos(a1), z1 = cz + r * math.sin(a1);
-      // Side: v0_bottom → v0_top → v1_top → v1_bottom gives outward normal
       faces.add(_Face([
         Vec3(x0, y0, z0), Vec3(x0, y1, z0),
         Vec3(x1, y1, z1), Vec3(x1, y0, z1),
       ], color));
     }
 
-    // Top cap as single polygon (reverse angle order → +Y normal, no internal edge lines)
+    // Single-polygon top cap — no internal edge lines
     faces.add(_Face([
       for (var i = sides - 1; i >= 0; i--)
         Vec3(cx + r * math.cos(angles[i]), y1, cz + r * math.sin(angles[i]))
     ], color));
   }
+
+  /// Adds 5 visible faces of a box sitting on a shelf surface at (cx, cy, cz).
+  static void addBox(List<_Face> faces, {
+    required double cx, required double cy, required double cz,
+    required Color color,
+  }) {
+    const w = 0.40, h = 0.52, d = 0.40;
+    final x0 = cx - w / 2, x1 = cx + w / 2;
+    final y0 = cy,          y1 = cy + h;
+    final z0 = cz - d / 2, z1 = cz + d / 2;
+
+    // Top  (+Y)
+    faces.add(_Face([Vec3(x0,y1,z0), Vec3(x0,y1,z1), Vec3(x1,y1,z1), Vec3(x1,y1,z0)], color));
+    // Front (+Z)
+    faces.add(_Face([Vec3(x0,y0,z1), Vec3(x1,y0,z1), Vec3(x1,y1,z1), Vec3(x0,y1,z1)], color));
+    // Back  (-Z)
+    faces.add(_Face([Vec3(x1,y0,z0), Vec3(x0,y0,z0), Vec3(x0,y1,z0), Vec3(x1,y1,z0)], color));
+    // Right (+X)
+    faces.add(_Face([Vec3(x1,y0,z1), Vec3(x1,y0,z0), Vec3(x1,y1,z0), Vec3(x1,y1,z1)], color));
+    // Left  (-X)
+    faces.add(_Face([Vec3(x0,y0,z0), Vec3(x0,y0,z1), Vec3(x0,y1,z1), Vec3(x0,y1,z0)], color));
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// GondolaPainter — projects + painter's-algorithm sorts + draws faces
+// GondolaPainter
 // ──────────────────────────────────────────────────────────────────────────────
 
 class GondolaPainter extends CustomPainter {
   final Camera camera;
-  // Boxes to draw (Part 2 will pass them in)
   final List<_Face> extraFaces;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
@@ -190,7 +224,7 @@ class GondolaPainter extends CustomPainter {
   }
 
   void _project(List<_Face> faces, Size size) {
-    final eye = camera.position;
+    final eye   = camera.position;
     final fwd   = (camera.target - eye).normalized;
     final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
     final up    = right.cross(fwd).normalized;
@@ -218,11 +252,9 @@ class GondolaPainter extends CustomPainter {
         continue;
       }
 
-      // Average depth in camera space
       f.depth = f.verts.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) /
           f.verts.length;
 
-      // Diffuse lighting from first triangle of the face
       if (f.verts.length >= 3) {
         final n = (f.verts[1] - f.verts[0])
             .cross(f.verts[2] - f.verts[0])
@@ -233,10 +265,10 @@ class GondolaPainter extends CustomPainter {
   }
 
   void _draw(Canvas canvas, List<_Face> faces) {
-    final fillPaint   = Paint();
-    final strokePaint = Paint()
-      ..color     = const Color(0x33000000)
-      ..style     = PaintingStyle.stroke
+    final fill   = Paint();
+    final stroke = Paint()
+      ..color      = const Color(0x33000000)
+      ..style      = PaintingStyle.stroke
       ..strokeWidth = 0.5;
 
     for (final f in faces) {
@@ -250,23 +282,18 @@ class GondolaPainter extends CustomPainter {
 
       final li = f.light;
       final c  = f.color;
-      fillPaint.color = Color.fromARGB(
-        255,
-        (c.red   * li).round().clamp(0, 255),
-        (c.green * li).round().clamp(0, 255),
-        (c.blue  * li).round().clamp(0, 255),
-      );
-      canvas.drawPath(path, fillPaint);
-      canvas.drawPath(path, strokePaint);
+      fill.color = Color.lerp(Colors.black, c, li)!;
+      canvas.drawPath(path, fill);
+      canvas.drawPath(path, stroke);
     }
   }
 
   @override
   bool shouldRepaint(GondolaPainter old) =>
-      old.camera.rotY   != camera.rotY   ||
-      old.camera.rotX   != camera.rotX   ||
-      old.camera.dist   != camera.dist   ||
-      old.extraFaces    != extraFaces;
+      old.camera.rotY != camera.rotY ||
+      old.camera.rotX != camera.rotX ||
+      old.camera.dist != camera.dist ||
+      old.extraFaces  != extraFaces;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -275,8 +302,19 @@ class GondolaPainter extends CustomPainter {
 
 class GondolaScene extends StatefulWidget {
   final int gondolaAtual;
+  final List<CaixaColocada> caixas;
+  final String? produtoSelecionadoId;
+  final Map<String, Color> corPorProduto;
+  final void Function(int andar, double x, double z)? onTapAndar;
 
-  const GondolaScene({super.key, required this.gondolaAtual});
+  const GondolaScene({
+    super.key,
+    required this.gondolaAtual,
+    this.caixas = const [],
+    this.produtoSelecionadoId,
+    this.corPorProduto = const {},
+    this.onTapAndar,
+  });
 
   @override
   State<GondolaScene> createState() => _GondolaSceneState();
@@ -284,13 +322,13 @@ class GondolaScene extends StatefulWidget {
 
 class _GondolaSceneState extends State<GondolaScene> {
   Camera _camera = const Camera();
+  final  _painterKey = GlobalKey();
 
-  // Gesture tracking — used in Part 2 to distinguish tap vs drag
-  Offset?  _gestureOrigin;
-  Camera?  _cameraAtGestureStart;
-  bool     _isDragging = false;
+  Offset? _gestureOrigin;
+  Camera? _cameraAtGestureStart;
+  bool    _isDragging = false;
 
-  static const double _dragThreshold = 6.0; // px
+  static const double _dragThreshold = 7.0;
 
   void _onScaleStart(ScaleStartDetails d) {
     _gestureOrigin        = d.focalPoint;
@@ -304,32 +342,101 @@ class _GondolaSceneState extends State<GondolaScene> {
     if (origin == null || c0 == null) return;
 
     final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold) _isDragging = true;
+    // Multi-finger or large movement → drag (not a tap)
+    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
+      _isDragging = true;
+    }
 
     setState(() {
       _camera = c0.copyWith(
         rotY: c0.rotY - delta.dx * 0.008,
-        rotX: (c0.rotX + delta.dy * 0.008)
-            .clamp(-0.05, math.pi / 2 - 0.05), // prevent going below horizon
+        rotX: (c0.rotX + delta.dy * 0.008).clamp(-0.05, math.pi / 2 - 0.05),
         dist: (c0.dist / d.scale).clamp(4.0, 28.0),
       );
     });
   }
 
   void _onScaleEnd(ScaleEndDetails _) {
-    // _isDragging stays set until next gesture start.
-    // Part 2 will inspect it inside onTapUp to gate box placement.
+    if (!_isDragging && _gestureOrigin != null) {
+      _tryPlaceBox(_gestureOrigin!);
+    }
+    _gestureOrigin        = null;
+    _cameraAtGestureStart = null;
+    _isDragging           = false;
+  }
+
+  void _tryPlaceBox(Offset globalTap) {
+    if (widget.onTapAndar == null || widget.produtoSelecionadoId == null) return;
+
+    final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    if (rb == null) return;
+
+    final hit = _hitTest(rb.globalToLocal(globalTap), rb.size);
+    if (hit != null) widget.onTapAndar!(hit.andar, hit.x, hit.z);
+  }
+
+  /// Ray-plane intersection against each shelf's horizontal surface.
+  /// Returns the nearest hit (smallest positive t) that lands within the shelf radius.
+  ({int andar, double x, double z})? _hitTest(Offset tap, Size size) {
+    final eye   = _camera.position;
+    final fwd   = (_camera.target - eye).normalized;
+    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up    = right.cross(fwd).normalized;
+
+    const fovY = 45.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+
+    final ndcX = 2 * tap.dx / size.width  - 1;
+    final ndcY = 1 - 2 * tap.dy / size.height;
+
+    // Ray direction through this screen pixel
+    final dir = (right * (ndcX * tanH * aspect) +
+                 up    * (ndcY * tanH) +
+                 fwd).normalized;
+
+    ({int andar, double x, double z, double t})? nearest;
+
+    for (var i = 0; i < GondolaGeometry.andares.length; i++) {
+      final shelf = GondolaGeometry.andares[i];
+      if (dir.y.abs() < 1e-6) continue; // ray parallel to shelf plane
+
+      final t = (shelf.yTop - eye.y) / dir.y;
+      if (t <= 0.1) continue; // behind camera
+
+      final hx = eye.x + t * dir.x;
+      final hz = eye.z + t * dir.z;
+
+      // Conservative octagon check: point must be within 90% of shelf radius
+      if (math.sqrt(hx * hx + hz * hz) < shelf.r * 0.90) {
+        if (nearest == null || t < nearest.t) {
+          nearest = (andar: i, x: hx, z: hz, t: t);
+        }
+      }
+    }
+
+    return nearest == null ? null : (andar: nearest.andar, x: nearest.x, z: nearest.z);
   }
 
   @override
   Widget build(BuildContext context) {
+    // Build box faces from current gondola's placed boxes
+    final extraFaces = <_Face>[];
+    for (final caixa in widget.caixas) {
+      final cor   = widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888);
+      final shelf = GondolaGeometry.andares[caixa.andar];
+      GondolaGeometry.addBox(extraFaces,
+          cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor);
+    }
+
     return GestureDetector(
       onScaleStart:  _onScaleStart,
       onScaleUpdate: _onScaleUpdate,
       onScaleEnd:    _onScaleEnd,
       child: CustomPaint(
-        painter: GondolaPainter(_camera),
-        child: const SizedBox.expand(),
+        key:     _painterKey,
+        painter: GondolaPainter(_camera, extraFaces: extraFaces),
+        child:   const SizedBox.expand(),
       ),
     );
   }
