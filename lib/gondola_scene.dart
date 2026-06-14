@@ -1,206 +1,362 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:three_js/three_js.dart' as three;
-import 'package:three_js_geometry/three_js_geometry.dart';
-import 'package:three_js_helpers/three_js_helpers.dart';
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Vec3 — lightweight 3-D vector
+// ──────────────────────────────────────────────────────────────────────────────
+
+class Vec3 {
+  final double x, y, z;
+  const Vec3(this.x, this.y, this.z);
+
+  Vec3 operator +(Vec3 o) => Vec3(x + o.x, y + o.y, z + o.z);
+  Vec3 operator -(Vec3 o) => Vec3(x - o.x, y - o.y, z - o.z);
+  Vec3 operator *(double s) => Vec3(x * s, y * s, z * s);
+
+  double dot(Vec3 o) => x * o.x + y * o.y + z * o.z;
+
+  Vec3 cross(Vec3 o) => Vec3(
+        y * o.z - z * o.y,
+        z * o.x - x * o.z,
+        x * o.y - y * o.x,
+      );
+
+  double get length => math.sqrt(x * x + y * y + z * z);
+  Vec3 get normalized {
+    final l = length;
+    return l < 1e-10 ? const Vec3(0, 1, 0) : this * (1.0 / l);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Camera — immutable orbit camera
+// ──────────────────────────────────────────────────────────────────────────────
+
+class Camera {
+  final double rotY; // azimuth
+  final double rotX; // elevation (~11° up matches original three_js initial pos)
+  final double dist;
+  final Vec3 target;
+
+  const Camera({
+    this.rotY = 0.0,
+    this.rotX = 0.2,
+    this.dist = 14.0,
+    this.target = const Vec3(0, 1.7, 0),
+  });
+
+  Camera copyWith({double? rotY, double? rotX, double? dist}) => Camera(
+        rotY: rotY ?? this.rotY,
+        rotX: rotX ?? this.rotX,
+        dist: dist ?? this.dist,
+        target: target,
+      );
+
+  Vec3 get position {
+    final cosX = math.cos(rotX);
+    return Vec3(
+      target.x + dist * math.sin(rotY) * cosX,
+      target.y + dist * math.sin(rotX),
+      target.z + dist * math.cos(rotY) * cosX,
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// _Face — polygon in world space, projected lazily
+// ──────────────────────────────────────────────────────────────────────────────
+
+class _Face {
+  final List<Vec3> verts;
+  final Color color;
+  double depth = 0;
+  List<Offset> proj = const [];
+  double light = 1.0;
+
+  _Face(this.verts, this.color);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GondolaGeometry — builds static gondola faces
+// The faces list is passed to the painter each frame; boxes (Part 2) will be
+// appended to the same list before projection so they share the same pipeline.
+// ──────────────────────────────────────────────────────────────────────────────
+
+class GondolaGeometry {
+  static const _corCorpo  = Color(0xFF2e6b46);
+  static const _corColuna = Color(0xFF1f4a30);
+  static const _corBorda  = Color(0xFF4a9d6a);
+  static const _corChao   = Color(0xFF12181e);
+
+  // Shelf Y-centres and radii — exposed so hit-testing (Part 2) can reuse them
+  static const List<({double yTop, double r})> andares = [
+    (yTop: 0.675 + 0.35 / 2, r: 3.4), // andar 0 — base
+    (yTop: 2.15  + 0.30 / 2, r: 2.4), // andar 1 — meio
+    (yTop: 3.43  + 0.26 / 2, r: 1.5), // andar 2 — topo
+  ];
+
+  static List<_Face> buildFaces() {
+    final faces = <_Face>[];
+
+    // Floor disc
+    _disk(faces, r: 9.0, y: 0.0, color: _corChao);
+
+    // 8 feet
+    for (var i = 0; i < 8; i++) {
+      final a = i * math.pi / 4;
+      _prism(faces,
+          cx: 2.8 * math.cos(a), cz: 2.8 * math.sin(a),
+          y0: 0.0, y1: 0.5,
+          r: 0.12, sides: 6,
+          color: _corColuna);
+    }
+
+    // Shelf 0 — base (radius 3.4)
+    _shelf(faces, r: 3.4, yc: 0.675, h: 0.35);
+    // Column 0→1
+    _prism(faces, cx: 0, cz: 0, y0: 0.85, y1: 2.0,
+        r: 0.28, sides: 8, color: _corColuna);
+
+    // Shelf 1 — meio (radius 2.4)
+    _shelf(faces, r: 2.4, yc: 2.15, h: 0.30);
+    // Column 1→2
+    _prism(faces, cx: 0, cz: 0, y0: 2.30, y1: 3.30,
+        r: 0.28, sides: 8, color: _corColuna);
+
+    // Shelf 2 — topo (radius 1.5)
+    _shelf(faces, r: 1.5, yc: 3.43, h: 0.26);
+
+    return faces;
+  }
+
+  static void _shelf(List<_Face> faces,
+      {required double r, required double yc, required double h}) {
+    const rot = math.pi / 8; // align flat face forward
+    _prism(faces,
+        cx: 0, cz: 0, y0: yc - h / 2, y1: yc + h / 2,
+        r: r, sides: 8, color: _corCorpo, rotOff: rot);
+    // Accent border ring on top
+    _prism(faces,
+        cx: 0, cz: 0, y0: yc + h / 2, y1: yc + h / 2 + 0.06,
+        r: r + 0.13, sides: 8, color: _corBorda, rotOff: rot);
+  }
+
+  /// Builds an n-sided prism (side faces + top cap).
+  /// Winding chosen for outward side normals and upward top normals.
+  static void _prism(List<_Face> faces, {
+    required double cx, required double cz,
+    required double y0, required double y1,
+    required double r, required int sides,
+    required Color color, double rotOff = 0,
+  }) {
+    final angles = List.generate(sides, (i) => i * 2 * math.pi / sides + rotOff);
+
+    for (var i = 0; i < sides; i++) {
+      final a0 = angles[i], a1 = angles[(i + 1) % sides];
+      final x0 = cx + r * math.cos(a0), z0 = cz + r * math.sin(a0);
+      final x1 = cx + r * math.cos(a1), z1 = cz + r * math.sin(a1);
+      // Side: v0_bottom → v0_top → v1_top → v1_bottom gives outward normal
+      faces.add(_Face([
+        Vec3(x0, y0, z0), Vec3(x0, y1, z0),
+        Vec3(x1, y1, z1), Vec3(x1, y0, z1),
+      ], color));
+    }
+
+    // Top cap: center → v_i+1 → v_i gives upward (+Y) normal
+    final top = Vec3(cx, y1, cz);
+    for (var i = 0; i < sides; i++) {
+      final a0 = angles[i], a1 = angles[(i + 1) % sides];
+      faces.add(_Face([
+        top,
+        Vec3(cx + r * math.cos(a1), y1, cz + r * math.sin(a1)),
+        Vec3(cx + r * math.cos(a0), y1, cz + r * math.sin(a0)),
+      ], color));
+    }
+  }
+
+  /// Flat polygon fan for the floor disc.
+  static void _disk(List<_Face> faces,
+      {required double r, required double y, required Color color}) {
+    const sides = 8;
+    final center = Vec3(0, y, 0);
+    for (var i = 0; i < sides; i++) {
+      final a0 = i * 2 * math.pi / sides;
+      final a1 = (i + 1) * 2 * math.pi / sides;
+      // center → v1 → v0 gives upward (+Y) normal
+      faces.add(_Face([
+        center,
+        Vec3(r * math.cos(a1), y, r * math.sin(a1)),
+        Vec3(r * math.cos(a0), y, r * math.sin(a0)),
+      ], color));
+    }
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GondolaPainter — projects + painter's-algorithm sorts + draws faces
+// ──────────────────────────────────────────────────────────────────────────────
+
+class GondolaPainter extends CustomPainter {
+  final Camera camera;
+  // Boxes to draw (Part 2 will pass them in)
+  final List<_Face> extraFaces;
+
+  static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
+
+  GondolaPainter(this.camera, {this.extraFaces = const <_Face>[]});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0e1014));
+
+    final faces = GondolaGeometry.buildFaces()..addAll(extraFaces);
+    _project(faces, size);
+    faces.sort((a, b) => b.depth.compareTo(a.depth));
+    _draw(canvas, faces);
+  }
+
+  void _project(List<_Face> faces, Size size) {
+    final eye = camera.position;
+    final fwd   = (camera.target - eye).normalized;
+    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up    = right.cross(fwd).normalized;
+
+    const fovY = 45.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+    final w = size.width, h = size.height;
+
+    Offset project(Vec3 v) {
+      final d  = v - eye;
+      final cz = d.dot(fwd);
+      if (cz <= 0.01) return const Offset(-9999, -9999);
+      final cx = d.dot(right) / (cz * tanH * aspect);
+      final cy = d.dot(up)    / (cz * tanH);
+      return Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h);
+    }
+
+    for (final f in faces) {
+      f.proj = f.verts.map(project).toList();
+
+      if (f.proj.any((p) => p.dx < -9990)) {
+        f.proj  = const [];
+        f.depth = -1e9;
+        continue;
+      }
+
+      // Average depth in camera space
+      f.depth = f.verts.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) /
+          f.verts.length;
+
+      // Diffuse lighting from first triangle of the face
+      if (f.verts.length >= 3) {
+        final n = (f.verts[1] - f.verts[0])
+            .cross(f.verts[2] - f.verts[0])
+            .normalized;
+        f.light = 0.35 + 0.65 * n.dot(_lightDir).clamp(0.0, 1.0);
+      }
+    }
+  }
+
+  void _draw(Canvas canvas, List<_Face> faces) {
+    final fillPaint   = Paint();
+    final strokePaint = Paint()
+      ..color     = const Color(0x33000000)
+      ..style     = PaintingStyle.stroke
+      ..strokeWidth = 0.5;
+
+    for (final f in faces) {
+      if (f.proj.isEmpty) continue;
+
+      final path = Path()..moveTo(f.proj[0].dx, f.proj[0].dy);
+      for (var i = 1; i < f.proj.length; i++) {
+        path.lineTo(f.proj[i].dx, f.proj[i].dy);
+      }
+      path.close();
+
+      final li = f.light;
+      final c  = f.color;
+      fillPaint.color = Color.fromARGB(
+        255,
+        (c.red   * li).round().clamp(0, 255),
+        (c.green * li).round().clamp(0, 255),
+        (c.blue  * li).round().clamp(0, 255),
+      );
+      canvas.drawPath(path, fillPaint);
+      canvas.drawPath(path, strokePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(GondolaPainter old) =>
+      old.camera.rotY   != camera.rotY   ||
+      old.camera.rotX   != camera.rotX   ||
+      old.camera.dist   != camera.dist   ||
+      old.extraFaces    != extraFaces;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GondolaScene widget
+// ──────────────────────────────────────────────────────────────────────────────
 
 class GondolaScene extends StatefulWidget {
-  const GondolaScene({super.key});
+  final int gondolaAtual;
+
+  const GondolaScene({super.key, required this.gondolaAtual});
 
   @override
   State<GondolaScene> createState() => _GondolaSceneState();
 }
 
 class _GondolaSceneState extends State<GondolaScene> {
-  late three.ThreeJS threeJs;
-  late three.OrbitControls controls;
+  Camera _camera = const Camera();
 
-  @override
-  void initState() {
-    super.initState();
-    threeJs = three.ThreeJS(
-      onSetupComplete: () { setState(() {}); },
-      setup: _setup,
-      settings: three.Settings(
-        renderOptions: {
-          "minFilter": three.LinearFilter,
-          "magFilter": three.LinearFilter,
-          "format": three.RGBAFormat,
-          "samples": 4,
-        },
-      ),
-    );
+  // Gesture tracking — used in Part 2 to distinguish tap vs drag
+  Offset?  _gestureOrigin;
+  Camera?  _cameraAtGestureStart;
+  bool     _isDragging = false;
+
+  static const double _dragThreshold = 6.0; // px
+
+  void _onScaleStart(ScaleStartDetails d) {
+    _gestureOrigin        = d.focalPoint;
+    _cameraAtGestureStart = _camera;
+    _isDragging           = false;
   }
 
-  @override
-  void dispose() {
-    controls.dispose();
-    threeJs.dispose();
-    super.dispose();
-  }
+  void _onScaleUpdate(ScaleUpdateDetails d) {
+    final origin = _gestureOrigin;
+    final c0     = _cameraAtGestureStart;
+    if (origin == null || c0 == null) return;
 
-  void _setup() {
-    // ── Cena ──
-    threeJs.scene = three.Scene();
-    threeJs.scene.background = three.Color.fromHex32(0x0e1014);
+    final delta = d.focalPoint - origin;
+    if (delta.distance > _dragThreshold) _isDragging = true;
 
-    // ── Câmera perspectiva fov=45 ──
-    threeJs.camera = three.PerspectiveCamera(
-      45,
-      threeJs.width / threeJs.height,
-      0.1,
-      200,
-    );
-    threeJs.camera.position.setValues(0, 4.5, 14);
-
-    // ── OrbitControls com damping — fluidez essencial no tablet ──
-    controls = three.OrbitControls(threeJs.camera, threeJs.globalKey);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.screenSpacePanning = false;
-    controls.minDistance = 4;
-    controls.maxDistance = 28;
-    // Limita polar para não passar pelo chão nem ir ao zênite
-    controls.maxPolarAngle = math.pi / 2;
-    // Mira no centro vertical da gôndola
-    controls.target.setValues(0, 1.7, 0);
-
-    // ── Luzes ──
-    threeJs.scene.add(three.AmbientLight(0xffffff, 0.55));
-
-    final dirLight = three.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.setValues(5, 10, 7);
-    threeJs.scene.add(dirLight);
-
-    // luz de preenchimento azulada fraca para suavizar sombras
-    final fillLight = three.DirectionalLight(0x4477aa, 0.3);
-    fillLight.position.setValues(-4, 3, -4);
-    threeJs.scene.add(fillLight);
-
-    // ── Chão ──
-    _montarChao();
-
-    // ── Gôndola octogonal 3 andares ──
-    _montarGondola();
-
-    // ── Loop de animação — atualiza damping dos controles ──
-    threeJs.addAnimationEvent((dt) {
-      controls.update();
+    setState(() {
+      _camera = c0.copyWith(
+        rotY: c0.rotY - delta.dx * 0.008,
+        rotX: (c0.rotX + delta.dy * 0.008)
+            .clamp(-0.05, math.pi / 2 - 0.05), // prevent going below horizon
+        dist: (c0.dist / d.scale).clamp(4.0, 28.0),
+      );
     });
   }
 
-  void _montarChao() {
-    // Disco escuro recebendo a gôndola
-    final geoChao = CircleGeometry(radius: 9, segments: 32);
-    final matChao = three.MeshLambertMaterial.fromMap({'color': 0x12181e});
-    final chao = three.Mesh(geoChao, matChao);
-    chao.rotation.x = -math.pi / 2;
-    chao.position.y = -0.002; // levemente abaixo do y=0 para evitar z-fighting
-    threeJs.scene.add(chao);
-
-    // GridHelper sutil
-    final grid = GridHelper(18, 18, 0x1c2830, 0x1c2830);
-    threeJs.scene.add(grid);
-  }
-
-  void _montarGondola() {
-    // ── Paleta de cores CAMDA ──
-    const corCorpo  = 0x2e6b46; // verde escuro — corpo das bandejas
-    const corColuna = 0x1f4a30; // verde mais escuro — colunas e pés
-    const corBorda  = 0x4a9d6a; // verde claro — bordas superiores
-
-    // ── 8 pés cilíndricos na base, distribuídos em círculo (raio 2.8) ──
-    final geoPe = CylinderGeometry(0.12, 0.12, 0.5, 6);
-    final matPe = three.MeshPhongMaterial.fromMap({'color': corColuna});
-    for (int i = 0; i < 8; i++) {
-      final angulo = i * math.pi / 4;
-      final pe = three.Mesh(geoPe, matPe);
-      pe.position.setValues(
-        2.8 * math.cos(angulo),
-        0.25,
-        2.8 * math.sin(angulo),
-      );
-      threeJs.scene.add(pe);
-    }
-
-    // ── Andar 1: base (raio 3.4) — sobre os pés ──
-    _adicionarBandeja(
-      raio: 3.4,
-      altura: 0.35,
-      yCentro: 0.675, // sobe 0.5 (pé) + 0.175 (metade da bandeja)
-      corCorpo: corCorpo,
-      corBorda: corBorda,
-    );
-
-    // coluna central: base → meio
-    _adicionarColuna(yBase: 0.85, yTopo: 2.0, raio: 0.28, cor: corColuna);
-
-    // ── Andar 2: meio (raio 2.4) ──
-    _adicionarBandeja(
-      raio: 2.4,
-      altura: 0.30,
-      yCentro: 2.15,
-      corCorpo: corCorpo,
-      corBorda: corBorda,
-    );
-
-    // coluna central: meio → topo
-    _adicionarColuna(yBase: 2.30, yTopo: 3.30, raio: 0.28, cor: corColuna);
-
-    // ── Andar 3: topo (raio 1.5) ──
-    _adicionarBandeja(
-      raio: 1.5,
-      altura: 0.26,
-      yCentro: 3.43,
-      corCorpo: corCorpo,
-      corBorda: corBorda,
-    );
-  }
-
-  /// Bandeja octogonal (8 faces) com anel de acabamento no topo.
-  /// Rotação PI/8 no Y alinha uma face plana para a frente.
-  void _adicionarBandeja({
-    required double raio,
-    required double altura,
-    required double yCentro,
-    required int corCorpo,
-    required int corBorda,
-  }) {
-    final mat     = three.MeshPhongMaterial.fromMap({'color': corCorpo});
-    final matBord = three.MeshPhongMaterial.fromMap({'color': corBorda});
-
-    // Prisma octogonal principal
-    final geo  = CylinderGeometry(raio, raio, altura, 8);
-    final mesh = three.Mesh(geo, mat);
-    mesh.position.y = yCentro;
-    mesh.rotation.y = math.pi / 8;
-    threeJs.scene.add(mesh);
-
-    // Anel de acabamento superior — levemente mais largo e mais claro
-    final geoBorda = CylinderGeometry(raio + 0.13, raio + 0.13, 0.06, 8);
-    final borda    = three.Mesh(geoBorda, matBord);
-    borda.position.y = yCentro + altura / 2;
-    borda.rotation.y = math.pi / 8;
-    threeJs.scene.add(borda);
-  }
-
-  /// Coluna central octogonal conectando dois andares.
-  void _adicionarColuna({
-    required double yBase,
-    required double yTopo,
-    required double raio,
-    required int cor,
-  }) {
-    final h   = yTopo - yBase;
-    final geo = CylinderGeometry(raio, raio, h, 8);
-    final mat = three.MeshPhongMaterial.fromMap({'color': cor});
-    final col = three.Mesh(geo, mat);
-    col.position.y = yBase + h / 2;
-    threeJs.scene.add(col);
+  void _onScaleEnd(ScaleEndDetails _) {
+    // _isDragging stays set until next gesture start.
+    // Part 2 will inspect it inside onTapUp to gate box placement.
   }
 
   @override
   Widget build(BuildContext context) {
-    return threeJs.build();
+    return GestureDetector(
+      onScaleStart:  _onScaleStart,
+      onScaleUpdate: _onScaleUpdate,
+      onScaleEnd:    _onScaleEnd,
+      child: CustomPaint(
+        painter: GondolaPainter(_camera),
+        child: const SizedBox.expand(),
+      ),
+    );
   }
 }
