@@ -274,14 +274,34 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
 
     if (encontrado == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          '${produto.nome} não encontrado em nenhuma gôndola.\n'
-          'Use "Adicionar produto" para cadastrar.',
-        ),
-        backgroundColor: const Color(0xFF5a1a1a),
-        duration: const Duration(seconds: 3),
-      ));
+      // fallback: tenta na estante
+      final naEstante =
+          await TursoService().buscarProdutoEstante(produto.codigo);
+      if (!mounted) return;
+
+      if (naEstante != null) {
+        const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
+        const colNomes   = ['Col. 1',  'Col. 2',  'Col. 3' ];
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            '📦 ${produto.nome} está na Estante ${naEstante.estanteNum} '
+            '(${colNomes[naEstante.coluna.clamp(0, 2)]}, '
+            '${nivelNomes[naEstante.nivel.clamp(0, 3)]}, '
+            'Slot ${naEstante.slot + 1}) — abra a aba Estante.',
+          ),
+          backgroundColor: const Color(0xFF2a3a1a),
+          duration: const Duration(seconds: 4),
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            '${produto.nome} não encontrado em nenhuma gôndola ou estante.\n'
+            'Use "Adicionar produto" para cadastrar.',
+          ),
+          backgroundColor: const Color(0xFF5a1a1a),
+          duration: const Duration(seconds: 3),
+        ));
+      }
       return;
     }
 
@@ -1155,14 +1175,32 @@ class _EstantePageState extends State<EstantePage> {
     if (!mounted) return;
 
     if (encontrado == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          '${produto.nome} não encontrado em nenhuma estante.\n'
-          'Use "Adicionar produto" para cadastrar.',
-        ),
-        backgroundColor: const Color(0xFF5a1a1a),
-        duration: const Duration(seconds: 3),
-      ));
+      // fallback: tenta na gôndola
+      final naGondola =
+          await TursoService().buscarProduto(produto.codigo);
+      if (!mounted) return;
+
+      if (naGondola != null) {
+        final andarNome =
+            ['Base', 'Meio', 'Topo'][naGondola.andar.clamp(0, 2)];
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            '📦 ${produto.nome} está na Gôndola ${naGondola.gondolaNum} '
+            '($andarNome) — abra a aba Gôndola.',
+          ),
+          backgroundColor: const Color(0xFF1a2a3a),
+          duration: const Duration(seconds: 4),
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            '${produto.nome} não encontrado em nenhuma estante ou gôndola.\n'
+            'Use "Adicionar produto" para cadastrar.',
+          ),
+          backgroundColor: const Color(0xFF5a1a1a),
+          duration: const Duration(seconds: 3),
+        ));
+      }
       return;
     }
 
