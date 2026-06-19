@@ -93,6 +93,7 @@ class _GondolaPageState extends State<GondolaPage> {
   String? _produtoSelecionadoId;
   String? _destacadoCodigo;
   Timer?  _highlightTimer;
+  String? _resultadoBusca;
 
   final Map<int, List<CaixaColocada>> _caixas = {};
 
@@ -282,24 +283,25 @@ class _GondolaPageState extends State<GondolaPage> {
       if (naEstante != null) {
         const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
         const colNomes   = ['Col. 1',  'Col. 2',  'Col. 3' ];
+        final locEstante =
+            '📦 ${produto.nome}\n'
+            'Estante ${naEstante.estanteNum} · ${colNomes[naEstante.coluna.clamp(0, 2)]} · '
+            '${nivelNomes[naEstante.nivel.clamp(0, 3)]} · Slot ${naEstante.slot + 1}';
+        setState(() => _resultadoBusca = locEstante);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            '📦 ${produto.nome} está na Estante ${naEstante.estanteNum} '
-            '(${colNomes[naEstante.coluna.clamp(0, 2)]}, '
-            '${nivelNomes[naEstante.nivel.clamp(0, 3)]}, '
-            'Slot ${naEstante.slot + 1}) — abra a aba Estante.',
-          ),
+          content: Text(locEstante.replaceAll('\n', ' — ')),
           backgroundColor: const Color(0xFF2a3a1a),
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 6),
         ));
       } else {
+        setState(() => _resultadoBusca = null);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
             '${produto.nome} não encontrado em nenhuma gôndola ou estante.\n'
             'Use "Adicionar produto" para cadastrar.',
           ),
           backgroundColor: const Color(0xFF5a1a1a),
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 4),
         ));
       }
       return;
@@ -318,6 +320,7 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
 
     _highlightTimer?.cancel();
+    final andarNome = ['Base', 'Meio', 'Topo'][encontrado.andar.clamp(0, 2)];
     setState(() {
       _caixas[encontrado.gondolaNum] = layouts
           .map((l) => CaixaColocada(
@@ -329,19 +332,19 @@ class _GondolaPageState extends State<GondolaPage> {
           .toList();
       _carregandoLayout = false;
       _destacadoCodigo  = produto.codigo;
+      _resultadoBusca   = '📍 ${produto.nome}\nGôndola ${encontrado.gondolaNum} · Andar $andarNome';
     });
 
     _highlightTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _destacadoCodigo = null);
     });
 
-    final andarNome = ['Base', 'Meio', 'Topo'][encontrado.andar.clamp(0, 2)];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
         '📍 ${produto.nome} → Gôndola ${encontrado.gondolaNum}, Andar $andarNome',
       ),
       backgroundColor: const Color(0xFF1a3a2a),
-      duration: const Duration(seconds: 3),
+      duration: const Duration(seconds: 6),
     ));
   }
 
@@ -364,7 +367,8 @@ class _GondolaPageState extends State<GondolaPage> {
       _sugestoes1           = [];
       _ctrl1.clear();
     } else {
-      _sugestoes2 = [];
+      _sugestoes2     = [];
+      _resultadoBusca = null;
       _ctrl2.clear();
     }
   }
@@ -509,6 +513,45 @@ class _GondolaPageState extends State<GondolaPage> {
                       letterSpacing: 0.3,
                     ),
                   ),
+                ),
+
+              // Banner de resultado da última busca
+              if (_resultadoBusca != null)
+                Container(
+                  margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0f2a1a),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF2e6b46)),
+                  ),
+                  child: Row(children: [
+                    const SizedBox(width: 12),
+                    const Icon(Icons.location_on,
+                        color: Color(0xFF4a9d6a), size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(
+                          _resultadoBusca!,
+                          style: const TextStyle(
+                            color: Color(0xFFc8e6c9),
+                            fontSize: 13,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          color: Color(0xFF4a9d6a), size: 16),
+                      onPressed: () =>
+                          setState(() => _resultadoBusca = null),
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(),
+                    ),
+                    const SizedBox(width: 4),
+                  ]),
                 ),
 
               // Expander 1 — Adicionar produto
