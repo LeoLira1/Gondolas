@@ -520,9 +520,9 @@ class _GondolaPageState extends State<GondolaPage> {
                 Container(
                   margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0f2a1a),
+                    color: const Color(0xFF1e2a20),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF2e6b46)),
+                    border: Border.all(color: const Color(0xFF4a9d6a)),
                   ),
                   child: Row(children: [
                     const SizedBox(width: 12),
@@ -535,7 +535,7 @@ class _GondolaPageState extends State<GondolaPage> {
                         child: Text(
                           _resultadoBusca!,
                           style: const TextStyle(
-                            color: Color(0xFFc8e6c9),
+                            color: Colors.white,
                             fontSize: 13,
                             height: 1.4,
                           ),
@@ -544,7 +544,7 @@ class _GondolaPageState extends State<GondolaPage> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.close,
-                          color: Color(0xFF4a9d6a), size: 16),
+                          color: Color(0xFF8a9aa8), size: 16),
                       onPressed: () =>
                           setState(() => _resultadoBusca = null),
                       padding: const EdgeInsets.all(8),
