@@ -52,6 +52,19 @@ class TursoService {
           registrado_em TEXT NOT NULL
         )
       ''');
+      await client.execute('''
+        CREATE TABLE IF NOT EXISTS estante_layout (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          estante_num INTEGER NOT NULL,
+          coluna INTEGER NOT NULL,
+          nivel INTEGER NOT NULL,
+          slot INTEGER NOT NULL,
+          produto_codigo TEXT NOT NULL,
+          produto_nome TEXT NOT NULL,
+          cor_hex TEXT NOT NULL DEFAULT '#E87722',
+          registrado_em TEXT NOT NULL
+        )
+      ''');
       _client    = client;
       _connected = true;
     } catch (_) {
@@ -142,6 +155,91 @@ class TursoService {
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  Future<List<CaixaLayoutEstante>> fetchLayoutEstante(int estanteNum) async {
+    if (!_connected || _client == null) return [];
+    try {
+      final stmt = await _client!.prepare(
+        'SELECT estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex '
+        'FROM estante_layout WHERE estante_num = ? ORDER BY id',
+      );
+      final rows = await stmt.query(positional: [estanteNum]);
+      return (rows as List<dynamic>).map((dynamic row) {
+        final r = row as Map<String, dynamic>;
+        return CaixaLayoutEstante(
+          estanteNum:    r['estante_num']    as int?    ?? estanteNum,
+          coluna:        r['coluna']         as int?    ?? 0,
+          nivel:         r['nivel']          as int?    ?? 0,
+          slot:          r['slot']           as int?    ?? 0,
+          produtoCodigo: r['produto_codigo'] as String? ?? '',
+          produtoNome:   r['produto_nome']   as String? ?? '',
+          corHex:        r['cor_hex']        as String? ?? '#888888',
+        );
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> salvarLayoutEstante(
+      int estanteNum, List<CaixaLayoutEstante> itens) async {
+    if (!_connected || _client == null) return false;
+    try {
+      final stmtDel = await _client!.prepare(
+        'DELETE FROM estante_layout WHERE estante_num = ?',
+      );
+      await stmtDel.query(positional: [estanteNum]);
+
+      if (itens.isNotEmpty) {
+        final stmtIns = await _client!.prepare(
+          'INSERT INTO estante_layout '
+          '(estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex, registrado_em) '
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        );
+        final agora = DateTime.now().toIso8601String();
+        for (final item in itens) {
+          await stmtIns.query(positional: [
+            item.estanteNum,
+            item.coluna,
+            item.nivel,
+            item.slot,
+            item.produtoCodigo,
+            item.produtoNome,
+            item.corHex,
+            agora,
+          ]);
+        }
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<CaixaLayoutEstante?> buscarProdutoEstante(String produtoCodigo) async {
+    if (!_connected || _client == null) return null;
+    try {
+      final stmt = await _client!.prepare(
+        'SELECT estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex '
+        'FROM estante_layout WHERE produto_codigo = ? LIMIT 1',
+      );
+      final rows = await stmt.query(positional: [produtoCodigo]);
+      final list = rows as List<dynamic>;
+      if (list.isEmpty) return null;
+      final r = list.first as Map<String, dynamic>;
+      return CaixaLayoutEstante(
+        estanteNum:    r['estante_num']    as int?    ?? 0,
+        coluna:        r['coluna']         as int?    ?? 0,
+        nivel:         r['nivel']          as int?    ?? 0,
+        slot:          r['slot']           as int?    ?? 0,
+        produtoCodigo: r['produto_codigo'] as String? ?? produtoCodigo,
+        produtoNome:   r['produto_nome']   as String? ?? '',
+        corHex:        r['cor_hex']        as String? ?? '#888888',
+      );
+    } catch (_) {
+      return null;
     }
   }
 
