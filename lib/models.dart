@@ -38,3 +38,37 @@ class CaixaLayout {
     required this.corHex,
   });
 }
+
+class CaixaColocadaEstante {
+  final int    coluna;
+  final int    nivel;
+  final int    slot;
+  final String produtoId;
+
+  const CaixaColocadaEstante({
+    required this.coluna,
+    required this.nivel,
+    required this.slot,
+    required this.produtoId,
+  });
+}
+
+class CaixaLayoutEstante {
+  final int    estanteNum;
+  final int    coluna;
+  final int    nivel;
+  final int    slot;
+  final String produtoCodigo;
+  final String produtoNome;
+  final String corHex;
+
+  const CaixaLayoutEstante({
+    required this.estanteNum,
+    required this.coluna,
+    required this.nivel,
+    required this.slot,
+    required this.produtoCodigo,
+    required this.produtoNome,
+    required this.corHex,
+  });
+}
