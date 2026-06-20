@@ -224,6 +224,89 @@ class _GondolaPageState extends State<GondolaPage> {
 
   void _limparGondola() => setState(() => _caixas.remove(_gondolaAtual));
 
+  void _limparPorProduto(String produtoId) {
+    setState(() {
+      final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
+      if (restantes.isEmpty) {
+        _caixas.remove(_gondolaAtual);
+      } else {
+        _caixas[_gondolaAtual] = restantes;
+      }
+    });
+  }
+
+  void _mostrarDialogLimpar() {
+    final idsNaGondola = _caixasAtuais.map((c) => c.produtoId).toSet();
+    final produtos = _catalogoAtual.where((p) => idsNaGondola.contains(p.codigo)).toList();
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          'Limpar produtos',
+          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...produtos.map((p) {
+              final qtd = _caixasAtuais.where((c) => c.produtoId == p.codigo).length;
+              return ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: p.cor,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                title: Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                subtitle: Text(
+                  '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
+                  style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Color(0xFFe57373), size: 20),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _limparPorProduto(p.codigo);
+                  },
+                ),
+              );
+            }),
+            if (produtos.length > 1) ...[
+              const Divider(color: Color(0xFF2a3540), height: 16),
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: const Icon(Icons.delete_forever, color: Color(0xFFe57373), size: 20),
+                title: const Text(
+                  'Limpar tudo',
+                  style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _limparGondola();
+                },
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _salvarLayout() async {
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -578,7 +661,7 @@ class _GondolaPageState extends State<GondolaPage> {
                 child: Row(children: [
                   OutlinedButton.icon(
                     onPressed:
-                        _caixasAtuais.isNotEmpty ? _limparGondola : null,
+                        _caixasAtuais.isNotEmpty ? _mostrarDialogLimpar : null,
                     icon: const Icon(Icons.delete_outline, size: 16),
                     label: const Text('Limpar'),
                     style: OutlinedButton.styleFrom(
