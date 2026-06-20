@@ -246,7 +246,7 @@ class _GondolaPageState extends State<GondolaPage> {
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text(
-          'Limpar produtos',
+          'Limpar produto',
           style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
         ),
         content: Column(
@@ -254,45 +254,92 @@ class _GondolaPageState extends State<GondolaPage> {
           children: [
             ...produtos.map((p) {
               final qtd = _caixasAtuais.where((c) => c.produtoId == p.codigo).length;
-              return ListTile(
-                dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                leading: Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: p.cor,
-                    borderRadius: BorderRadius.circular(4),
+              return InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _limparPorProduto(p.codigo);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: p.cor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                            Text(
+                              '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
+                              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.delete_outline, color: Color(0xFFe57373), size: 20),
+                    ],
                   ),
-                ),
-                title: Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
-                subtitle: Text(
-                  '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
-                  style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Color(0xFFe57373), size: 20),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _limparPorProduto(p.codigo);
-                  },
                 ),
               );
             }),
             if (produtos.length > 1) ...[
-              const Divider(color: Color(0xFF2a3540), height: 16),
-              ListTile(
-                dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                leading: const Icon(Icons.delete_forever, color: Color(0xFFe57373), size: 20),
-                title: const Text(
-                  'Limpar tudo',
-                  style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
-                ),
+              const Divider(color: Color(0xFF2a3540), height: 20),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _limparGondola();
+                  showDialog<void>(
+                    context: context,
+                    builder: (ctx2) => AlertDialog(
+                      backgroundColor: const Color(0xFF141a22),
+                      surfaceTintColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      title: const Text(
+                        'Limpar tudo?',
+                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                      ),
+                      content: const Text(
+                        'Todos os produtos desta gôndola serão removidos.',
+                        style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx2),
+                          child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(ctx2);
+                            _limparGondola();
+                          },
+                          child: const Text('Limpar tudo', style: TextStyle(color: Color(0xFFe57373))),
+                        ),
+                      ],
+                    ),
+                  );
                 },
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_forever, color: Color(0xFFe57373), size: 20),
+                      SizedBox(width: 10),
+                      Text(
+                        'Limpar tudo',
+                        style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           ],
