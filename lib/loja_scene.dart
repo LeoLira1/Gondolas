@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
-import 'gondola_scene.dart' show Vec3, Camera;
+import 'gondola_scene.dart' show Vec3, Camera, Face, GondolaGeometry;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -88,28 +88,16 @@ const Color _corApagado    = Color(0xFF2d2e31);
 const Color _corParede     = Color(0xFF2a2b2f);
 const Color _corBg         = Color(0xFF0b0c0e);
 
-// ── Internal face class (independent of gondola_scene.dart's Face) ────────────
-
-class _Face {
-  final List<Vec3> verts;
-  final Color color;
-  double depth = 0;
-  List<Offset> proj = const [];
-  double light = 1.0;
-  _Face(this.verts, this.color);
-}
-
 // ── LojaGeometry ──────────────────────────────────────────────────────────────
 
 class LojaGeometry {
   static const double gondolaR   = 0.62;
-  static const double _gondolaH  = 0.85;
   static const double _estanteH  = 0.85;
   static const double _paredeH   = 0.90;
   static const double _paredeEsp = 0.18;
 
-  static List<_Face> buildFaces(int? selecionadoIdx, double pulseT) {
-    final faces = <_Face>[];
+  static List<Face> buildFaces(int? selecionadoIdx, double pulseT) {
+    final faces = <Face>[];
 
     // Paredes perimetrais
     _wallBox(faces, 0, _paredeEsp, 0, lojaH);
@@ -144,48 +132,37 @@ class LojaGeometry {
     return faces;
   }
 
-  static void _wallBox(List<_Face> f, double x0, double x1, double z0, double z1) {
+  static void _wallBox(List<Face> f, double x0, double x1, double z0, double z1) {
     const h = _paredeH;
     const c = _corParede;
-    f.add(_Face([Vec3(x0,0,z1), Vec3(x1,0,z1), Vec3(x1,h,z1), Vec3(x0,h,z1)], c));
-    f.add(_Face([Vec3(x1,0,z0), Vec3(x0,0,z0), Vec3(x0,h,z0), Vec3(x1,h,z0)], c));
-    f.add(_Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], c));
-    f.add(_Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], c));
-    f.add(_Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], c));
+    f.add(Face([Vec3(x0,0,z1), Vec3(x1,0,z1), Vec3(x1,h,z1), Vec3(x0,h,z1)], c));
+    f.add(Face([Vec3(x1,0,z0), Vec3(x0,0,z0), Vec3(x0,h,z0), Vec3(x1,h,z0)], c));
+    f.add(Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], c));
+    f.add(Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], c));
+    f.add(Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], c));
   }
 
-  static void _gondola(List<_Face> faces, ItemLoja item, Color cor) {
-    const sides = 8;
-    const r = gondolaR;
-    const h = _gondolaH;
-    const rot = math.pi / 8;
-    final angles = List.generate(sides, (i) => i * 2 * math.pi / sides + rot);
-
-    for (var i = 0; i < sides; i++) {
-      final a0 = angles[i], a1 = angles[(i + 1) % sides];
-      final x0 = item.x + r * math.cos(a0), z0 = item.z + r * math.sin(a0);
-      final x1 = item.x + r * math.cos(a1), z1 = item.z + r * math.sin(a1);
-      faces.add(_Face([
-        Vec3(x0, 0, z0), Vec3(x0, h, z0),
-        Vec3(x1, h, z1), Vec3(x1, 0, z1),
-      ], cor));
-    }
-    faces.add(_Face([
-      for (var i = sides - 1; i >= 0; i--)
-        Vec3(item.x + r * math.cos(angles[i]), h, item.z + r * math.sin(angles[i])),
-    ], cor));
+  static void _gondola(List<Face> faces, ItemLoja item, Color cor) {
+    // Scale real 3D mesh (base shelf r=3.4) down to match the store map footprint.
+    const scale = gondolaR / 3.4;
+    faces.addAll(GondolaGeometry.buildFacesAt(
+      scale: scale,
+      tx: item.x,
+      tz: item.z,
+      colorMapper: (_) => cor,
+    ));
   }
 
-  static void _estante(List<_Face> faces, ItemLoja item, Color cor) {
+  static void _estante(List<Face> faces, ItemLoja item, Color cor) {
     final hw = item.w / 2, hd = item.d / 2;
     final x0 = item.x - hw, x1 = item.x + hw;
     final z0 = item.z - hd, z1 = item.z + hd;
     const h = _estanteH;
-    faces.add(_Face([Vec3(x0,0,z1), Vec3(x1,0,z1), Vec3(x1,h,z1), Vec3(x0,h,z1)], cor));
-    faces.add(_Face([Vec3(x1,0,z0), Vec3(x0,0,z0), Vec3(x0,h,z0), Vec3(x1,h,z0)], cor));
-    faces.add(_Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], cor));
-    faces.add(_Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], cor));
-    faces.add(_Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], cor));
+    faces.add(Face([Vec3(x0,0,z1), Vec3(x1,0,z1), Vec3(x1,h,z1), Vec3(x0,h,z1)], cor));
+    faces.add(Face([Vec3(x1,0,z0), Vec3(x0,0,z0), Vec3(x0,h,z0), Vec3(x1,h,z0)], cor));
+    faces.add(Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], cor));
+    faces.add(Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], cor));
+    faces.add(Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], cor));
   }
 }
 
@@ -211,7 +188,7 @@ class LojaPainter extends CustomPainter {
 
   // Sutherland-Hodgman near-plane clipping fixes the disappearing-face bug
   // that occurred when any vertex crossed behind the camera near plane.
-  void _project(List<_Face> faces, Size size) {
+  void _project(List<Face> faces, Size size) {
     final eye    = camera.position;
     final fwd    = (camera.target - eye).normalized;
     final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
@@ -269,7 +246,7 @@ class LojaPainter extends CustomPainter {
     }
   }
 
-  void _draw(Canvas canvas, List<_Face> faces) {
+  void _draw(Canvas canvas, List<Face> faces) {
     final fill   = Paint();
     final stroke = Paint()
       ..color       = const Color(0x44000000)

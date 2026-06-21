@@ -113,6 +113,23 @@ class GondolaGeometry {
     (yTop: 3.43  + 0.26 / 2 + 0.06, r: 1.5), // andar 2 — topo  (y≈3.62)
   ];
 
+  /// Builds gondola faces transformed to a map position.
+  /// Vertices are scaled uniformly, then translated by (tx, 0, tz).
+  static List<Face> buildFacesAt({
+    required double scale,
+    required double tx,
+    required double tz,
+    Color Function(Color)? colorMapper,
+  }) {
+    return buildFaces().map((f) {
+      final verts = f.verts
+          .map((v) => Vec3(v.x * scale + tx, v.y * scale, v.z * scale + tz))
+          .toList();
+      return Face(verts, colorMapper != null ? colorMapper(f.color) : f.color);
+    }).toList();
+  }
+
+
   static List<Face> buildFaces() {
     final faces = <Face>[];
 
@@ -208,16 +225,22 @@ class GondolaGeometry {
 class GondolaPainter extends CustomPainter {
   final Camera camera;
   final List<Face> extraFaces;
+  // When set, skips buildFaces() and uses this list directly (for the store map).
+  final List<Face>? allFacesOverride;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
-  GondolaPainter(this.camera, {this.extraFaces = const <Face>[]});
+  GondolaPainter(this.camera, {
+    this.extraFaces = const <Face>[],
+    this.allFacesOverride,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0e1014));
 
-    final faces = GondolaGeometry.buildFaces()..addAll(extraFaces);
+    final faces = allFacesOverride ??
+        (GondolaGeometry.buildFaces()..addAll(extraFaces));
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
@@ -311,11 +334,13 @@ class GondolaPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(GondolaPainter old) =>
-      old.camera.rotY != camera.rotY ||
-      old.camera.rotX != camera.rotX ||
-      old.camera.dist != camera.dist ||
-      old.extraFaces  != extraFaces;
+  bool shouldRepaint(GondolaPainter old) {
+    if (allFacesOverride != null || old.allFacesOverride != null) return true;
+    return old.camera.rotY != camera.rotY ||
+        old.camera.rotX != camera.rotX ||
+        old.camera.dist != camera.dist ||
+        old.extraFaces  != extraFaces;
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
