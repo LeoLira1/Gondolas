@@ -230,30 +230,52 @@ class GondolaPainter extends CustomPainter {
     final up    = right.cross(fwd).normalized;
 
     const fovY = 45.0 * math.pi / 180.0;
+    const near = 0.1;
     final tanH   = math.tan(fovY / 2);
     final aspect = size.width / size.height;
     final w = size.width, h = size.height;
 
-    Offset project(Vec3 v) {
+    Offset toScreen(Vec3 v) {
       final d  = v - eye;
       final cz = d.dot(fwd);
-      if (cz <= 0.01) return const Offset(-9999, -9999);
       final cx = d.dot(right) / (cz * tanH * aspect);
       final cy = d.dot(up)    / (cz * tanH);
       return Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h);
     }
 
-    for (final f in faces) {
-      f.proj = f.verts.map(project).toList();
+    // Sutherland-Hodgman clip against near plane (cz >= near)
+    List<Vec3> clipNear(List<Vec3> verts) {
+      final out = <Vec3>[];
+      final len = verts.length;
+      for (var i = 0; i < len; i++) {
+        final a = verts[i];
+        final b = verts[(i + 1) % len];
+        final da = (a - eye).dot(fwd);
+        final db = (b - eye).dot(fwd);
+        if (da >= near) out.add(a);
+        if ((da >= near) != (db >= near)) {
+          final t = (near - da) / (db - da);
+          out.add(Vec3(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+          ));
+        }
+      }
+      return out;
+    }
 
-      if (f.proj.any((p) => p.dx < -9990)) {
+    for (final f in faces) {
+      final clipped = clipNear(f.verts);
+      if (clipped.length < 3) {
         f.proj  = const [];
         f.depth = -1e9;
         continue;
       }
 
-      f.depth = f.verts.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) /
-          f.verts.length;
+      f.proj  = clipped.map(toScreen).toList();
+      f.depth = clipped.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) /
+          clipped.length;
 
       if (f.verts.length >= 3) {
         final n = (f.verts[1] - f.verts[0])

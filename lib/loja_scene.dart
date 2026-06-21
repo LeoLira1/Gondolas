@@ -89,7 +89,7 @@ const Color _corPiso       = Color(0xFF17181b);
 const Color _corParede     = Color(0xFF2a2b2f);
 const Color _corBg         = Color(0xFF0b0c0e);
 
-// ── Internal face class (independent of gondola_scene.dart's private _Face) ───
+// ── Internal face class (independent of gondola_scene.dart's Face) ────────────
 
 class _Face {
   final List<Vec3> verts;
@@ -103,10 +103,10 @@ class _Face {
 // ── LojaGeometry ──────────────────────────────────────────────────────────────
 
 class LojaGeometry {
-  static const double gondolaR = 0.62;
-  static const double _gondolaH = 0.85;
-  static const double _estanteH = 0.85;
-  static const double _paredeH  = 0.90;
+  static const double gondolaR   = 0.62;
+  static const double _gondolaH  = 0.85;
+  static const double _estanteH  = 0.85;
+  static const double _paredeH   = 0.90;
   static const double _paredeEsp = 0.18;
 
   static List<_Face> buildFaces(int? selecionadoIdx, double pulseT) {
@@ -200,7 +200,7 @@ class LojaGeometry {
 
 class LojaPainter extends CustomPainter {
   final Camera camera;
-  final int? selecionadoIdx;
+  final int?   selecionadoIdx;
   final double pulseT;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
@@ -216,34 +216,57 @@ class LojaPainter extends CustomPainter {
     _draw(canvas, faces);
   }
 
+  // Sutherland-Hodgman near-plane clipping fixes the disappearing-face bug
+  // that occurred when any vertex crossed behind the camera near plane.
   void _project(List<_Face> faces, Size size) {
-    final eye   = camera.position;
-    final fwd   = (camera.target - eye).normalized;
-    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up    = right.cross(fwd).normalized;
-
-    const fovY  = 45.0 * math.pi / 180.0;
-    final tanH  = math.tan(fovY / 2);
+    final eye    = camera.position;
+    final fwd    = (camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 45.0 * math.pi / 180.0;
+    const near   = 0.1;
+    final tanH   = math.tan(fovY / 2);
     final aspect = size.width / size.height;
     final w = size.width, h = size.height;
 
-    Offset project(Vec3 v) {
+    Offset toScreen(Vec3 v) {
       final d  = v - eye;
       final cz = d.dot(fwd);
-      if (cz <= 0.01) return const Offset(-9999, -9999);
       final cx = d.dot(right) / (cz * tanH * aspect);
       final cy = d.dot(up)    / (cz * tanH);
       return Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h);
     }
 
+    List<Vec3> clipNear(List<Vec3> verts) {
+      final out = <Vec3>[];
+      final len = verts.length;
+      for (var i = 0; i < len; i++) {
+        final a = verts[i];
+        final b = verts[(i + 1) % len];
+        final da = (a - eye).dot(fwd);
+        final db = (b - eye).dot(fwd);
+        if (da >= near) out.add(a);
+        if ((da >= near) != (db >= near)) {
+          final t = (near - da) / (db - da);
+          out.add(Vec3(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+          ));
+        }
+      }
+      return out;
+    }
+
     for (final f in faces) {
-      f.proj = f.verts.map(project).toList();
-      if (f.proj.any((p) => p.dx < -9990)) {
+      final clipped = clipNear(f.verts);
+      if (clipped.length < 3) {
         f.proj  = const [];
         f.depth = -1e9;
         continue;
       }
-      f.depth = f.verts.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) / f.verts.length;
+      f.proj  = clipped.map(toScreen).toList();
+      f.depth = clipped.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) / clipped.length;
       if (f.verts.length >= 3) {
         final n = (f.verts[1] - f.verts[0])
             .cross(f.verts[2] - f.verts[0])
@@ -256,8 +279,8 @@ class LojaPainter extends CustomPainter {
   void _draw(Canvas canvas, List<_Face> faces) {
     final fill   = Paint();
     final stroke = Paint()
-      ..color      = const Color(0x44000000)
-      ..style      = PaintingStyle.stroke
+      ..color       = const Color(0x44000000)
+      ..style       = PaintingStyle.stroke
       ..strokeWidth = 0.6;
 
     for (final f in faces) {
@@ -287,10 +310,10 @@ class LojaPainter extends CustomPainter {
 // ── LojaScene ─────────────────────────────────────────────────────────────────
 
 class LojaScene extends StatefulWidget {
-  final int? selecionadoIdx;
-  final void Function(int? idx) onSelecionado;
-  final void Function(int idx)? onVerDetalhes;
-  final Vec3? focarEm;
+  final int?                       selecionadoIdx;
+  final void Function(int? idx)    onSelecionado;
+  final void Function(int idx)?    onVerDetalhes;
+  final Vec3?                      focarEm;
 
   const LojaScene({
     super.key,
@@ -306,22 +329,22 @@ class LojaScene extends StatefulWidget {
 
 class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
   Camera _camera = Camera(
-    rotY: 0.4,
-    rotX: 0.85,
-    dist: 17.0,
+    rotY:   0.4,
+    rotX:   0.85,
+    dist:   17.0,
     target: Vec3(lojaW / 2, 0.2, lojaH / 2),
   );
 
   final _key = GlobalKey();
   Offset? _gestureOrigin;
   Camera? _cam0;
-  bool _isDragging = false;
+  bool    _isDragging = false;
   static const double _kDrag = 7.0;
 
   late final Ticker _ticker;
   double _pulseT = 0;
 
-  Vec3? _animFrom, _animTo, _lastFocarEm;
+  Vec3?  _animFrom, _animTo, _lastFocarEm;
   double _animP = 0;
 
   @override
@@ -330,9 +353,9 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
     _ticker = createTicker(_onTick)..start();
     if (widget.focarEm != null) {
       _lastFocarEm = widget.focarEm;
-      _animFrom = _camera.target;
-      _animTo   = widget.focarEm!;
-      _animP    = 0;
+      _animFrom    = _camera.target;
+      _animTo      = widget.focarEm!;
+      _animP       = 0;
     }
   }
 
@@ -344,9 +367,9 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
       final prev = _lastFocarEm;
       if (prev == null || prev.x != f.x || prev.y != f.y || prev.z != f.z) {
         _lastFocarEm = f;
-        _animFrom = _camera.target;
-        _animTo   = f;
-        _animP    = 0;
+        _animFrom    = _camera.target;
+        _animTo      = f;
+        _animP       = 0;
       }
     }
   }
@@ -368,7 +391,7 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
 
     if (_animTo != null) {
       _animP = (_animP + 0.04).clamp(0.0, 1.0);
-      final e = 1 - math.pow(1 - _animP, 3).toDouble(); // ease-out cubic
+      final e   = 1 - math.pow(1 - _animP, 3).toDouble(); // ease-out cubic
       final frm = _animFrom!, to = _animTo!;
       _camera = Camera(
         rotY:   _camera.rotY,
@@ -432,13 +455,12 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
   }
 
   int? _hitTest(Offset tap, Size size) {
-    final eye   = _camera.position;
-    final fwd   = (_camera.target - eye).normalized;
-    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up    = right.cross(fwd).normalized;
-
-    const fovY  = 45.0 * math.pi / 180.0;
-    final tanH  = math.tan(fovY / 2);
+    final eye    = _camera.position;
+    final fwd    = (_camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 45.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
     final aspect = size.width / size.height;
 
     final ndcX = 2 * tap.dx / size.width  - 1;
