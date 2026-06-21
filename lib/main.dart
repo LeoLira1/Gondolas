@@ -121,6 +121,8 @@ class _LojaPageState extends State<LojaPage> {
       }
     });
 
+    TursoService().init();
+
     if (widget.itemTipoInicial != null && widget.itemNumeroInicial != null) {
       final idx = itensLoja.indexWhere((it) =>
           it.tipo == widget.itemTipoInicial && it.numero == widget.itemNumeroInicial);
