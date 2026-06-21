@@ -243,6 +243,58 @@ class TursoService {
     }
   }
 
+  // Busca produto por nome (LIKE) em gôndola_layout E estante_layout,
+  // retornando uma lista combinada ordenada por nome.
+  Future<List<ProdutoEncontrado>> buscarProdutoGlobal(String termo) async {
+    if (!_connected || _client == null) return [];
+    final q = termo.trim();
+    if (q.length < 2) return [];
+    final like = '%$q%';
+    final results = <ProdutoEncontrado>[];
+
+    try {
+      final stmt = await _client!.prepare(
+        'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar '
+        'FROM gondola_layout WHERE produto_nome LIKE ? ORDER BY produto_nome LIMIT 20',
+      );
+      final rows = await stmt.query(positional: [like]);
+      const andarNomes = ['Base', 'Meio', 'Topo'];
+      for (final dynamic row in rows as List<dynamic>) {
+        final r = row as Map<String, dynamic>;
+        final a = ((r['andar'] as int?) ?? 0).clamp(0, 2);
+        results.add(ProdutoEncontrado(
+          nome:           r['produto_nome']   as String? ?? '',
+          tipo:           'gondola',
+          numero:         r['gondola_num']    as int?    ?? 0,
+          nivelDescricao: 'Andar ${andarNomes[a]}',
+          produtoCodigo:  r['produto_codigo'] as String? ?? '',
+        ));
+      }
+    } catch (_) {}
+
+    try {
+      final stmt = await _client!.prepare(
+        'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
+        'FROM estante_layout WHERE produto_nome LIKE ? ORDER BY produto_nome LIMIT 20',
+      );
+      final rows = await stmt.query(positional: [like]);
+      const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
+      for (final dynamic row in rows as List<dynamic>) {
+        final r = row as Map<String, dynamic>;
+        final n = ((r['nivel'] as int?) ?? 0).clamp(0, 3);
+        results.add(ProdutoEncontrado(
+          nome:           r['produto_nome']  as String? ?? '',
+          tipo:           'estante',
+          numero:         r['estante_num']   as int?    ?? 0,
+          nivelDescricao: nivelNomes[n],
+          produtoCodigo:  r['produto_codigo'] as String? ?? '',
+        ));
+      }
+    } catch (_) {}
+
+    return results;
+  }
+
   Future<CaixaLayout?> buscarProduto(String produtoCodigo) async {
     if (!_connected || _client == null) return null;
     try {

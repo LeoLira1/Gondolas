@@ -97,21 +97,27 @@ class LojaPage extends StatefulWidget {
 }
 
 class _LojaPageState extends State<LojaPage> {
-  int?          _selecionadoIdx;
-  ProdutoLoja?  _produtoSelecionado;
-  Vec3?         _focarEm;
+  int?               _selecionadoIdx;
+  ProdutoEncontrado? _produtoSelecionado;
+  Vec3?              _focarEm;
 
   final _searchCtrl  = TextEditingController();
   final _searchFocus = FocusNode();
-  List<ProdutoLoja> _sugestoes    = [];
-  bool              _showSugestoes = false;
+  List<ProdutoEncontrado> _sugestoes      = [];
+  bool                    _showSugestoes  = false;
+  bool                    _buscando       = false;
+  bool                    _semResultados  = false;
+  Timer?                  _debounce;
 
   @override
   void initState() {
     super.initState();
     _searchFocus.addListener(() {
       if (!_searchFocus.hasFocus) {
-        setState(() => _showSugestoes = false);
+        setState(() {
+          _showSugestoes = false;
+          _semResultados = false;
+        });
       }
     });
 
@@ -127,6 +133,7 @@ class _LojaPageState extends State<LojaPage> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -146,21 +153,30 @@ class _LojaPageState extends State<LojaPage> {
   }
 
   void _onSearchChanged(String q) {
-    final trimmed = q.trim().toLowerCase();
-    if (trimmed.isEmpty) {
-      setState(() { _sugestoes = []; _showSugestoes = false; });
+    _debounce?.cancel();
+    if (q.trim().isEmpty) {
+      setState(() {
+        _sugestoes     = [];
+        _showSugestoes = false;
+        _buscando      = false;
+        _semResultados = false;
+      });
       return;
     }
-    setState(() {
-      _sugestoes = catalogoLojaFake
-          .where((p) => p.nome.toLowerCase().contains(trimmed))
-          .take(6)
-          .toList();
-      _showSugestoes = _sugestoes.isNotEmpty;
+    setState(() { _buscando = true; _semResultados = false; });
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
+      final resultados = await TursoService().buscarProdutoGlobal(q.trim());
+      if (!mounted) return;
+      setState(() {
+        _sugestoes     = resultados;
+        _showSugestoes = resultados.isNotEmpty;
+        _buscando      = false;
+        _semResultados = resultados.isEmpty;
+      });
     });
   }
 
-  void _selecionarProduto(ProdutoLoja p) {
+  void _selecionarProduto(ProdutoEncontrado p) {
     final idx = itensLoja.indexWhere(
         (it) => it.tipo == p.tipo && it.numero == p.numero);
     setState(() {
@@ -181,8 +197,15 @@ class _LojaPageState extends State<LojaPage> {
     if (item.tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
-          gondolaInicial:    item.numero,
-          produtoDestacado:  _produtoSelecionado,
+          gondolaInicial: item.numero,
+          produtoDestacado: _produtoSelecionado != null
+              ? ProdutoLoja(
+                  nome:   _produtoSelecionado!.nome,
+                  tipo:   _produtoSelecionado!.tipo,
+                  numero: _produtoSelecionado!.numero,
+                  nivel:  _produtoSelecionado!.nivelDescricao,
+                )
+              : null,
         ),
       ));
     }
@@ -190,12 +213,15 @@ class _LojaPageState extends State<LojaPage> {
   }
 
   void _limparBusca() {
+    _debounce?.cancel();
     _searchCtrl.clear();
     setState(() {
-      _selecionadoIdx    = null;
+      _selecionadoIdx     = null;
       _produtoSelecionado = null;
-      _sugestoes         = [];
-      _showSugestoes     = false;
+      _sugestoes          = [];
+      _showSugestoes      = false;
+      _buscando           = false;
+      _semResultados      = false;
     });
   }
 
@@ -232,13 +258,15 @@ class _LojaPageState extends State<LojaPage> {
                       children: [
                         Expanded(
                           child: _SearchBox(
-                            controller:   _searchCtrl,
-                            focusNode:    _searchFocus,
-                            sugestoes:    _sugestoes,
+                            controller:    _searchCtrl,
+                            focusNode:     _searchFocus,
+                            sugestoes:     _sugestoes,
                             showSugestoes: _showSugestoes,
-                            onChanged:    _onSearchChanged,
-                            onSelecionar: _selecionarProduto,
-                            onClear:      _searchCtrl.text.isNotEmpty ? _limparBusca : null,
+                            buscando:      _buscando,
+                            semResultados: _semResultados,
+                            onChanged:     _onSearchChanged,
+                            onSelecionar:  _selecionarProduto,
+                            onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -284,19 +312,23 @@ class _LojaPageState extends State<LojaPage> {
 // ── _SearchBox ────────────────────────────────────────────────────────────────
 
 class _SearchBox extends StatelessWidget {
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final List<ProdutoLoja> sugestoes;
-  final bool showSugestoes;
-  final void Function(String) onChanged;
-  final void Function(ProdutoLoja) onSelecionar;
-  final VoidCallback? onClear;
+  final TextEditingController          controller;
+  final FocusNode                      focusNode;
+  final List<ProdutoEncontrado>        sugestoes;
+  final bool                           showSugestoes;
+  final bool                           buscando;
+  final bool                           semResultados;
+  final void Function(String)          onChanged;
+  final void Function(ProdutoEncontrado) onSelecionar;
+  final VoidCallback?                  onClear;
 
   const _SearchBox({
     required this.controller,
     required this.focusNode,
     required this.sugestoes,
     required this.showSugestoes,
+    required this.buscando,
+    required this.semResultados,
     required this.onChanged,
     required this.onSelecionar,
     this.onClear,
@@ -334,8 +366,8 @@ class _SearchBox extends StatelessWidget {
             ),
           ),
         ),
-        // Dropdown de sugestões
-        if (showSugestoes)
+        // Dropdown: loading / sem resultado / lista
+        if (buscando || showSugestoes || semResultados)
           Container(
             margin: const EdgeInsets.only(top: 6),
             decoration: BoxDecoration(
@@ -344,45 +376,66 @@ class _SearchBox extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
             ),
             constraints: const BoxConstraints(maxHeight: 260),
-            child: ListView.separated(
-              shrinkWrap:  true,
-              padding:     EdgeInsets.zero,
-              itemCount:   sugestoes.length,
-              separatorBuilder: (_, __) =>
-                  Divider(height: 1, color: Colors.white.withOpacity(0.05)),
-              itemBuilder: (_, i) {
-                final p   = sugestoes[i];
-                final cor = p.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
-                return InkWell(
-                  onTap: () => onSelecionar(p),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(p.nome,
-                            style: const TextStyle(
-                                color: Color(0xFFf0eee9), fontSize: 13)),
-                        const SizedBox(height: 3),
-                        Row(children: [
-                          Container(
-                            width: 7, height: 7,
-                            decoration: BoxDecoration(
-                              color: cor, borderRadius: BorderRadius.circular(2)),
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivel}',
-                            style: const TextStyle(
-                                color: Color(0xFF9b9893), fontSize: 11),
-                          ),
-                        ]),
-                      ],
+            child: buscando && sugestoes.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20, height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF8a877f),
+                        ),
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
+                  )
+                : semResultados
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                        child: Text(
+                          'Nenhum produto encontrado',
+                          style: TextStyle(color: Color(0xFF7d7a74), fontSize: 13),
+                        ),
+                      )
+                    : ListView.separated(
+                        shrinkWrap:  true,
+                        padding:     EdgeInsets.zero,
+                        itemCount:   sugestoes.length,
+                        separatorBuilder: (_, __) =>
+                            Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                        itemBuilder: (_, i) {
+                          final p   = sugestoes[i];
+                          final cor = p.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+                          return InkWell(
+                            onTap: () => onSelecionar(p),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(p.nome,
+                                      style: const TextStyle(
+                                          color: Color(0xFFf0eee9), fontSize: 13)),
+                                  const SizedBox(height: 3),
+                                  Row(children: [
+                                    Container(
+                                      width: 7, height: 7,
+                                      decoration: BoxDecoration(
+                                        color: cor, borderRadius: BorderRadius.circular(2)),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivelDescricao}',
+                                      style: const TextStyle(
+                                          color: Color(0xFF9b9893), fontSize: 11),
+                                    ),
+                                  ]),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
           ),
       ],
     );
@@ -455,9 +508,9 @@ class _HexClipper extends CustomClipper<Path> {
 // ── _LocationCard ─────────────────────────────────────────────────────────────
 
 class _LocationCard extends StatelessWidget {
-  final ItemLoja item;
-  final ProdutoLoja? produto;
-  final VoidCallback? onVerDetalhes;
+  final ItemLoja           item;
+  final ProdutoEncontrado? produto;
+  final VoidCallback?      onVerDetalhes;
 
   const _LocationCard({
     required this.item,
@@ -507,7 +560,7 @@ class _LocationCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             produto != null
-                ? '${produto!.nome} · $tipoLabel nº ${item.numero} · ${produto!.nivel}'
+                ? '${produto!.nome} · $tipoLabel nº ${item.numero} · ${produto!.nivelDescricao}'
                 : '$tipoLabel nº ${item.numero}',
             style: const TextStyle(
               color: Color(0xFFb0ada8),
