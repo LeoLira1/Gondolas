@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
-import 'gondola_scene.dart' show Vec3, Camera, Face, GondolaGeometry;
+import 'gondola_scene.dart' show Vec3, Camera, Face;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -143,14 +143,42 @@ class LojaGeometry {
   }
 
   static void _gondola(List<Face> faces, ItemLoja item, Color cor) {
-    // Scale real 3D mesh (base shelf r=3.4) down to match the store map footprint.
+    // 3-shelf silhouette scaled to match gondolaR footprint.
+    // Uses 6-sided prisms (no feet, no borda) to keep face count low
+    // while 12 gondolas render simultaneously on the map.
     const scale = gondolaR / 3.4;
-    faces.addAll(GondolaGeometry.buildFacesAt(
-      scale: scale,
-      tx: item.x,
-      tz: item.z,
-      colorMapper: (_) => cor,
-    ));
+    const shelves = [(3.4, 0.675, 0.35), (2.4, 2.15, 0.30), (1.5, 3.43, 0.26)];
+    for (final (r, yc, h) in shelves) {
+      _prism6(faces, cx: item.x, cz: item.z,
+              r: r * scale,
+              y0: (yc - h / 2) * scale, y1: (yc + h / 2) * scale, cor: cor);
+    }
+    // Central pillar
+    _prism6(faces, cx: item.x, cz: item.z,
+            r: 0.28 * scale, y0: 0.85 * scale, y1: 3.30 * scale, cor: cor);
+  }
+
+  static void _prism6(List<Face> faces, {
+    required double cx, required double cz,
+    required double r, required double y0, required double y1,
+    required Color cor,
+  }) {
+    const sides = 6;
+    for (var i = 0; i < sides; i++) {
+      final a0 = i * 2 * math.pi / sides;
+      final a1 = (i + 1) * 2 * math.pi / sides;
+      faces.add(Face([
+        Vec3(cx + r * math.cos(a0), y0, cz + r * math.sin(a0)),
+        Vec3(cx + r * math.cos(a0), y1, cz + r * math.sin(a0)),
+        Vec3(cx + r * math.cos(a1), y1, cz + r * math.sin(a1)),
+        Vec3(cx + r * math.cos(a1), y0, cz + r * math.sin(a1)),
+      ], cor));
+    }
+    faces.add(Face([
+      for (var i = sides - 1; i >= 0; i--)
+        Vec3(cx + r * math.cos(i * 2 * math.pi / sides), y1,
+             cz + r * math.sin(i * 2 * math.pi / sides)),
+    ], cor));
   }
 
   static void _estante(List<Face> faces, ItemLoja item, Color cor) {
