@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'configuracao_page.dart';
 import 'estante_scene.dart';
 import 'gondola_scene.dart';
+import 'loja_scene.dart';
 import 'models.dart';
 import 'turso_service.dart';
 
@@ -14,7 +16,7 @@ class CamdaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Gôndola 3D CAMDA',
+      title: 'CAMDA',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -23,7 +25,7 @@ class CamdaApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const _MainNav(),
+      home: const LojaPage(),
     );
   }
 }
@@ -79,17 +81,485 @@ const List<Produto> _catalogoMock = [
   Produto(codigo: 'lona',    nome: 'Lona 5×7',      categoria: 'Lonas',         corHex: '#e87722'),
 ];
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// LojaPage — tela inicial com mapa da loja
+// ══════════════════════════════════════════════════════════════════════════════
+
+class LojaPage extends StatefulWidget {
+  // Opcional: abrir já com uma estrutura selecionada (ex: vindo de GondolaPage)
+  final String? itemTipoInicial;
+  final int?    itemNumeroInicial;
+
+  const LojaPage({super.key, this.itemTipoInicial, this.itemNumeroInicial});
+
+  @override
+  State<LojaPage> createState() => _LojaPageState();
+}
+
+class _LojaPageState extends State<LojaPage> {
+  int?          _selecionadoIdx;
+  ProdutoLoja?  _produtoSelecionado;
+  Vec3?         _focarEm;
+
+  final _searchCtrl  = TextEditingController();
+  final _searchFocus = FocusNode();
+  List<ProdutoLoja> _sugestoes    = [];
+  bool              _showSugestoes = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchFocus.addListener(() {
+      if (!_searchFocus.hasFocus) {
+        setState(() => _showSugestoes = false);
+      }
+    });
+
+    if (widget.itemTipoInicial != null && widget.itemNumeroInicial != null) {
+      final idx = itensLoja.indexWhere((it) =>
+          it.tipo == widget.itemTipoInicial && it.numero == widget.itemNumeroInicial);
+      if (idx != -1) {
+        _selecionadoIdx = idx;
+        _focarEm = Vec3(itensLoja[idx].x, 0.2, itensLoja[idx].z);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────────
+
+  void _onSelecionado(int? idx) {
+    setState(() {
+      _selecionadoIdx    = idx;
+      _produtoSelecionado = null;
+      if (idx != null) {
+        _focarEm = Vec3(itensLoja[idx].x, 0.2, itensLoja[idx].z);
+      }
+    });
+    _searchFocus.unfocus();
+  }
+
+  void _onSearchChanged(String q) {
+    final trimmed = q.trim().toLowerCase();
+    if (trimmed.isEmpty) {
+      setState(() { _sugestoes = []; _showSugestoes = false; });
+      return;
+    }
+    setState(() {
+      _sugestoes = catalogoLojaFake
+          .where((p) => p.nome.toLowerCase().contains(trimmed))
+          .take(6)
+          .toList();
+      _showSugestoes = _sugestoes.isNotEmpty;
+    });
+  }
+
+  void _selecionarProduto(ProdutoLoja p) {
+    final idx = itensLoja.indexWhere(
+        (it) => it.tipo == p.tipo && it.numero == p.numero);
+    setState(() {
+      _selecionadoIdx    = idx != -1 ? idx : null;
+      _produtoSelecionado = p;
+      _searchCtrl.text   = p.nome;
+      _sugestoes         = [];
+      _showSugestoes     = false;
+      if (idx != -1) {
+        _focarEm = Vec3(itensLoja[idx].x, 0.2, itensLoja[idx].z);
+      }
+    });
+    _searchFocus.unfocus();
+  }
+
+  void _verDetalhes(int idx) {
+    final item = itensLoja[idx];
+    if (item.tipo == 'gondola') {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => GondolaPage(
+          gondolaInicial:    item.numero,
+          produtoDestacado:  _produtoSelecionado,
+        ),
+      ));
+    }
+    // EstantePage: integrar quando disponível
+  }
+
+  void _limparBusca() {
+    _searchCtrl.clear();
+    setState(() {
+      _selecionadoIdx    = null;
+      _produtoSelecionado = null;
+      _sugestoes         = [];
+      _showSugestoes     = false;
+    });
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final item = _selecionadoIdx != null ? itensLoja[_selecionadoIdx!] : null;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0b0c0e),
+      body: Stack(
+        children: [
+          // ── Cena 3D (fundo) ─────────────────────────────────────────────
+          LojaScene(
+            selecionadoIdx: _selecionadoIdx,
+            onSelecionado:  _onSelecionado,
+            onVerDetalhes:  _verDetalhes,
+            focarEm:        _focarEm,
+          ),
+
+          // ── HUD superior: busca + legenda + título ───────────────────────
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Linha: campo de busca + legenda
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _SearchBox(
+                            controller:   _searchCtrl,
+                            focusNode:    _searchFocus,
+                            sugestoes:    _sugestoes,
+                            showSugestoes: _showSugestoes,
+                            onChanged:    _onSearchChanged,
+                            onSelecionar: _selecionarProduto,
+                            onClear:      _searchCtrl.text.isNotEmpty ? _limparBusca : null,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        const _LegendRow(),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // Título / dica
+                    Text(
+                      'CAMDA · Mapa da loja — toque numa estrutura ou busque um produto',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.45),
+                        fontSize: 11,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // ── Card inferior ────────────────────────────────────────────────
+          if (item != null)
+            Positioned(
+              bottom: 24,
+              left: 20,
+              right: 20,
+              child: _LocationCard(
+                item:    item,
+                produto: _produtoSelecionado,
+                onVerDetalhes: item.tipo == 'gondola'
+                    ? () => _verDetalhes(_selecionadoIdx!)
+                    : null,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── _SearchBox ────────────────────────────────────────────────────────────────
+
+class _SearchBox extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final List<ProdutoLoja> sugestoes;
+  final bool showSugestoes;
+  final void Function(String) onChanged;
+  final void Function(ProdutoLoja) onSelecionar;
+  final VoidCallback? onClear;
+
+  const _SearchBox({
+    required this.controller,
+    required this.focusNode,
+    required this.sugestoes,
+    required this.showSugestoes,
+    required this.onChanged,
+    required this.onSelecionar,
+    this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // TextField
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xEE141518),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withOpacity(0.10)),
+          ),
+          child: TextField(
+            controller: controller,
+            focusNode:  focusNode,
+            onChanged:  onChanged,
+            style: const TextStyle(color: Color(0xFFf0eee9), fontSize: 14),
+            decoration: InputDecoration(
+              hintText:      'Buscar produto...',
+              hintStyle:     const TextStyle(color: Color(0xFF7d7a74)),
+              prefixIcon:    const Icon(Icons.search, color: Color(0xFF8a877f), size: 18),
+              suffixIcon:    onClear != null
+                  ? IconButton(
+                      icon: const Icon(Icons.close, size: 16, color: Color(0xFF8a877f)),
+                      onPressed: onClear,
+                    )
+                  : null,
+              border:        InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+        // Dropdown de sugestões
+        if (showSugestoes)
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xF7141518),
+              border: Border.all(color: Colors.white.withOpacity(0.09)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: ListView.separated(
+              shrinkWrap:  true,
+              padding:     EdgeInsets.zero,
+              itemCount:   sugestoes.length,
+              separatorBuilder: (_, __) =>
+                  Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+              itemBuilder: (_, i) {
+                final p   = sugestoes[i];
+                final cor = p.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+                return InkWell(
+                  onTap: () => onSelecionar(p),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(p.nome,
+                            style: const TextStyle(
+                                color: Color(0xFFf0eee9), fontSize: 13)),
+                        const SizedBox(height: 3),
+                        Row(children: [
+                          Container(
+                            width: 7, height: 7,
+                            decoration: BoxDecoration(
+                              color: cor, borderRadius: BorderRadius.circular(2)),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivel}',
+                            style: const TextStyle(
+                                color: Color(0xFF9b9893), fontSize: 11),
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── _LegendRow ────────────────────────────────────────────────────────────────
+
+class _LegendRow extends StatelessWidget {
+  const _LegendRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _chip(corGondolaLoja, 'Gôndola', hexagon: true),
+        const SizedBox(height: 6),
+        _chip(corEstanteLoja, 'Estante'),
+      ],
+    );
+  }
+
+  Widget _chip(Color cor, String label, {bool hexagon = false}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0x8C141416),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipPath(
+            clipper: hexagon ? _HexClipper() : null,
+            child: Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(
+                color: cor,
+                borderRadius: hexagon ? null : BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFFcfcdc7))),
+        ],
+      ),
+    );
+  }
+}
+
+class _HexClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size s) {
+    final path = Path();
+    for (var i = 0; i < 6; i++) {
+      final angle = i * 2 * math.pi / 6 - math.pi / 6;
+      final px = s.width  / 2 + s.width  / 2 * math.cos(angle);
+      final py = s.height / 2 + s.height / 2 * math.sin(angle);
+      i == 0 ? path.moveTo(px, py) : path.lineTo(px, py);
+    }
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(_) => false;
+}
+
+// ── _LocationCard ─────────────────────────────────────────────────────────────
+
+class _LocationCard extends StatelessWidget {
+  final ItemLoja item;
+  final ProdutoLoja? produto;
+  final VoidCallback? onVerDetalhes;
+
+  const _LocationCard({
+    required this.item,
+    this.produto,
+    this.onVerDetalhes,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cor    = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+    final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
+    final tipoLabel = item.tipo == 'gondola' ? 'Gôndola' : 'Estante';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xEE16171A),
+        border: Border.all(color: Colors.white.withOpacity(0.09)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Número em destaque
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 10, height: 10,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: cor,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              Text(
+                '$prefixo${item.numero}',
+                style: TextStyle(
+                  color: cor,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  height: 1,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            produto != null
+                ? '${produto!.nome} · $tipoLabel nº ${item.numero} · ${produto!.nivel}'
+                : '$tipoLabel nº ${item.numero}',
+            style: const TextStyle(
+              color: Color(0xFFb0ada8),
+              fontSize: 12,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (onVerDetalhes != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onVerDetalhes,
+                icon: const Icon(Icons.open_in_new, size: 14),
+                label: const Text('Ver detalhes'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2e6b46),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  textStyle: const TextStyle(fontSize: 13),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GondolaPage
+// ══════════════════════════════════════════════════════════════════════════════
 
 class GondolaPage extends StatefulWidget {
-  const GondolaPage({super.key});
+  final int          gondolaInicial;
+  final ProdutoLoja? produtoDestacado;
+
+  const GondolaPage({
+    super.key,
+    this.gondolaInicial   = 1,
+    this.produtoDestacado,
+  });
 
   @override
   State<GondolaPage> createState() => _GondolaPageState();
 }
 
 class _GondolaPageState extends State<GondolaPage> {
-  int     _gondolaAtual        = 1;
+  late int _gondolaAtual;
   String? _produtoSelecionadoId;
   String? _destacadoCodigo;
   Timer?  _highlightTimer;
@@ -141,6 +611,7 @@ class _GondolaPageState extends State<GondolaPage> {
   @override
   void initState() {
     super.initState();
+    _gondolaAtual = widget.gondolaInicial;
     _inicializar();
   }
 
@@ -566,6 +1037,19 @@ class _GondolaPageState extends State<GondolaPage> {
               padding: EdgeInsets.only(right: 4),
               child: Icon(Icons.circle, color: Color(0xFF4a9d6a), size: 8),
             ),
+          IconButton(
+            icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
+            tooltip: 'Ver no mapa',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => LojaPage(
+                  itemTipoInicial:   'gondola',
+                  itemNumeroInicial: _gondolaAtual,
+                ),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined,
                 color: Color(0xFF8a9aa8), size: 22),
@@ -1637,6 +2121,19 @@ class _EstantePageState extends State<EstantePage> {
               padding: EdgeInsets.only(right: 4),
               child: Icon(Icons.circle, color: Color(0xFF4a9d6a), size: 8),
             ),
+          IconButton(
+            icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
+            tooltip: 'Ver no mapa',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => LojaPage(
+                  itemTipoInicial:   'estante',
+                  itemNumeroInicial: _estanteAtual,
+                ),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined,
                 color: Color(0xFF8a9aa8), size: 22),
