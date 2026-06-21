@@ -208,8 +208,11 @@ class _LojaPageState extends State<LojaPage> {
               : null,
         ),
       ));
+    } else {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => EstantePage(estanteInicial: item.numero),
+      ));
     }
-    // EstantePage: integrar quando disponível
   }
 
   void _limparBusca() {
@@ -298,9 +301,7 @@ class _LojaPageState extends State<LojaPage> {
               child: _LocationCard(
                 item:    item,
                 produto: _produtoSelecionado,
-                onVerDetalhes: item.tipo == 'gondola'
-                    ? () => _verDetalhes(_selecionadoIdx!)
-                    : null,
+                onVerDetalhes: () => _verDetalhes(_selecionadoIdx!),
               ),
             ),
         ],
@@ -1657,7 +1658,8 @@ class _ArrowBtn extends StatelessWidget {
 // ── EstantePage ───────────────────────────────────────────────────────────────
 
 class EstantePage extends StatefulWidget {
-  const EstantePage({super.key});
+  final int estanteInicial;
+  const EstantePage({super.key, this.estanteInicial = 1});
 
   @override
   State<EstantePage> createState() => _EstantePageState();
@@ -1713,6 +1715,7 @@ class _EstantePageState extends State<EstantePage> {
   @override
   void initState() {
     super.initState();
+    _estanteAtual = widget.estanteInicial;
     _inicializar();
   }
 
