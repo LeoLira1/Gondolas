@@ -82,7 +82,7 @@ const List<ProdutoLoja> catalogoLojaFake = [
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 
-const Color corGondolaLoja = Color(0xFFe0944a);
+const Color corGondolaLoja = Color(0xFF4caf50);
 const Color corEstanteLoja = Color(0xFF4a93d8);
 const Color _corApagado    = Color(0xFF2d2e31);
 const Color _corParede     = Color(0xFF2a2b2f);
