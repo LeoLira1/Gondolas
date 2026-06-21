@@ -39,6 +39,22 @@ class CaixaLayout {
   });
 }
 
+class ProdutoEncontrado {
+  final String nome;
+  final String tipo;            // 'gondola' ou 'estante'
+  final int    numero;
+  final String nivelDescricao;  // texto pronto: "Andar Base", "Nível 2", etc.
+  final String produtoCodigo;
+
+  const ProdutoEncontrado({
+    required this.nome,
+    required this.tipo,
+    required this.numero,
+    required this.nivelDescricao,
+    required this.produtoCodigo,
+  });
+}
+
 class CaixaColocadaEstante {
   final int    coluna;
   final int    nivel;
