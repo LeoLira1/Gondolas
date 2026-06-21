@@ -63,17 +63,17 @@ class Camera {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// _Face — polygon in world space, projected by the painter
+// Face — polygon in world space, projected by the painter
 // ──────────────────────────────────────────────────────────────────────────────
 
-class _Face {
+class Face {
   final List<Vec3> verts;
   final Color color;
   double depth = 0;
   List<Offset> proj = const [];
   double light = 1.0;
 
-  _Face(this.verts, this.color);
+  Face(this.verts, this.color);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -113,8 +113,8 @@ class GondolaGeometry {
     (yTop: 3.43  + 0.26 / 2 + 0.06, r: 1.5), // andar 2 — topo  (y≈3.62)
   ];
 
-  static List<_Face> buildFaces() {
-    final faces = <_Face>[];
+  static List<Face> buildFaces() {
+    final faces = <Face>[];
 
     // 8 feet
     for (var i = 0; i < 8; i++) {
@@ -142,7 +142,7 @@ class GondolaGeometry {
     return faces;
   }
 
-  static void _shelf(List<_Face> faces,
+  static void _shelf(List<Face> faces,
       {required double r, required double yc, required double h}) {
     const rot = math.pi / 8;
     _prism(faces,
@@ -153,7 +153,7 @@ class GondolaGeometry {
         r: r + 0.13, sides: 8, color: _corBorda, rotOff: rot);
   }
 
-  static void _prism(List<_Face> faces, {
+  static void _prism(List<Face> faces, {
     required double cx, required double cz,
     required double y0, required double y1,
     required double r, required int sides,
@@ -165,21 +165,21 @@ class GondolaGeometry {
       final a0 = angles[i], a1 = angles[(i + 1) % sides];
       final x0 = cx + r * math.cos(a0), z0 = cz + r * math.sin(a0);
       final x1 = cx + r * math.cos(a1), z1 = cz + r * math.sin(a1);
-      faces.add(_Face([
+      faces.add(Face([
         Vec3(x0, y0, z0), Vec3(x0, y1, z0),
         Vec3(x1, y1, z1), Vec3(x1, y0, z1),
       ], color));
     }
 
     // Single-polygon top cap — no internal edge lines
-    faces.add(_Face([
+    faces.add(Face([
       for (var i = sides - 1; i >= 0; i--)
         Vec3(cx + r * math.cos(angles[i]), y1, cz + r * math.sin(angles[i]))
     ], color));
   }
 
   /// Adds 5 visible faces of a box sitting on a shelf surface at (cx, cy, cz).
-  static void addBox(List<_Face> faces, {
+  static void addBox(List<Face> faces, {
     required double cx, required double cy, required double cz,
     required Color color,
   }) {
@@ -189,15 +189,15 @@ class GondolaGeometry {
     final z0 = cz - d / 2, z1 = cz + d / 2;
 
     // Top  (+Y)
-    faces.add(_Face([Vec3(x0,y1,z0), Vec3(x0,y1,z1), Vec3(x1,y1,z1), Vec3(x1,y1,z0)], color));
+    faces.add(Face([Vec3(x0,y1,z0), Vec3(x0,y1,z1), Vec3(x1,y1,z1), Vec3(x1,y1,z0)], color));
     // Front (+Z)
-    faces.add(_Face([Vec3(x0,y0,z1), Vec3(x1,y0,z1), Vec3(x1,y1,z1), Vec3(x0,y1,z1)], color));
+    faces.add(Face([Vec3(x0,y0,z1), Vec3(x1,y0,z1), Vec3(x1,y1,z1), Vec3(x0,y1,z1)], color));
     // Back  (-Z)
-    faces.add(_Face([Vec3(x1,y0,z0), Vec3(x0,y0,z0), Vec3(x0,y1,z0), Vec3(x1,y1,z0)], color));
+    faces.add(Face([Vec3(x1,y0,z0), Vec3(x0,y0,z0), Vec3(x0,y1,z0), Vec3(x1,y1,z0)], color));
     // Right (+X)
-    faces.add(_Face([Vec3(x1,y0,z1), Vec3(x1,y0,z0), Vec3(x1,y1,z0), Vec3(x1,y1,z1)], color));
+    faces.add(Face([Vec3(x1,y0,z1), Vec3(x1,y0,z0), Vec3(x1,y1,z0), Vec3(x1,y1,z1)], color));
     // Left  (-X)
-    faces.add(_Face([Vec3(x0,y0,z0), Vec3(x0,y0,z1), Vec3(x0,y1,z1), Vec3(x0,y1,z0)], color));
+    faces.add(Face([Vec3(x0,y0,z0), Vec3(x0,y0,z1), Vec3(x0,y1,z1), Vec3(x0,y1,z0)], color));
   }
 }
 
@@ -207,11 +207,11 @@ class GondolaGeometry {
 
 class GondolaPainter extends CustomPainter {
   final Camera camera;
-  final List<_Face> extraFaces;
+  final List<Face> extraFaces;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
-  GondolaPainter(this.camera, {this.extraFaces = const <_Face>[]});
+  GondolaPainter(this.camera, {this.extraFaces = const <Face>[]});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -223,7 +223,7 @@ class GondolaPainter extends CustomPainter {
     _draw(canvas, faces);
   }
 
-  void _project(List<_Face> faces, Size size) {
+  void _project(List<Face> faces, Size size) {
     final eye   = camera.position;
     final fwd   = (camera.target - eye).normalized;
     final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
@@ -286,7 +286,7 @@ class GondolaPainter extends CustomPainter {
     }
   }
 
-  void _draw(Canvas canvas, List<_Face> faces) {
+  void _draw(Canvas canvas, List<Face> faces) {
     final fill   = Paint();
     final stroke = Paint()
       ..color      = const Color(0x33000000)
@@ -328,6 +328,7 @@ class GondolaScene extends StatefulWidget {
   final String? produtoSelecionadoId;
   final Map<String, Color> corPorProduto;
   final void Function(int andar, double x, double z)? onTapAndar;
+  final String? destacadoCodigo;
 
   const GondolaScene({
     super.key,
@@ -336,6 +337,7 @@ class GondolaScene extends StatefulWidget {
     this.produtoSelecionadoId,
     this.corPorProduto = const {},
     this.onTapAndar,
+    this.destacadoCodigo,
   });
 
   @override
@@ -443,9 +445,12 @@ class _GondolaSceneState extends State<GondolaScene> {
   @override
   Widget build(BuildContext context) {
     // Build box faces from current gondola's placed boxes
-    final extraFaces = <_Face>[];
+    final extraFaces = <Face>[];
     for (final caixa in widget.caixas) {
-      final cor   = widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888);
+      final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
+      final cor = isHighlighted
+          ? const Color(0xFFe87722)
+          : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final shelf = GondolaGeometry.andares[caixa.andar];
       GondolaGeometry.addBox(extraFaces,
           cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor);
