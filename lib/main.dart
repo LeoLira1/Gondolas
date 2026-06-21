@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'gondola_scene.dart';
+import 'loja_page.dart';
 
 void main() => runApp(const CamdaApp());
 
@@ -72,6 +73,16 @@ class _GondolaPageState extends State<GondolaPage> {
 
   void _trocarGondola(int delta) =>
       setState(() => _gondolaAtual = (_gondolaAtual + delta).clamp(1, 12));
+
+  Future<void> _abrirMapa() async {
+    final gondolaId = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(builder: (_) => const LojaPage()),
+    );
+    if (gondolaId != null) {
+      setState(() => _gondolaAtual = gondolaId);
+    }
+  }
 
   void _selecionarProduto(String id) => setState(() {
         _produtoSelecionadoId =
@@ -151,6 +162,13 @@ class _GondolaPageState extends State<GondolaPage> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
+            tooltip: 'Mapa da loja',
+            onPressed: _abrirMapa,
+          ),
+        ],
       ),
       body: Column(
         children: [
