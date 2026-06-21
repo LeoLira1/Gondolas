@@ -85,7 +85,6 @@ const List<ProdutoLoja> catalogoLojaFake = [
 const Color corGondolaLoja = Color(0xFFe0944a);
 const Color corEstanteLoja = Color(0xFF4a93d8);
 const Color _corApagado    = Color(0xFF2d2e31);
-const Color _corPiso       = Color(0xFF17181b);
 const Color _corParede     = Color(0xFF2a2b2f);
 const Color _corBg         = Color(0xFF0b0c0e);
 
@@ -111,12 +110,6 @@ class LojaGeometry {
 
   static List<_Face> buildFaces(int? selecionadoIdx, double pulseT) {
     final faces = <_Face>[];
-
-    // Piso
-    faces.add(_Face([
-      Vec3(0, 0, 0), Vec3(0, 0, lojaH),
-      Vec3(lojaW, 0, lojaH), Vec3(lojaW, 0, 0),
-    ], _corPiso));
 
     // Paredes perimetrais
     _wallBox(faces, 0, _paredeEsp, 0, lojaH);
