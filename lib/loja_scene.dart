@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'gondola_scene.dart' show Vec3, Camera;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
