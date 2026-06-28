@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'configuracao_page.dart';
+import 'estante_edr300_scene.dart';
 import 'estante_scene.dart';
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
@@ -209,6 +210,10 @@ class _LojaPageState extends State<LojaPage> {
                 )
               : null,
         ),
+      ));
+    } else if (item.numero == 8) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => const EstanteEdr300Page(),
       ));
     } else {
       Navigator.push(context, MaterialPageRoute(
@@ -2481,4 +2486,265 @@ class _EstanteSelector extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EstanteEdr300Page — modelo 3D interativo da Estante de Aço EDR-300
+// ─────────────────────────────────────────────────────────────────────────────
+
+class EstanteEdr300Page extends StatefulWidget {
+  const EstanteEdr300Page({super.key});
+
+  @override
+  State<EstanteEdr300Page> createState() => _EstanteEdr300PageState();
+}
+
+class _EstanteEdr300PageState extends State<EstanteEdr300Page> {
+  int    _shelves    = 6;
+  double _height     = 1.98;
+  double _width      = 0.92;
+  double _depth      = 0.30;
+  bool   _autoRot    = true;
+  bool   _showHoles  = false;
+  bool   _showFloor  = true;
+  bool   _wireframe  = false;
+  bool   _panelOpen  = false;
+
+  static const _bg      = Color(0xFF0e1116);
+  static const _panel   = Color(0xFF161b22);
+  static const _line    = Color(0xFF262d38);
+  static const _txt     = Color(0xFFc9d3df);
+  static const _txtDim  = Color(0xFF7c8696);
+  static const _accent  = Color(0xFFe0772b);
+  static const _accentS = Color(0xFFf0a868);
+
+  Edr300Geometry get _geo => Edr300Geometry(
+    shelves:   _shelves,
+    height:    _height,
+    width:     _width,
+    depth:     _depth,
+    showHoles: _showHoles,
+    showFloor: _showFloor,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Edr300Scene(
+              geometry:   _geo,
+              wireframe:  _wireframe,
+              autoRotate: _autoRot,
+            ),
+          ),
+          // HUD
+          Positioned(
+            top: 0, left: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: const Icon(Icons.arrow_back_ios,
+                          color: _txtDim, size: 20),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text('Estante de Aço',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                          letterSpacing: 2, color: _txtDim)),
+                    const SizedBox(height: 2),
+                    Text.rich(TextSpan(
+                      style: const TextStyle(fontSize: 22,
+                          fontWeight: FontWeight.bold, color: _txt),
+                      children: const [
+                        TextSpan(text: 'EDR-300 · '),
+                        TextSpan(text: 'Chapa 22',
+                            style: TextStyle(color: _accentS)),
+                      ],
+                    )),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Painel de parâmetros
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 260),
+            curve:    Curves.easeInOut,
+            right: _panelOpen ? 18 : -300,
+            top:   18, bottom: 18,
+            width: 272,
+            child: SingleChildScrollView(
+              child: Container(
+                decoration: BoxDecoration(
+                  color:        _panel,
+                  border:       Border.all(color: _line),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _sectionLabel('Parâmetros'),
+                    _slider('Prateleiras', _shelves.toDouble(), 3, 8, 1,
+                      (v) => setState(() => _shelves = v.round()),
+                      fmt: (v) => '${v.round()}'),
+                    _slider('Altura (cm)', _height * 100, 120, 240, 2,
+                      (v) => setState(() => _height = v / 100),
+                      fmt: (v) => '${v.round()}'),
+                    _slider('Largura (cm)', _width * 100, 60, 120, 2,
+                      (v) => setState(() => _width = v / 100),
+                      fmt: (v) => '${v.round()}'),
+                    _slider('Profundidade (cm)', _depth * 100, 25, 60, 2,
+                      (v) => setState(() => _depth = v / 100),
+                      fmt: (v) => '${v.round()}'),
+                    const SizedBox(height: 4),
+                    _sectionLabel('Exibição'),
+                    Row(children: [
+                      _toggle('Girar',   _autoRot,
+                        () => setState(() => _autoRot   = !_autoRot)),
+                      const SizedBox(width: 8),
+                      _toggle('Furos',   _showHoles,
+                        () => setState(() => _showHoles = !_showHoles)),
+                    ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      _toggle('Piso',    _showFloor,
+                        () => setState(() => _showFloor = !_showFloor)),
+                      const SizedBox(width: 8),
+                      _toggle('Aramado', _wireframe,
+                        () => setState(() => _wireframe = !_wireframe)),
+                    ]),
+                    const SizedBox(height: 14),
+                    const Divider(color: _line),
+                    const SizedBox(height: 10),
+                    Text.rich(TextSpan(
+                      style: const TextStyle(fontSize: 12,
+                          color: _txtDim, height: 1.8),
+                      children: [
+                        const TextSpan(text: 'EDR-300',
+                            style: TextStyle(
+                                color: _txt, fontWeight: FontWeight.bold)),
+                        TextSpan(text: ' · $_shelves prateleiras\n'),
+                        const TextSpan(text: 'Chapa 22 · capacidade '),
+                        const TextSpan(text: '120 kg/prat.',
+                            style: TextStyle(
+                                color: _txt, fontWeight: FontWeight.bold)),
+                        const TextSpan(
+                            text: '\nMontante perfurado, regulagem livre'),
+                      ],
+                    )),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Botão de ajustes
+          Positioned(
+            right: 18, bottom: 24,
+            child: SafeArea(
+              child: ElevatedButton(
+                onPressed: () => setState(() => _panelOpen = !_panelOpen),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _accent,
+                  foregroundColor: const Color(0xFF1a1208),
+                  shape:           const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 22, vertical: 14),
+                  textStyle: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.bold),
+                  elevation: 8,
+                ),
+                child: Text(_panelOpen ? '✕ Fechar' : '⚙ Ajustes'),
+              ),
+            ),
+          ),
+          // hint
+          const Positioned(
+            left: 22, bottom: 18,
+            child: SafeArea(
+              child: Text('Arraste para girar · pinça para zoom',
+                style: TextStyle(fontSize: 11, color: _txtDim)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 14, top: 8),
+    child: Text(text,
+      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+          letterSpacing: 2.5, color: _txtDim)),
+  );
+
+  Widget _slider(
+    String label, double value, double min, double max, double step,
+    ValueChanged<double> onChanged, {
+    required String Function(double) fmt,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label,
+                style: const TextStyle(fontSize: 13, color: _txt)),
+              Text(fmt(value),
+                style: const TextStyle(fontSize: 13,
+                    color: _accentS, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor:   _accent,
+              inactiveTrackColor: _line,
+              thumbColor:         _accent,
+              overlayColor: _accent.withAlpha(40),
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              trackHeight: 4,
+            ),
+            child: Slider(
+              value:     value,
+              min:       min,
+              max:       max,
+              divisions: ((max - min) / step).round(),
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toggle(String label, bool on, VoidCallback onTap) => Expanded(
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: on ? _accent : Colors.transparent,
+          border: Border.all(color: on ? _accent : _line),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w700,
+            color: on ? const Color(0xFF1a1208) : _txtDim,
+          )),
+      ),
+    ),
+  );
 }
