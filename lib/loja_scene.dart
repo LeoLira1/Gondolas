@@ -25,15 +25,17 @@ class ItemLoja {
 
 class ProdutoLoja {
   final String nome;
-  final String tipo;   // 'gondola' ou 'estante'
-  final int numero;
+  final String tipo;           // 'gondola' ou 'estante'
+  final int    numero;
   final String nivel;
+  final String produtoCodigo;  // código do produto para destacar na cena
 
   const ProdutoLoja({
     required this.nome,
     required this.tipo,
     required this.numero,
     required this.nivel,
+    required this.produtoCodigo,
   });
 }
 
@@ -69,16 +71,16 @@ const List<ItemLoja> itensLoja = [
 
 // Catálogo mock — substituir por query Turso quando disponível
 const List<ProdutoLoja> catalogoLojaFake = [
-  ProdutoLoja(nome: 'CHINCHA P/ARREIO 2 ARGOLAS PASFIL C099', tipo: 'gondola', numero: 11, nivel: 'Andar Base'),
-  ProdutoLoja(nome: 'HERBICIDA NORTOX 2,4-D 806 SL 5L',       tipo: 'gondola', numero:  5, nivel: 'Andar 2'),
-  ProdutoLoja(nome: 'FUNGICIDA OUROFINO AZOX 200 1L',         tipo: 'gondola', numero:  7, nivel: 'Andar 1'),
-  ProdutoLoja(nome: 'ADUBO FOLIAR ZOETIS BORO 20L',           tipo: 'estante', numero:  4, nivel: 'Nível 2'),
-  ProdutoLoja(nome: 'SEMENTE MILHO HIBRIDO SC 60kg',          tipo: 'estante', numero:  3, nivel: 'Nível 1'),
-  ProdutoLoja(nome: 'INSETICIDA FMC LANNATE BR 1L',           tipo: 'gondola', numero:  9, nivel: 'Andar Base'),
-  ProdutoLoja(nome: 'CORDA SISAL 10MM ROLO 50M',              tipo: 'estante', numero:  6, nivel: 'Nível 3'),
-  ProdutoLoja(nome: 'LUVA NITRILICA PROTECAO PAR',            tipo: 'estante', numero:  1, nivel: 'Nível 4'),
-  ProdutoLoja(nome: 'FERTILIZANTE NPK 04-14-08 SC 50kg',      tipo: 'gondola', numero:  3, nivel: 'Andar 1'),
-  ProdutoLoja(nome: 'BALDE PLASTICO 20L AZUL',                tipo: 'gondola', numero:  2, nivel: 'Andar Base'),
+  ProdutoLoja(nome: 'CHINCHA P/ARREIO 2 ARGOLAS PASFIL C099', tipo: 'gondola', numero: 11, nivel: 'Andar Base', produtoCodigo: 'C099'),
+  ProdutoLoja(nome: 'HERBICIDA NORTOX 2,4-D 806 SL 5L',       tipo: 'gondola', numero:  5, nivel: 'Andar 2',   produtoCodigo: 'HERB001'),
+  ProdutoLoja(nome: 'FUNGICIDA OUROFINO AZOX 200 1L',         tipo: 'gondola', numero:  7, nivel: 'Andar 1',   produtoCodigo: 'FUNG001'),
+  ProdutoLoja(nome: 'ADUBO FOLIAR ZOETIS BORO 20L',           tipo: 'estante', numero:  4, nivel: 'Nível 2',   produtoCodigo: 'ADUB001'),
+  ProdutoLoja(nome: 'SEMENTE MILHO HIBRIDO SC 60kg',          tipo: 'estante', numero:  3, nivel: 'Nível 1',   produtoCodigo: 'SEM001'),
+  ProdutoLoja(nome: 'INSETICIDA FMC LANNATE BR 1L',           tipo: 'gondola', numero:  9, nivel: 'Andar Base', produtoCodigo: 'INSE001'),
+  ProdutoLoja(nome: 'CORDA SISAL 10MM ROLO 50M',              tipo: 'estante', numero:  6, nivel: 'Nível 3',   produtoCodigo: 'CORD001'),
+  ProdutoLoja(nome: 'LUVA NITRILICA PROTECAO PAR',            tipo: 'estante', numero:  1, nivel: 'Nível 4',   produtoCodigo: 'LUVA001'),
+  ProdutoLoja(nome: 'FERTILIZANTE NPK 04-14-08 SC 50kg',      tipo: 'gondola', numero:  3, nivel: 'Andar 1',   produtoCodigo: 'FERT001'),
+  ProdutoLoja(nome: 'BALDE PLASTICO 20L AZUL',                tipo: 'gondola', numero:  2, nivel: 'Andar Base', produtoCodigo: 'BALD001'),
 ];
 
 // ── Colors ────────────────────────────────────────────────────────────────────

@@ -197,23 +197,28 @@ class _LojaPageState extends State<LojaPage> {
 
   void _verDetalhes(int idx) {
     final item = itensLoja[idx];
+    final produto = _produtoSelecionado != null
+        ? ProdutoLoja(
+            nome:          _produtoSelecionado!.nome,
+            tipo:          _produtoSelecionado!.tipo,
+            numero:        _produtoSelecionado!.numero,
+            nivel:         _produtoSelecionado!.nivelDescricao,
+            produtoCodigo: _produtoSelecionado!.produtoCodigo,
+          )
+        : null;
     if (item.tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
-          gondolaInicial: item.numero,
-          produtoDestacado: _produtoSelecionado != null
-              ? ProdutoLoja(
-                  nome:   _produtoSelecionado!.nome,
-                  tipo:   _produtoSelecionado!.tipo,
-                  numero: _produtoSelecionado!.numero,
-                  nivel:  _produtoSelecionado!.nivelDescricao,
-                )
-              : null,
+          gondolaInicial:   item.numero,
+          produtoDestacado: produto,
         ),
       ));
     } else {
       Navigator.push(context, MaterialPageRoute(
-        builder: (_) => EstantePage(estanteInicial: item.numero),
+        builder: (_) => EstantePage(
+          estanteInicial:   item.numero,
+          produtoDestacado: produto,
+        ),
       ));
     }
   }
@@ -668,7 +673,8 @@ class _GondolaPageState extends State<GondolaPage> {
   @override
   void initState() {
     super.initState();
-    _gondolaAtual = widget.gondolaInicial;
+    _gondolaAtual    = widget.gondolaInicial;
+    _destacadoCodigo = widget.produtoDestacado?.produtoCodigo;
     _inicializar();
   }
 
@@ -991,10 +997,6 @@ class _GondolaPageState extends State<GondolaPage> {
       _carregandoLayout = false;
       _destacadoCodigo  = produto.codigo;
       _resultadoBusca   = '📍 ${produto.nome}\nGôndola ${encontrado.gondolaNum} · Andar $andarNome';
-    });
-
-    _highlightTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _destacadoCodigo = null);
     });
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1661,8 +1663,14 @@ class _ArrowBtn extends StatelessWidget {
 // ── EstantePage ───────────────────────────────────────────────────────────────
 
 class EstantePage extends StatefulWidget {
-  final int estanteInicial;
-  const EstantePage({super.key, this.estanteInicial = 1});
+  final int          estanteInicial;
+  final ProdutoLoja? produtoDestacado;
+
+  const EstantePage({
+    super.key,
+    this.estanteInicial  = 1,
+    this.produtoDestacado,
+  });
 
   @override
   State<EstantePage> createState() => _EstantePageState();
@@ -1718,7 +1726,8 @@ class _EstantePageState extends State<EstantePage> {
   @override
   void initState() {
     super.initState();
-    _estanteAtual = widget.estanteInicial;
+    _estanteAtual    = widget.estanteInicial;
+    _destacadoCodigo = widget.produtoDestacado?.produtoCodigo;
     _inicializar();
   }
 
@@ -2092,10 +2101,6 @@ class _EstantePageState extends State<EstantePage> {
           .toList();
       _carregandoLayout = false;
       _destacadoCodigo  = produto.codigo;
-    });
-
-    _highlightTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _destacadoCodigo = null);
     });
 
     const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
