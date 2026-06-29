@@ -127,6 +127,8 @@ class LojaGeometry {
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
+      } else if (item.numero == 8) {
+        _estanteEdr300(faces, item, cor);
       } else {
         _estante(faces, item, cor);
       }
@@ -194,6 +196,56 @@ class LojaGeometry {
     faces.add(Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], cor));
     faces.add(Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], cor));
     faces.add(Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], cor));
+  }
+
+  // Renderiza estante 8 como EDR-300: 4 montantes + 6 prateleiras horizontais
+  static void _estanteEdr300(List<Face> faces, ItemLoja item, Color cor) {
+    final cx = item.x, cz = item.z;
+    final hw = item.w / 2, hd = item.d / 2;
+    const h       = _estanteH;
+    const pW      = 0.040; // meia-largura do montante em X
+    const pD      = 0.028; // meia-profundidade do montante em Z
+    const sT      = 0.013; // espessura da prateleira
+    const nShelves = 6;
+
+    final corPost = Color.lerp(cor, const Color(0xFF000000), 0.45)!;
+
+    // 4 montantes nos cantos
+    for (final (px, pz) in [
+      (cx - hw + pW, cz - hd + pD),
+      (cx + hw - pW, cz - hd + pD),
+      (cx - hw + pW, cz + hd - pD),
+      (cx + hw - pW, cz + hd - pD),
+    ]) {
+      _boxLoja(faces,
+        x0: px - pW, x1: px + pW,
+        y0: 0,        y1: h,
+        z0: pz - pD,  z1: pz + pD,
+        color: corPost);
+    }
+
+    // 6 prateleiras horizontais
+    for (var i = 0; i < nShelves; i++) {
+      final y = i * (h - sT) / (nShelves - 1);
+      _boxLoja(faces,
+        x0: cx - hw + pW * 2, x1: cx + hw - pW * 2,
+        y0: y,                 y1: y + sT,
+        z0: cz - hd + pD,     z1: cz + hd - pD,
+        color: cor);
+    }
+  }
+
+  static void _boxLoja(List<Face> faces, {
+    required double x0, required double x1,
+    required double y0, required double y1,
+    required double z0, required double z1,
+    required Color color,
+  }) {
+    faces.add(Face([Vec3(x0,y1,z0), Vec3(x0,y1,z1), Vec3(x1,y1,z1), Vec3(x1,y1,z0)], color));
+    faces.add(Face([Vec3(x0,y0,z1), Vec3(x1,y0,z1), Vec3(x1,y1,z1), Vec3(x0,y1,z1)], color));
+    faces.add(Face([Vec3(x1,y0,z0), Vec3(x0,y0,z0), Vec3(x0,y1,z0), Vec3(x1,y1,z0)], color));
+    faces.add(Face([Vec3(x1,y0,z1), Vec3(x1,y0,z0), Vec3(x1,y1,z0), Vec3(x1,y1,z1)], color));
+    faces.add(Face([Vec3(x0,y0,z0), Vec3(x0,y0,z1), Vec3(x0,y1,z1), Vec3(x0,y1,z0)], color));
   }
 }
 
