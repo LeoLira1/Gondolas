@@ -58,7 +58,7 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'gondola', numero:  1, x: 6.0, z: 12.0),
   // 8 estantes encostadas nas paredes
   ItemLoja(tipo: 'estante', numero: 7, x: 1.00, z:  1.0, w: 0.7, d: 1.6),
-  ItemLoja(tipo: 'estante', numero: 8, x: 2.10, z:  1.0, w: 0.7, d: 1.6),
+  ItemLoja(tipo: 'estante', numero: 8, x: 2.10, z: 0.55, w: 1.4, d: 0.7),
   ItemLoja(tipo: 'estante', numero: 6, x: 3.20, z:  1.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 2, x: 9.45, z:  2.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 1, x: 9.45, z:  4.0, w: 0.7, d: 1.6),
