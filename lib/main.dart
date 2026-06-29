@@ -211,10 +211,6 @@ class _LojaPageState extends State<LojaPage> {
               : null,
         ),
       ));
-    } else if (item.numero == 8) {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => const EstanteEdr300Page(),
-      ));
     } else {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => EstantePage(estanteInicial: item.numero),
@@ -1792,13 +1788,31 @@ class _EstantePageState extends State<EstantePage> {
   void _onTapCelula(int coluna, int nivel, double hx) {
     if (_produtoSelecionadoId == null) return;
 
-    final celula = EstanteGeometry.celulas
-        .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
-    final maxSlots = EstanteGeometry.slotsPorCelula(celula);
+    final int maxSlots;
+    final double xMin;
+    final double wCaixa;
+    final double gap;
 
-    final offsetNaCelula = hx - celula.xMin;
+    if (_estanteAtual == 8) {
+      const geo = Edr300Geometry(showFloor: false);
+      final celula = geo.cells
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      maxSlots = Edr300Geometry.slotsPorCelula(celula);
+      xMin     = celula.xMin;
+      wCaixa   = Edr300Geometry.wCaixa;
+      gap      = Edr300Geometry.gap;
+    } else {
+      final celula = EstanteGeometry.celulas
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      maxSlots = EstanteGeometry.slotsPorCelula(celula);
+      xMin     = celula.xMin;
+      wCaixa   = EstanteGeometry.wCaixa;
+      gap      = EstanteGeometry.gap;
+    }
+
+    final offsetNaCelula = hx - xMin;
     var slotDesejado =
-        (offsetNaCelula / (EstanteGeometry.wCaixa + EstanteGeometry.gap))
+        (offsetNaCelula / (wCaixa + gap))
             .floor()
             .clamp(0, maxSlots - 1);
 
@@ -2184,6 +2198,14 @@ class _EstantePageState extends State<EstantePage> {
               padding: EdgeInsets.only(right: 4),
               child: Icon(Icons.circle, color: Color(0xFF4a9d6a), size: 8),
             ),
+          if (_estanteAtual == 8)
+            IconButton(
+              icon: const Icon(Icons.view_in_ar_outlined,
+                  color: Color(0xFFe0772b), size: 22),
+              tooltip: 'Ver modelo 3D',
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const EstanteEdr300Page())),
+            ),
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
             tooltip: 'Ver no mapa',
@@ -2241,14 +2263,24 @@ class _EstantePageState extends State<EstantePage> {
         ),
 
         Expanded(
-          child: EstanteScene(
-            estanteAtual:         _estanteAtual,
-            caixas:               _caixasAtuais,
-            produtoSelecionadoId: _produtoSelecionadoId,
-            corPorProduto:        _corPorProduto,
-            onTapCelula:          _onTapCelula,
-            destacadoCodigo:      _destacadoCodigo,
-          ),
+          child: _estanteAtual == 8
+              ? Edr300Scene(
+                  geometry:            const Edr300Geometry(showFloor: false),
+                  autoRotate:          false,
+                  caixas:              _caixasAtuais,
+                  produtoSelecionadoId: _produtoSelecionadoId,
+                  corPorProduto:       _corPorProduto,
+                  onTapCelula:         _onTapCelula,
+                  destacadoCodigo:     _destacadoCodigo,
+                )
+              : EstanteScene(
+                  estanteAtual:         _estanteAtual,
+                  caixas:               _caixasAtuais,
+                  produtoSelecionadoId: _produtoSelecionadoId,
+                  corPorProduto:        _corPorProduto,
+                  onTapCelula:          _onTapCelula,
+                  destacadoCodigo:      _destacadoCodigo,
+                ),
         ),
 
         Container(
@@ -2555,21 +2587,6 @@ class _EstanteEdr300PageState extends State<EstanteEdr300Page> {
                           onTap: () => Navigator.pop(context),
                           child: const Icon(Icons.arrow_back_ios,
                               color: _txtDim, size: 20),
-                        ),
-                        const Spacer(),
-                        TextButton.icon(
-                          onPressed: () => Navigator.push(context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  const EstantePage(estanteInicial: 8),
-                            )),
-                          icon: const Icon(Icons.inventory_2_outlined,
-                              size: 16, color: _accentS),
-                          label: const Text('Produtos',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  color: _accentS,
-                                  fontWeight: FontWeight.w600)),
                         ),
                       ],
                     ),
