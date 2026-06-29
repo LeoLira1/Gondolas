@@ -2549,12 +2549,31 @@ class _EstanteEdr300PageState extends State<EstanteEdr300Page> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      child: const Icon(Icons.arrow_back_ios,
-                          color: _txtDim, size: 20),
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: const Icon(Icons.arrow_back_ios,
+                              color: _txtDim, size: 20),
+                        ),
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: () => Navigator.push(context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const EstantePage(estanteInicial: 8),
+                            )),
+                          icon: const Icon(Icons.inventory_2_outlined,
+                              size: 16, color: _accentS),
+                          label: const Text('Produtos',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: _accentS,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 6),
                     const Text('Estante de Aço',
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                           letterSpacing: 2, color: _txtDim)),
