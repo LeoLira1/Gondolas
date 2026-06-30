@@ -283,15 +283,10 @@ class LojaPainter extends CustomPainter {
   final Camera camera;
   final int?   selecionadoIdx;
   final double pulseT;
-  final bool   showLabels;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
-  LojaPainter(this.camera, {
-    this.selecionadoIdx,
-    this.pulseT     = 0,
-    this.showLabels = true,
-  });
+  LojaPainter(this.camera, {this.selecionadoIdx, this.pulseT = 0});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -300,7 +295,6 @@ class LojaPainter extends CustomPainter {
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
-    if (showLabels) _drawLabels(canvas, size);
   }
 
   // Sutherland-Hodgman near-plane clipping fixes the disappearing-face bug
@@ -383,70 +377,6 @@ class LojaPainter extends CustomPainter {
     }
   }
 
-  void _drawLabels(Canvas canvas, Size size) {
-    final eye    = camera.position;
-    final fwd    = (camera.target - eye).normalized;
-    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up     = right.cross(fwd).normalized;
-    const fovY   = 45.0 * math.pi / 180.0;
-    const near   = 0.1;
-    final tanH   = math.tan(fovY / 2);
-    final aspect = size.width / size.height;
-    final w = size.width, h = size.height;
-
-    (Offset, double)? project(Vec3 v) {
-      final d  = v - eye;
-      final cz = d.dot(fwd);
-      if (cz <= near) return null;
-      final cx = d.dot(right) / (cz * tanH * aspect);
-      final cy = d.dot(up)    / (cz * tanH);
-      return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
-    }
-
-    const camda    = Color(0xFFe87722);
-    const bgColor  = Color(0xC70b0c0e);
-    const sT       = LojaGeometry._shelfT;
-    const nNiveis  = LojaGeometry._estanteNiveis;
-
-    final bgPaint  = Paint()..color = bgColor;
-    final rimPaint = Paint()
-      ..color       = camda
-      ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-
-    for (final item in itensLoja) {
-      if (item.tipo != 'estante' || item.numero == 8) continue;
-
-      for (var i = 0; i < nNiveis; i++) {
-        final y      = LojaGeometry._nivelY(i) + sT + 0.02;
-        final anchor = Vec3(item.x, y, item.z);
-        final hit    = project(anchor);
-        if (hit == null) continue;
-
-        final (screen, cz) = hit;
-        final fontSize = 26.0 * (2.5 / cz).clamp(0.5, 1.4);
-        final radius   = fontSize * 0.72;
-
-        canvas.drawCircle(screen, radius, bgPaint);
-        canvas.drawCircle(screen, radius, rimPaint);
-
-        final letter = String.fromCharCode(65 + (nNiveis - 1 - i));
-        final tp = TextPainter(
-          text: TextSpan(
-            text: letter,
-            style: TextStyle(
-              color:      camda,
-              fontSize:   fontSize,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
-      }
-    }
-  }
-
   @override
   bool shouldRepaint(LojaPainter old) =>
       old.camera.rotY     != camera.rotY     ||
@@ -455,7 +385,6 @@ class LojaPainter extends CustomPainter {
       old.camera.target.x != camera.target.x ||
       old.camera.target.z != camera.target.z ||
       old.selecionadoIdx  != selecionadoIdx  ||
-      old.showLabels      != showLabels      ||
       (old.pulseT - pulseT).abs() > 0.001;
 }
 
@@ -466,7 +395,6 @@ class LojaScene extends StatefulWidget {
   final void Function(int? idx)    onSelecionado;
   final void Function(int idx)?    onVerDetalhes;
   final Vec3?                      focarEm;
-  final bool                       showLabels;
 
   const LojaScene({
     super.key,
@@ -474,7 +402,6 @@ class LojaScene extends StatefulWidget {
     required this.onSelecionado,
     this.onVerDetalhes,
     this.focarEm,
-    this.showLabels = true,
   });
 
   @override
@@ -654,7 +581,6 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
           _camera,
           selecionadoIdx: widget.selecionadoIdx,
           pulseT:         _pulseT,
-          showLabels:     widget.showLabels,
         ),
         child: const SizedBox.expand(),
       ),

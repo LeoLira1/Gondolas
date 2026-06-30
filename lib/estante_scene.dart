@@ -146,12 +146,16 @@ class EstanteGeometry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class EstantePainter extends CustomPainter {
-  final Camera    camera;
+  final Camera     camera;
   final List<Face> extraFaces;
+  final bool       showLabels;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
-  EstantePainter(this.camera, {this.extraFaces = const <Face>[]});
+  EstantePainter(this.camera, {
+    this.extraFaces = const <Face>[],
+    this.showLabels = true,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -161,6 +165,7 @@ class EstantePainter extends CustomPainter {
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
+    if (showLabels) _drawLabels(canvas, size);
   }
 
   void _project(List<Face> faces, Size size) {
@@ -221,11 +226,71 @@ class EstantePainter extends CustomPainter {
     }
   }
 
+  void _drawLabels(Canvas canvas, Size size) {
+    final eye   = camera.position;
+    final fwd   = (camera.target - eye).normalized;
+    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up    = right.cross(fwd).normalized;
+
+    const fovY = 45.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+    final w = size.width, h = size.height;
+
+    (Offset, double)? project(Vec3 v) {
+      final d  = v - eye;
+      final cz = d.dot(fwd);
+      if (cz <= 0.01) return null;
+      final cx = d.dot(right) / (cz * tanH * aspect);
+      final cy = d.dot(up)    / (cz * tanH);
+      return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
+    }
+
+    const camda   = Color(0xFFe87722);
+    const bgColor = Color(0xC70b0c0e);
+    const nNiveis = EstanteGeometry.numNiveis;
+
+    final bgPaint  = Paint()..color = bgColor;
+    final rimPaint = Paint()
+      ..color       = camda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    final celulas = EstanteGeometry.celulas;
+    for (var niv = 0; niv < nNiveis; niv++) {
+      final yTop = celulas.firstWhere((c) => c.nivel == niv).yTop;
+      final hit  = project(Vec3(0, yTop + 0.06, 0));
+      if (hit == null) continue;
+
+      final (screen, cz) = hit;
+      final fontSize = 32.0 * (6.0 / cz).clamp(0.5, 1.8);
+      final radius   = fontSize * 0.72;
+
+      canvas.drawCircle(screen, radius, bgPaint);
+      canvas.drawCircle(screen, radius, rimPaint);
+
+      final letter = String.fromCharCode(65 + (nNiveis - 1 - niv));
+      final tp = TextPainter(
+        text: TextSpan(
+          text: letter,
+          style: TextStyle(
+            color:      camda,
+            fontSize:   fontSize,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+    }
+  }
+
   @override
   bool shouldRepaint(EstantePainter old) =>
       old.camera.rotY  != camera.rotY  ||
       old.camera.rotX  != camera.rotX  ||
       old.camera.dist  != camera.dist  ||
+      old.showLabels   != showLabels   ||
       old.extraFaces   != extraFaces;
 }
 
@@ -240,6 +305,7 @@ class EstanteScene extends StatefulWidget {
   final Map<String, Color> corPorProduto;
   final void Function(int coluna, int nivel, double hx)? onTapCelula;
   final String? destacadoCodigo;
+  final bool showLabels;
 
   const EstanteScene({
     super.key,
@@ -249,6 +315,7 @@ class EstanteScene extends StatefulWidget {
     this.corPorProduto        = const {},
     this.onTapCelula,
     this.destacadoCodigo,
+    this.showLabels           = true,
   });
 
   @override
@@ -374,7 +441,8 @@ class _EstanteSceneState extends State<EstanteScene> {
       onScaleEnd:    _onScaleEnd,
       child: CustomPaint(
         key:     _painterKey,
-        painter: EstantePainter(_camera, extraFaces: extraFaces),
+        painter: EstantePainter(_camera,
+            extraFaces: extraFaces, showLabels: widget.showLabels),
         child:   const SizedBox.expand(),
       ),
     );
