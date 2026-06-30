@@ -94,10 +94,15 @@ const Color _corBg         = Color(0xFF0b0c0e);
 // ── LojaGeometry ──────────────────────────────────────────────────────────────
 
 class LojaGeometry {
-  static const double gondolaR   = 0.62;
-  static const double _estanteH  = 0.85;
-  static const double _paredeH   = 0.90;
-  static const double _paredeEsp = 0.18;
+  static const double gondolaR      = 0.62;
+  static const double _estanteH     = 0.85;
+  static const double _paredeH      = 0.90;
+  static const double _paredeEsp    = 0.18;
+  static const int    _estanteNiveis = 5;
+  static const double _shelfT       = 0.013;
+
+  static double _nivelY(int i) =>
+      i * (_estanteH - _shelfT) / (_estanteNiveis - 1);
 
   static List<Face> buildFaces(int? selecionadoIdx, double pulseT) {
     final faces = <Face>[];
@@ -187,15 +192,38 @@ class LojaGeometry {
   }
 
   static void _estante(List<Face> faces, ItemLoja item, Color cor) {
+    final cx = item.x, cz = item.z;
     final hw = item.w / 2, hd = item.d / 2;
-    final x0 = item.x - hw, x1 = item.x + hw;
-    final z0 = item.z - hd, z1 = item.z + hd;
-    const h = _estanteH;
-    faces.add(Face([Vec3(x0,0,z1), Vec3(x1,0,z1), Vec3(x1,h,z1), Vec3(x0,h,z1)], cor));
-    faces.add(Face([Vec3(x1,0,z0), Vec3(x0,0,z0), Vec3(x0,h,z0), Vec3(x1,h,z0)], cor));
-    faces.add(Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], cor));
-    faces.add(Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], cor));
-    faces.add(Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], cor));
+    const h  = _estanteH;
+    const pW = 0.040;
+    const pD = 0.028;
+    const sT = _shelfT;
+
+    final corPost = Color.lerp(cor, const Color(0xFF000000), 0.45)!;
+
+    // 4 corner posts
+    for (final (px, pz) in [
+      (cx - hw + pW, cz - hd + pD),
+      (cx + hw - pW, cz - hd + pD),
+      (cx - hw + pW, cz + hd - pD),
+      (cx + hw - pW, cz + hd - pD),
+    ]) {
+      _boxLoja(faces,
+        x0: px - pW, x1: px + pW,
+        y0: 0,        y1: h,
+        z0: pz - pD,  z1: pz + pD,
+        color: corPost);
+    }
+
+    // 5 horizontal shelves
+    for (var i = 0; i < _estanteNiveis; i++) {
+      final y = _nivelY(i);
+      _boxLoja(faces,
+        x0: cx - hw + pW * 2, x1: cx + hw - pW * 2,
+        y0: y,                 y1: y + sT,
+        z0: cz - hd + pD,     z1: cz + hd - pD,
+        color: cor);
+    }
   }
 
   // Renderiza estante 8 como EDR-300: 4 montantes + 6 prateleiras horizontais
@@ -255,10 +283,15 @@ class LojaPainter extends CustomPainter {
   final Camera camera;
   final int?   selecionadoIdx;
   final double pulseT;
+  final bool   showLabels;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
-  LojaPainter(this.camera, {this.selecionadoIdx, this.pulseT = 0});
+  LojaPainter(this.camera, {
+    this.selecionadoIdx,
+    this.pulseT     = 0,
+    this.showLabels = true,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -267,6 +300,7 @@ class LojaPainter extends CustomPainter {
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
+    if (showLabels) _drawLabels(canvas, size);
   }
 
   // Sutherland-Hodgman near-plane clipping fixes the disappearing-face bug
@@ -349,6 +383,70 @@ class LojaPainter extends CustomPainter {
     }
   }
 
+  void _drawLabels(Canvas canvas, Size size) {
+    final eye    = camera.position;
+    final fwd    = (camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 45.0 * math.pi / 180.0;
+    const near   = 0.1;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+    final w = size.width, h = size.height;
+
+    (Offset, double)? project(Vec3 v) {
+      final d  = v - eye;
+      final cz = d.dot(fwd);
+      if (cz <= near) return null;
+      final cx = d.dot(right) / (cz * tanH * aspect);
+      final cy = d.dot(up)    / (cz * tanH);
+      return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
+    }
+
+    const camda    = Color(0xFFe87722);
+    const bgColor  = Color(0xC70b0c0e);
+    const sT       = LojaGeometry._shelfT;
+    const nNiveis  = LojaGeometry._estanteNiveis;
+
+    final bgPaint  = Paint()..color = bgColor;
+    final rimPaint = Paint()
+      ..color       = camda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    for (final item in itensLoja) {
+      if (item.tipo != 'estante' || item.numero == 8) continue;
+
+      for (var i = 0; i < nNiveis; i++) {
+        final y      = LojaGeometry._nivelY(i) + sT + 0.02;
+        final anchor = Vec3(item.x, y, item.z);
+        final hit    = project(anchor);
+        if (hit == null) continue;
+
+        final (screen, cz) = hit;
+        final fontSize = 26.0 * (2.5 / cz).clamp(0.5, 1.4);
+        final radius   = fontSize * 0.72;
+
+        canvas.drawCircle(screen, radius, bgPaint);
+        canvas.drawCircle(screen, radius, rimPaint);
+
+        final letter = String.fromCharCode(65 + (nNiveis - 1 - i));
+        final tp = TextPainter(
+          text: TextSpan(
+            text: letter,
+            style: TextStyle(
+              color:      camda,
+              fontSize:   fontSize,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+      }
+    }
+  }
+
   @override
   bool shouldRepaint(LojaPainter old) =>
       old.camera.rotY     != camera.rotY     ||
@@ -357,6 +455,7 @@ class LojaPainter extends CustomPainter {
       old.camera.target.x != camera.target.x ||
       old.camera.target.z != camera.target.z ||
       old.selecionadoIdx  != selecionadoIdx  ||
+      old.showLabels      != showLabels      ||
       (old.pulseT - pulseT).abs() > 0.001;
 }
 
@@ -367,6 +466,7 @@ class LojaScene extends StatefulWidget {
   final void Function(int? idx)    onSelecionado;
   final void Function(int idx)?    onVerDetalhes;
   final Vec3?                      focarEm;
+  final bool                       showLabels;
 
   const LojaScene({
     super.key,
@@ -374,6 +474,7 @@ class LojaScene extends StatefulWidget {
     required this.onSelecionado,
     this.onVerDetalhes,
     this.focarEm,
+    this.showLabels = true,
   });
 
   @override
@@ -553,6 +654,7 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
           _camera,
           selecionadoIdx: widget.selecionadoIdx,
           pulseT:         _pulseT,
+          showLabels:     widget.showLabels,
         ),
         child: const SizedBox.expand(),
       ),
