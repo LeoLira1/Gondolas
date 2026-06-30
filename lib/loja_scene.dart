@@ -295,6 +295,7 @@ class LojaPainter extends CustomPainter {
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
+    _drawLabels(canvas, size);
   }
 
   // Sutherland-Hodgman near-plane clipping fixes the disappearing-face bug
@@ -374,6 +375,66 @@ class LojaPainter extends CustomPainter {
       fill.color = Color.lerp(Colors.black, f.color, f.light)!;
       canvas.drawPath(path, fill);
       canvas.drawPath(path, stroke);
+    }
+  }
+
+  void _drawLabels(Canvas canvas, Size size) {
+    final eye    = camera.position;
+    final fwd    = (camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 45.0 * math.pi / 180.0;
+    const near   = 0.1;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+    final w = size.width, h = size.height;
+
+    (Offset, double)? project(Vec3 v) {
+      final d  = v - eye;
+      final cz = d.dot(fwd);
+      if (cz <= near) return null;
+      final cx = d.dot(right) / (cz * tanH * aspect);
+      final cy = d.dot(up)    / (cz * tanH);
+      return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
+    }
+
+    const camda   = Color(0xFFe87722);
+    const bgColor = Color(0xC70b0c0e);
+
+    final bgPaint  = Paint()..color = bgColor;
+    final rimPaint = Paint()
+      ..color       = camda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    for (final item in itensLoja) {
+      if (item.tipo != 'estante' || item.numero == 8) continue;
+      for (var i = 0; i < LojaGeometry._estanteNiveis; i++) {
+        final y   = LojaGeometry._nivelY(i) + LojaGeometry._shelfT + 0.02;
+        final hit = project(Vec3(item.x, y, item.z));
+        if (hit == null) continue;
+
+        final (screen, cz) = hit;
+        final fontSize = 26.0 * (2.5 / cz).clamp(0.5, 1.4);
+        final radius   = fontSize * 0.72;
+
+        canvas.drawCircle(screen, radius, bgPaint);
+        canvas.drawCircle(screen, radius, rimPaint);
+
+        final letter = String.fromCharCode(65 + (LojaGeometry._estanteNiveis - 1 - i));
+        final tp = TextPainter(
+          text: TextSpan(
+            text: letter,
+            style: TextStyle(
+              color:      camda,
+              fontSize:   fontSize,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+      }
     }
   }
 
