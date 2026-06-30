@@ -196,12 +196,14 @@ class Edr300Painter extends CustomPainter {
   final Camera         camera;
   final Edr300Geometry geometry;
   final bool           wireframe;
+  final bool           showLabels;
   final List<Face>     extraFaces;
 
   static final Vec3 _lightDir = Vec3(4, 10, 5).normalized;
 
   const Edr300Painter(this.camera, this.geometry, {
     this.wireframe  = false,
+    this.showLabels = true,
     this.extraFaces = const [],
   });
 
@@ -214,6 +216,7 @@ class Edr300Painter extends CustomPainter {
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
+    if (showLabels) _drawLabels(canvas, size);
   }
 
   void _project(List<Face> faces, Size size) {
@@ -279,12 +282,68 @@ class Edr300Painter extends CustomPainter {
     }
   }
 
+  void _drawLabels(Canvas canvas, Size size) {
+    final eye    = camera.position;
+    final fwd    = (camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 42.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+    final w = size.width, h = size.height;
+
+    (Offset, double)? project(Vec3 v) {
+      final d  = v - eye;
+      final cz = d.dot(fwd);
+      if (cz <= 0.01) return null;
+      final cx = d.dot(right) / (cz * tanH * aspect);
+      final cy = d.dot(up)    / (cz * tanH);
+      return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
+    }
+
+    const camda   = Color(0xFFe87722);
+    const bgColor = Color(0xC70b0c0e);
+
+    final bgPaint  = Paint()..color = bgColor;
+    final rimPaint = Paint()
+      ..color       = camda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    for (var i = 0; i < geometry.shelves; i++) {
+      final hit = project(Vec3(0, geometry.shelfY(i) + 0.05, 0));
+      if (hit == null) continue;
+
+      final (screen, cz) = hit;
+      final fontSize = 22.0 * (3.0 / cz).clamp(0.5, 1.8);
+      final radius   = fontSize * 0.72;
+
+      canvas.drawCircle(screen, radius, bgPaint);
+      canvas.drawCircle(screen, radius, rimPaint);
+
+      final letter = String.fromCharCode(65 + (geometry.shelves - 1 - i));
+      final tp = TextPainter(
+        text: TextSpan(
+          text: letter,
+          style: TextStyle(
+            color:      camda,
+            fontSize:   fontSize,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+    }
+  }
+
   @override
   bool shouldRepaint(Edr300Painter old) =>
       old.camera.rotY        != camera.rotY        ||
       old.camera.rotX        != camera.rotX        ||
       old.camera.dist        != camera.dist        ||
       old.wireframe          != wireframe          ||
+      old.showLabels         != showLabels         ||
       old.extraFaces         != extraFaces         ||
       old.geometry.shelves   != geometry.shelves   ||
       old.geometry.height    != geometry.height    ||
@@ -302,6 +361,7 @@ class Edr300Scene extends StatefulWidget {
   final Edr300Geometry geometry;
   final bool           wireframe;
   final bool           autoRotate;
+  final bool           showLabels;
   final List<CaixaColocadaEstante>                      caixas;
   final String?                                         produtoSelecionadoId;
   final Map<String, Color>                              corPorProduto;
@@ -313,6 +373,7 @@ class Edr300Scene extends StatefulWidget {
     required this.geometry,
     this.wireframe           = false,
     this.autoRotate          = true,
+    this.showLabels          = true,
     this.caixas              = const [],
     this.produtoSelecionadoId,
     this.corPorProduto       = const {},
@@ -472,7 +533,9 @@ class _Edr300SceneState extends State<Edr300Scene>
       child: CustomPaint(
         key:     _painterKey,
         painter: Edr300Painter(_camera, widget.geometry,
-            wireframe: widget.wireframe, extraFaces: extraFaces),
+            wireframe:  widget.wireframe,
+            showLabels: widget.showLabels,
+            extraFaces: extraFaces),
         child:   const SizedBox.expand(),
       ),
     );
