@@ -246,9 +246,10 @@ class EstantePainter extends CustomPainter {
       return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
     }
 
-    const camda   = Color(0xFFe87722);
-    const bgColor = Color(0xC70b0c0e);
-    const nNiveis = EstanteGeometry.numNiveis;
+    const camda      = Color(0xFFe87722);
+    const bgColor    = Color(0xC70b0c0e);
+    const nNiveis    = EstanteGeometry.numNiveis;
+    const nColunas   = EstanteGeometry.numColunas;
 
     final bgPaint  = Paint()..color = bgColor;
     final rimPaint = Paint()
@@ -256,20 +257,20 @@ class EstantePainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    final celulas = EstanteGeometry.celulas;
-    for (var niv = 0; niv < nNiveis; niv++) {
-      final yTop = celulas.firstWhere((c) => c.nivel == niv).yTop;
-      final hit  = project(Vec3(0, yTop + 0.06, 0));
+    for (final celula in EstanteGeometry.celulas) {
+      final xCenter = (celula.xMin + celula.xMax) / 2;
+      final hit = project(Vec3(xCenter, celula.yTop + 0.06, 0));
       if (hit == null) continue;
 
       final (screen, cz) = hit;
-      final fontSize = 32.0 * (6.0 / cz).clamp(0.5, 1.8);
+      final fontSize = 28.0 * (6.0 / cz).clamp(0.5, 1.8);
       final radius   = fontSize * 0.72;
 
       canvas.drawCircle(screen, radius, bgPaint);
       canvas.drawCircle(screen, radius, rimPaint);
 
-      final letter = String.fromCharCode(65 + (nNiveis - 1 - niv));
+      final row    = nNiveis - 1 - celula.nivel;
+      final letter = String.fromCharCode(65 + row * nColunas + celula.coluna);
       final tp = TextPainter(
         text: TextSpan(
           text: letter,
