@@ -480,6 +480,7 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
   Offset? _gestureOrigin;
   Camera? _cam0;
   bool    _isDragging = false;
+  int     _gesturePointers = 1;
   static const double _kDrag = 7.0;
 
   late final Ticker _ticker;
@@ -554,25 +555,66 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
   // ── Gestures ──────────────────────────────────────────────────────────────
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin = d.focalPoint;
-    _cam0          = _camera;
-    _isDragging    = false;
+    _gestureOrigin   = d.focalPoint;
+    _cam0            = _camera;
+    _isDragging      = false;
+    _gesturePointers = d.pointerCount;
+    _animTo          = null; // usuário assume o controle da câmera
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
     if (_gestureOrigin == null || _cam0 == null) return;
+
+    // Reancora o gesto quando muda o número de dedos (evita salto do focal point)
+    if (d.pointerCount != _gesturePointers) {
+      _gestureOrigin   = d.focalPoint;
+      _cam0            = _camera;
+      _gesturePointers = d.pointerCount;
+    }
+
     final delta = d.focalPoint - _gestureOrigin!;
-    if (delta.distance > _kDrag || (d.scale - 1.0).abs() > 0.02) {
+    if (delta.distance > _kDrag ||
+        (d.scale - 1.0).abs() > 0.02 ||
+        d.pointerCount > 1) {
       _isDragging = true;
     }
-    setState(() {
-      _camera = Camera(
-        rotY:   _cam0!.rotY - delta.dx * 0.006,
-        rotX:   (_cam0!.rotX + delta.dy * 0.006).clamp(0.25, 1.45),
-        dist:   (_cam0!.dist / d.scale).clamp(6.0, 28.0),
-        target: _camera.target,
-      );
-    });
+
+    if (d.pointerCount >= 2) {
+      // Dois dedos: orbita (arrastar) + zoom (pinça)
+      setState(() {
+        _camera = Camera(
+          rotY:   _cam0!.rotY - delta.dx * 0.006,
+          rotX:   (_cam0!.rotX + delta.dy * 0.006).clamp(0.25, 1.45),
+          dist:   (_cam0!.dist / d.scale).clamp(2.5, 28.0),
+          target: _camera.target,
+        );
+      });
+    } else {
+      // Um dedo: pan — o ponto do chão acompanha o dedo
+      final rb  = _key.currentContext?.findRenderObject() as RenderBox?;
+      final hPx = rb?.size.height ?? 600.0;
+      final worldPerPx = 2 * _cam0!.dist * math.tan(22.5 * math.pi / 180) / hPx;
+      final tilt = math.max(math.sin(_cam0!.rotX), 0.35);
+
+      final rotY = _cam0!.rotY;
+      final dxW  = delta.dx * worldPerPx;
+      final dyW  = delta.dy * worldPerPx / tilt;
+
+      setState(() {
+        _camera = Camera(
+          rotY: _cam0!.rotY,
+          rotX: _cam0!.rotX,
+          dist: _cam0!.dist,
+          target: Vec3(
+            (_cam0!.target.x - math.cos(rotY) * dxW - math.sin(rotY) * dyW)
+                .clamp(0.0, lojaW),
+            _cam0!.target.y,
+            (_cam0!.target.z + math.sin(rotY) * dxW - math.cos(rotY) * dyW)
+                .clamp(0.0, lojaH),
+          ),
+        );
+      });
+    }
   }
 
   void _onScaleEnd(ScaleEndDetails _) {
@@ -608,25 +650,58 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
     final ndcY = 1 - 2 * tap.dy / size.height;
     final dir  = (right * (ndcX * tanH * aspect) + up * (ndcY * tanH) + fwd).normalized;
 
-    if (dir.y.abs() < 1e-6) return null;
-    const testY = 0.43;
-    final t = (testY - eye.y) / dir.y;
-    if (t <= 0) return null;
+    // Testa o raio contra a caixa 3D de cada item e devolve o mais próximo,
+    // com uma folga para facilitar o toque em estantes finas.
+    const margem        = 0.08;
+    const gondolaAltura = 0.66;
 
-    final hitX = eye.x + t * dir.x;
-    final hitZ = eye.z + t * dir.z;
+    double bestT = double.infinity;
+    int?   best;
 
     for (var i = 0; i < itensLoja.length; i++) {
       final item = itensLoja[i];
+      final double hw, hd, h;
       if (item.tipo == 'gondola') {
-        final dx = hitX - item.x, dz = hitZ - item.z;
-        if (dx * dx + dz * dz < LojaGeometry.gondolaR * LojaGeometry.gondolaR) return i;
+        hw = LojaGeometry.gondolaR + margem;
+        hd = LojaGeometry.gondolaR + margem;
+        h  = gondolaAltura;
       } else {
-        if ((hitX - item.x).abs() < item.w / 2 &&
-            (hitZ - item.z).abs() < item.d / 2) return i;
+        hw = item.w / 2 + margem;
+        hd = item.d / 2 + margem;
+        h  = LojaGeometry._estanteH;
+      }
+      final t = _rayBox(eye, dir,
+          item.x - hw, item.x + hw, 0, h, item.z - hd, item.z + hd);
+      if (t != null && t < bestT) {
+        bestT = t;
+        best  = i;
       }
     }
-    return null;
+    return best;
+  }
+
+  // Interseção raio–AABB (método dos slabs); retorna a distância t ou null.
+  double? _rayBox(Vec3 o, Vec3 d,
+      double x0, double x1, double y0, double y1, double z0, double z1) {
+    var tMin = 0.0, tMax = double.infinity;
+    final oc = [o.x, o.y, o.z];
+    final dc = [d.x, d.y, d.z];
+    final lo = [x0, y0, z0];
+    final hi = [x1, y1, z1];
+
+    for (var i = 0; i < 3; i++) {
+      if (dc[i].abs() < 1e-9) {
+        if (oc[i] < lo[i] || oc[i] > hi[i]) return null;
+      } else {
+        var t1 = (lo[i] - oc[i]) / dc[i];
+        var t2 = (hi[i] - oc[i]) / dc[i];
+        if (t1 > t2) (t1, t2) = (t2, t1);
+        if (t1 > tMin) tMin = t1;
+        if (t2 < tMax) tMax = t2;
+        if (tMin > tMax) return null;
+      }
+    }
+    return tMin;
   }
 
   @override
