@@ -14,12 +14,20 @@ const int          niveisProdutoPadrao       = 4;
 const int          niveisProdutoEstendido    = 5;
 const Set<int>     estantesComLabelEstendido = {3, 4};
 
+// A Estante 8 é a EDR-300 de aço (coluna única, 6 prateleiras), diferente
+// das estantes de madeira. A contagem de níveis precisa acompanhar a
+// Edr300Geometry para as buscas apontarem o nível certo.
+const int estanteEdr300Num    = 8;
+const int niveisProdutoEdr300 = 6;
+
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 
-int niveisProdutoPara(int estanteNum) => temNivelTopoPara(estanteNum)
-    ? niveisProdutoEstendido
-    : niveisProdutoPadrao;
+int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
+    ? niveisProdutoEdr300
+    : temNivelTopoPara(estanteNum)
+        ? niveisProdutoEstendido
+        : niveisProdutoPadrao;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
 /// de converter para letra. Só a Estante 4 precisa de offset, para continuar

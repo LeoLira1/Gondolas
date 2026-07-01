@@ -699,13 +699,16 @@ class _GondolaPageState extends State<GondolaPage> {
     setState(() => _dbConectado = conectado);
 
     if (conectado) {
+      // Catálogo e layout em paralelo: corta uma ida ao servidor do caminho
+      // crítico de abertura da página.
+      final layoutFuture = _carregarLayout(_gondolaAtual);
       final produtos = await TursoService().fetchProdutos();
       if (!mounted) return;
       setState(() {
         _produtos           = produtos;
         _carregandoProdutos = false;
       });
-      _carregarLayout(_gondolaAtual);
+      await layoutFuture;
     } else {
       setState(() {
         _produtos           = [];
@@ -1754,13 +1757,14 @@ class _EstantePageState extends State<EstantePage> {
     setState(() => _dbConectado = conectado);
 
     if (conectado) {
+      final layoutFuture = _carregarLayout(_estanteAtual);
       final produtos = await TursoService().fetchProdutos();
       if (!mounted) return;
       setState(() {
         _produtos           = produtos;
         _carregandoProdutos = false;
       });
-      _carregarLayout(_estanteAtual);
+      await layoutFuture;
     } else {
       setState(() {
         _produtos           = [];
