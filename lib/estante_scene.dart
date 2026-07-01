@@ -25,7 +25,9 @@ class CelulaEstante {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EstanteGeometry — 3 colunas × 4 níveis (12 células)
+// EstanteGeometry — 3 colunas × 4 níveis (12 células) no padrão; Estantes 3 e
+// 4 têm 3 colunas × 5 níveis de produto (15 células) mais um nível de topo
+// reservado aos pulverizadores, fora do sistema de labels.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class EstanteGeometry {
@@ -36,8 +38,7 @@ class EstanteGeometry {
   static const double alturaTotal  = 4.2;
   static const double profundidade = 1.0;
   static const double espessura    = 0.08;
-  static const int    numColunas   = 3;
-  static const int    numNiveis    = 4;
+  static const int    numColunas   = numColunasEstante;
 
   static const double wCaixa = 0.42, hCaixa = 0.50, dCaixa = 0.42, gap = 0.04;
 
@@ -46,19 +47,27 @@ class EstanteGeometry {
     return espacoUtil / numColunas;
   }
 
-  static double get alturaNivel => alturaTotal / numNiveis;
+  // Nº de níveis de produto (label) + o nível de topo reservado aos
+  // pulverizadores nas Estantes 3 e 4 (fora do sistema de labels).
+  static int numNiveisTotal(int estanteNum) =>
+      niveisProdutoPara(estanteNum) + (temNivelTopoPara(estanteNum) ? 1 : 0);
 
-  static List<CelulaEstante> get celulas {
-    final lista = <CelulaEstante>[];
+  static double alturaNivel(int estanteNum) =>
+      alturaTotal / numNiveisTotal(estanteNum);
+
+  static List<CelulaEstante> celulasPara(int estanteNum) {
+    final lista       = <CelulaEstante>[];
+    final nivProduto   = niveisProdutoPara(estanteNum);
+    final alturaNiv    = alturaNivel(estanteNum);
     for (var col = 0; col < numColunas; col++) {
       final xMin =
           -larguraTotal / 2 + espessura * (col + 1) + larguraColuna * col;
       final xMax = xMin + larguraColuna;
-      for (var niv = 0; niv < numNiveis; niv++) {
+      for (var niv = 0; niv < nivProduto; niv++) {
         lista.add(CelulaEstante(
           coluna: col,
           nivel:  niv,
-          yTop:   espessura + alturaNivel * niv + espessura,
+          yTop:   espessura + alturaNiv * niv + espessura,
           xMin:   xMin,
           xMax:   xMax,
         ));
@@ -70,19 +79,17 @@ class EstanteGeometry {
   static int slotsPorCelula(CelulaEstante c) =>
       (c.largura / (wCaixa + gap)).floor();
 
-  // Estante 4 fica na mesma parede que a estante 3, então suas letras
-  // continuam a sequência (estante 3 termina em L, estante 4 começa em M).
-  static int letraOffsetPara(int estanteAtual) =>
-      estanteAtual == 4 ? numColunas * numNiveis : 0;
+  static List<Face> buildFaces(int estanteNum) {
+    final faces      = <Face>[];
+    final halfL      = larguraTotal / 2;
+    final halfD      = profundidade / 2;
+    final nivTotal   = numNiveisTotal(estanteNum);
+    final alturaNiv  = alturaNivel(estanteNum);
 
-  static List<Face> buildFaces() {
-    final faces = <Face>[];
-    final halfL = larguraTotal / 2;
-    final halfD = profundidade / 2;
-
-    // prateleiras horizontais (base + uma por nível)
-    for (var niv = 0; niv <= numNiveis; niv++) {
-      final y = espessura + alturaNivel * niv;
+    // prateleiras horizontais (base + uma por nível, incluindo o nível de
+    // topo dos pulverizadores quando houver)
+    for (var niv = 0; niv <= nivTotal; niv++) {
+      final y = espessura + alturaNiv * niv;
       _box(faces,
           x0: -halfL, x1: halfL,
           y0: y,      y1: y + espessura,
@@ -154,21 +161,21 @@ class EstantePainter extends CustomPainter {
   final Camera     camera;
   final List<Face> extraFaces;
   final bool       showLabels;
-  final int        letraOffset;
+  final int        estanteAtual;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
   EstantePainter(this.camera, {
     this.extraFaces  = const <Face>[],
     this.showLabels  = true,
-    this.letraOffset = 0,
+    this.estanteAtual = 1,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF14110d));
 
-    final faces = EstanteGeometry.buildFaces()..addAll(extraFaces);
+    final faces = EstanteGeometry.buildFaces(estanteAtual)..addAll(extraFaces);
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
@@ -255,8 +262,9 @@ class EstantePainter extends CustomPainter {
 
     const camda      = Color(0xFFe87722);
     const bgColor    = Color(0xC70b0c0e);
-    const nNiveis    = EstanteGeometry.numNiveis;
+    final nNiveis    = niveisProdutoPara(estanteAtual);
     const nColunas   = EstanteGeometry.numColunas;
+    final letraOffset = letraOffsetPara(estanteAtual);
 
     final bgPaint  = Paint()..color = bgColor;
     final rimPaint = Paint()
@@ -264,21 +272,16 @@ class EstantePainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    for (final celula in EstanteGeometry.celulas) {
+    for (final celula in EstanteGeometry.celulasPara(estanteAtual)) {
       final xCenter = (celula.xMin + celula.xMax) / 2;
       final hit = project(Vec3(xCenter, celula.yTop + 0.06, 0));
       if (hit == null) continue;
 
       final (screen, cz) = hit;
       final fontSize = 28.0 * (6.0 / cz).clamp(0.5, 1.8);
-      final radius   = fontSize * 0.72;
-
-      canvas.drawCircle(screen, radius, bgPaint);
-      canvas.drawCircle(screen, radius, rimPaint);
 
       final row    = nNiveis - 1 - celula.nivel;
-      final letter =
-          String.fromCharCode(65 + letraOffset + row * nColunas + celula.coluna);
+      final letter = letraDoIndice(letraOffset + row * nColunas + celula.coluna);
       final tp = TextPainter(
         text: TextSpan(
           text: letter,
@@ -290,6 +293,13 @@ class EstantePainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
+
+      // O raio do selo acompanha a largura do texto para não cortar labels
+      // de duas letras (AA, AB, AC, AD...).
+      final radius = math.max(fontSize * 0.72, tp.width / 2 + fontSize * 0.28);
+
+      canvas.drawCircle(screen, radius, bgPaint);
+      canvas.drawCircle(screen, radius, rimPaint);
       tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
     }
   }
@@ -300,7 +310,7 @@ class EstantePainter extends CustomPainter {
       old.camera.rotX   != camera.rotX   ||
       old.camera.dist   != camera.dist   ||
       old.showLabels    != showLabels    ||
-      old.letraOffset   != letraOffset   ||
+      old.estanteAtual  != estanteAtual  ||
       old.extraFaces    != extraFaces;
 }
 
@@ -409,7 +419,7 @@ class _EstanteSceneState extends State<EstanteScene> {
 
     ({int coluna, int nivel, double hx, double t})? nearest;
 
-    for (final celula in EstanteGeometry.celulas) {
+    for (final celula in EstanteGeometry.celulasPara(widget.estanteAtual)) {
       if (dir.y.abs() < 1e-6) continue;
       final t = (celula.yTop - eye.y) / dir.y;
       if (t <= 0.1) continue;
@@ -438,7 +448,7 @@ class _EstanteSceneState extends State<EstanteScene> {
       final cor = isHighlighted
           ? const Color(0xFFe87722)
           : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      final celula = EstanteGeometry.celulas.firstWhere(
+      final celula = EstanteGeometry.celulasPara(widget.estanteAtual).firstWhere(
         (c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel,
       );
       EstanteGeometry.addBoxProduto(extraFaces,
@@ -452,9 +462,9 @@ class _EstanteSceneState extends State<EstanteScene> {
       child: CustomPaint(
         key:     _painterKey,
         painter: EstantePainter(_camera,
-            extraFaces:  extraFaces,
-            showLabels:  widget.showLabels,
-            letraOffset: EstanteGeometry.letraOffsetPara(widget.estanteAtual)),
+            extraFaces:   extraFaces,
+            showLabels:   widget.showLabels,
+            estanteAtual: widget.estanteAtual),
         child:   const SizedBox.expand(),
       ),
     );
