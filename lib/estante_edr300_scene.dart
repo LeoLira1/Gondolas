@@ -46,12 +46,14 @@ class Edr300Geometry {
     this.showFloor = true,
   });
 
-  // Dimensões das caixas de produto (em metros)
-  static const double wCaixa    = 0.065;
-  static const double hCaixa    = 0.080;
-  static const double dCaixa    = 0.055;
-  static const double gap       = 0.010;
-  static const int    numColunas = 3;
+  // Dimensões das caixas de produto (em metros). Cada nível é uma única
+  // fileira que comporta 5 caixas lado a lado ocupando a largura toda da
+  // estante (a letra do label já é por nível, não por coluna).
+  static const double wCaixa    = 0.15;
+  static const double hCaixa    = 0.20;
+  static const double dCaixa    = 0.13;
+  static const double gap       = 0.016;
+  static const int    numColunas = 1;
 
   static const _steel     = Color(0xFFb8bcc2);
   static const _steelDark = Color(0xFF9a9ea6);
