@@ -65,11 +65,55 @@ class TursoService {
           registrado_em TEXT NOT NULL
         )
       ''');
+      await client.execute('''
+        CREATE TABLE IF NOT EXISTS app_migrations (
+          nome TEXT PRIMARY KEY,
+          aplicada_em TEXT NOT NULL
+        )
+      ''');
+      await _migrarEsquemaLabelsEstante3(client);
       _client    = client;
       _connected = true;
     } catch (_) {
       _connected = false;
       _client    = null;
+    }
+  }
+
+  // Estante 3 ganhou um novo nível (o antigo topo virou o penúltimo nível, e
+  // um novo nível de base foi adicionado), para comportar o novo esquema de
+  // labels A-O (15 posições) em vez do antigo A-L (12 posições). Os produtos
+  // já cadastrados precisam ter o `nivel` deslocado em +1 para continuarem
+  // apontando para a mesma prateleira física — e, por consequência, para a
+  // mesma letra de antes. Roda uma única vez, controlada por app_migrations.
+  static const String _migracaoEstante3 =
+      'estante3_esquema_labels_estendido_a_o';
+
+  Future<void> _migrarEsquemaLabelsEstante3(LibsqlClient client) async {
+    try {
+      final stmtCheck = await client.prepare(
+        'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
+      );
+      final jaAplicada =
+          (await stmtCheck.query(positional: [_migracaoEstante3]))
+              as List<dynamic>;
+      if (jaAplicada.isNotEmpty) return;
+
+      final stmtUpdate = await client.prepare(
+        'UPDATE estante_layout SET nivel = nivel + 1 WHERE estante_num = 3',
+      );
+      await stmtUpdate.query();
+
+      final stmtInsert = await client.prepare(
+        'INSERT INTO app_migrations (nome, aplicada_em) VALUES (?, ?)',
+      );
+      await stmtInsert.query(positional: [
+        _migracaoEstante3,
+        DateTime.now().toIso8601String(),
+      ]);
+    } catch (_) {
+      // Se a migração falhar, não derruba a conexão — só tenta de novo no
+      // próximo init().
     }
   }
 
@@ -278,14 +322,16 @@ class TursoService {
         'FROM estante_layout WHERE produto_nome LIKE ? ORDER BY produto_nome LIMIT 20',
       );
       final rows = await stmt.query(positional: [like]);
-      const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
       for (final dynamic row in rows as List<dynamic>) {
-        final r = row as Map<String, dynamic>;
-        final n = ((r['nivel'] as int?) ?? 0).clamp(0, 3);
+        final r          = row as Map<String, dynamic>;
+        final estanteNum = r['estante_num'] as int? ?? 0;
+        final nivProduto = niveisProdutoPara(estanteNum);
+        final nivelNomes = List.generate(nivProduto, (i) => 'Nível ${i + 1}');
+        final n = ((r['nivel'] as int?) ?? 0).clamp(0, nivProduto - 1);
         results.add(ProdutoEncontrado(
           nome:           r['produto_nome']  as String? ?? '',
           tipo:           'estante',
-          numero:         r['estante_num']   as int?    ?? 0,
+          numero:         estanteNum,
           nivelDescricao: nivelNomes[n],
           produtoCodigo:  r['produto_codigo'] as String? ?? '',
         ));

@@ -945,12 +945,14 @@ class _GondolaPageState extends State<GondolaPage> {
       if (!mounted) return;
 
       if (naEstante != null) {
-        const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
+        final nivProduto = niveisProdutoPara(naEstante.estanteNum);
+        final nivelNomes =
+            List.generate(nivProduto, (i) => 'Nível ${i + 1}');
         const colNomes   = ['Col. 1',  'Col. 2',  'Col. 3' ];
         final locEstante =
             '📦 ${produto.nome}\n'
             'Estante ${naEstante.estanteNum} · ${colNomes[naEstante.coluna.clamp(0, 2)]} · '
-            '${nivelNomes[naEstante.nivel.clamp(0, 3)]} · Slot ${naEstante.slot + 1}';
+            '${nivelNomes[naEstante.nivel.clamp(0, nivProduto - 1)]} · Slot ${naEstante.slot + 1}';
         setState(() => _resultadoBusca = locEstante);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(locEstante.replaceAll('\n', ' — ')),
@@ -1811,7 +1813,7 @@ class _EstantePageState extends State<EstantePage> {
       wCaixa   = Edr300Geometry.wCaixa;
       gap      = Edr300Geometry.gap;
     } else {
-      final celula = EstanteGeometry.celulas
+      final celula = EstanteGeometry.celulasPara(_estanteAtual)
           .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
       maxSlots = EstanteGeometry.slotsPorCelula(celula);
       xMin     = celula.xMin;
@@ -2103,9 +2105,10 @@ class _EstantePageState extends State<EstantePage> {
       _destacadoCodigo  = produto.codigo;
     });
 
-    const nivelNomes = ['Nível 1', 'Nível 2', 'Nível 3', 'Nível 4'];
+    final nivProduto = niveisProdutoPara(encontrado.estanteNum);
+    final nivelNomes = List.generate(nivProduto, (i) => 'Nível ${i + 1}');
     const colNomes   = ['Col. 1',  'Col. 2',  'Col. 3' ];
-    final nivelNome  = nivelNomes[encontrado.nivel.clamp(0, 3)];
+    final nivelNome  = nivelNomes[encontrado.nivel.clamp(0, nivProduto - 1)];
     final colNome    = colNomes[encontrado.coluna.clamp(0, 2)];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
