@@ -70,6 +70,11 @@ class EstanteGeometry {
   static int slotsPorCelula(CelulaEstante c) =>
       (c.largura / (wCaixa + gap)).floor();
 
+  // Estante 4 fica na mesma parede que a estante 3, então suas letras
+  // continuam a sequência (estante 3 termina em L, estante 4 começa em M).
+  static int letraOffsetPara(int estanteAtual) =>
+      estanteAtual == 4 ? numColunas * numNiveis : 0;
+
   static List<Face> buildFaces() {
     final faces = <Face>[];
     final halfL = larguraTotal / 2;
@@ -149,12 +154,14 @@ class EstantePainter extends CustomPainter {
   final Camera     camera;
   final List<Face> extraFaces;
   final bool       showLabels;
+  final int        letraOffset;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
   EstantePainter(this.camera, {
-    this.extraFaces = const <Face>[],
-    this.showLabels = true,
+    this.extraFaces  = const <Face>[],
+    this.showLabels  = true,
+    this.letraOffset = 0,
   });
 
   @override
@@ -270,7 +277,8 @@ class EstantePainter extends CustomPainter {
       canvas.drawCircle(screen, radius, rimPaint);
 
       final row    = nNiveis - 1 - celula.nivel;
-      final letter = String.fromCharCode(65 + row * nColunas + celula.coluna);
+      final letter =
+          String.fromCharCode(65 + letraOffset + row * nColunas + celula.coluna);
       final tp = TextPainter(
         text: TextSpan(
           text: letter,
@@ -288,11 +296,12 @@ class EstantePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(EstantePainter old) =>
-      old.camera.rotY  != camera.rotY  ||
-      old.camera.rotX  != camera.rotX  ||
-      old.camera.dist  != camera.dist  ||
-      old.showLabels   != showLabels   ||
-      old.extraFaces   != extraFaces;
+      old.camera.rotY   != camera.rotY   ||
+      old.camera.rotX   != camera.rotX   ||
+      old.camera.dist   != camera.dist   ||
+      old.showLabels    != showLabels    ||
+      old.letraOffset   != letraOffset   ||
+      old.extraFaces    != extraFaces;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -443,7 +452,9 @@ class _EstanteSceneState extends State<EstanteScene> {
       child: CustomPaint(
         key:     _painterKey,
         painter: EstantePainter(_camera,
-            extraFaces: extraFaces, showLabels: widget.showLabels),
+            extraFaces:  extraFaces,
+            showLabels:  widget.showLabels,
+            letraOffset: EstanteGeometry.letraOffsetPara(widget.estanteAtual)),
         child:   const SizedBox.expand(),
       ),
     );
