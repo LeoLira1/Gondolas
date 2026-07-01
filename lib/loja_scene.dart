@@ -64,7 +64,6 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: 6, x: 3.20, z:  1.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 2, x: 9.45, z:  2.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 1, x: 9.45, z:  4.0, w: 0.7, d: 1.6),
-  ItemLoja(tipo: 'estante', numero: 5, x: 0.55, z:  7.6, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 4, x: 0.55, z:  9.6, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 3, x: 0.55, z: 11.6, w: 0.7, d: 1.6),
 ];
