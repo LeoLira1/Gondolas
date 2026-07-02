@@ -324,6 +324,9 @@ class EstanteScene extends StatefulWidget {
   final String? produtoSelecionadoId;
   final Map<String, Color> corPorProduto;
   final void Function(int coluna, int nivel, double hx)? onTapCelula;
+  // Fora do modo de edição (produtoSelecionadoId == null), toques na célula
+  // caem aqui em vez de onTapCelula — usado pra abrir detalhe/quantidade.
+  final void Function(int coluna, int nivel, double hx)? onTapCelulaVisualizar;
   final String? destacadoCodigo;
   final bool showLabels;
 
@@ -334,6 +337,7 @@ class EstanteScene extends StatefulWidget {
     this.produtoSelecionadoId,
     this.corPorProduto        = const {},
     this.onTapCelula,
+    this.onTapCelulaVisualizar,
     this.destacadoCodigo,
     this.showLabels           = true,
   });
@@ -392,11 +396,15 @@ class _EstanteSceneState extends State<EstanteScene> {
   }
 
   void _tryFireTap(Offset globalTap) {
-    if (widget.onTapCelula == null || widget.produtoSelecionadoId == null) return;
     final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
     final hit = _hitTest(rb.globalToLocal(globalTap), rb.size);
-    if (hit != null) widget.onTapCelula!(hit.coluna, hit.nivel, hit.hx);
+    if (hit == null) return;
+    if (widget.produtoSelecionadoId != null) {
+      widget.onTapCelula?.call(hit.coluna, hit.nivel, hit.hx);
+    } else {
+      widget.onTapCelulaVisualizar?.call(hit.coluna, hit.nivel, hit.hx);
+    }
   }
 
   // Ray-plane intersection. Returns nearest hit whose (hx, hz) lands inside the cell bounding box.
