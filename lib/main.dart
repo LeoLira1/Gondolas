@@ -7,6 +7,7 @@ import 'estante_scene.dart';
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'models.dart';
+import 'quantidade_dialog.dart';
 import 'turso_service.dart';
 
 void main() => runApp(const CamdaApp());
@@ -783,6 +784,47 @@ class _GondolaPageState extends State<GondolaPage> {
       _faceSelecionada = face;
       if (andar != null) _andarSelecionado = andar;
     });
+    // Só abre o dialog de quantidade quando o toque veio de uma prateleira
+    // (andar != null) e há de fato uma caixa colocada ali — tap num label
+    // de face (andar == null) ou numa prateleira vazia só seleciona a face.
+    if (andar == null) return;
+    final caixa = _caixaEm(face, andar);
+    if (caixa == null) return;
+    _abrirQuantidade(
+      produtoCodigo: caixa.produtoId,
+      localTipo:     'gondola',
+      localNum:      _gondolaAtual,
+      faceOuColuna:  face,
+      andarOuNivel:  andar,
+    );
+  }
+
+  CaixaColocada? _caixaEm(int face, int andar) {
+    for (final c in _caixasAtuais) {
+      if (c.andar == andar && faceFromPos(c.x, c.z) == face) return c;
+    }
+    return null;
+  }
+
+  void _abrirQuantidade({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+    required int faceOuColuna,
+    required int andarOuNivel,
+  }) {
+    final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
+    final produtoNome =
+        produto.isNotEmpty ? produto.first.nome : produtoCodigo;
+    mostrarQuantidadeDialog(
+      context,
+      produtoCodigo: produtoCodigo,
+      produtoNome:   produtoNome,
+      localTipo:     localTipo,
+      localNum:      localNum,
+      faceOuColuna:  faceOuColuna,
+      andarOuNivel:  andarOuNivel,
+    );
   }
 
   void _limparGondola() => setState(() => _caixas.remove(_gondolaAtual));
@@ -1880,34 +1922,83 @@ class _EstantePageState extends State<EstantePage> {
     });
   }
 
-  void _onTapCelula(int coluna, int nivel, double hx) {
-    if (_produtoSelecionadoId == null) return;
-
-    final int maxSlots;
-    final double xMin;
-    final double wCaixa;
-    final double gap;
-
+  ({int maxSlots, double xMin, double wCaixa, double gap}) _geometriaCelula(
+      int coluna, int nivel) {
     if (_estanteAtual == 8) {
       const geo = Edr300Geometry(showFloor: false);
       final celula = geo.cells
           .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
-      maxSlots = Edr300Geometry.slotsPorCelula(celula);
-      xMin     = celula.xMin;
-      wCaixa   = Edr300Geometry.wCaixa;
-      gap      = Edr300Geometry.gap;
-    } else {
-      final celula = EstanteGeometry.celulasPara(_estanteAtual)
-          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
-      maxSlots = EstanteGeometry.slotsPorCelula(celula);
-      xMin     = celula.xMin;
-      wCaixa   = EstanteGeometry.wCaixa;
-      gap      = EstanteGeometry.gap;
+      return (
+        maxSlots: Edr300Geometry.slotsPorCelula(celula),
+        xMin:     celula.xMin,
+        wCaixa:   Edr300Geometry.wCaixa,
+        gap:      Edr300Geometry.gap,
+      );
     }
+    final celula = EstanteGeometry.celulasPara(_estanteAtual)
+        .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+    return (
+      maxSlots: EstanteGeometry.slotsPorCelula(celula),
+      xMin:     celula.xMin,
+      wCaixa:   EstanteGeometry.wCaixa,
+      gap:      EstanteGeometry.gap,
+    );
+  }
 
-    final offsetNaCelula = hx - xMin;
+  // Fora do modo de edição: acha a caixa existente mais próxima do toque
+  // dentro da célula (coluna, nivel) e abre o dialog de quantidade.
+  void _onTapCelulaVisualizar(int coluna, int nivel, double hx) {
+    final ocupantes =
+        _caixasAtuais.where((c) => c.coluna == coluna && c.nivel == nivel).toList();
+    if (ocupantes.isEmpty) return;
+
+    final geo = _geometriaCelula(coluna, nivel);
+    final slotEstimado = ((hx - geo.xMin) / (geo.wCaixa + geo.gap))
+        .floor()
+        .clamp(0, geo.maxSlots - 1);
+    ocupantes.sort(
+        (a, b) => (a.slot - slotEstimado).abs().compareTo((b.slot - slotEstimado).abs()));
+    final caixa = ocupantes.first;
+
+    _abrirQuantidade(
+      produtoCodigo: caixa.produtoId,
+      localTipo:     'estante',
+      localNum:      _estanteAtual,
+      faceOuColuna:  coluna,
+      andarOuNivel:  nivel,
+    );
+  }
+
+  void _abrirQuantidade({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+    required int faceOuColuna,
+    required int andarOuNivel,
+  }) {
+    final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
+    final produtoNome =
+        produto.isNotEmpty ? produto.first.nome : produtoCodigo;
+    mostrarQuantidadeDialog(
+      context,
+      produtoCodigo: produtoCodigo,
+      produtoNome:   produtoNome,
+      localTipo:     localTipo,
+      localNum:      localNum,
+      faceOuColuna:  faceOuColuna,
+      andarOuNivel:  andarOuNivel,
+    );
+  }
+
+  void _onTapCelula(int coluna, int nivel, double hx) {
+    if (_produtoSelecionadoId == null) return;
+
+    final geo = _geometriaCelula(coluna, nivel);
+    final maxSlots = geo.maxSlots;
+
+    final offsetNaCelula = hx - geo.xMin;
     var slotDesejado =
-        (offsetNaCelula / (wCaixa + gap))
+        (offsetNaCelula / (geo.wCaixa + geo.gap))
             .floor()
             .clamp(0, maxSlots - 1);
 
@@ -2363,6 +2454,7 @@ class _EstantePageState extends State<EstantePage> {
                   produtoSelecionadoId: _produtoSelecionadoId,
                   corPorProduto:       _corPorProduto,
                   onTapCelula:         _onTapCelula,
+                  onTapCelulaVisualizar: _onTapCelulaVisualizar,
                   destacadoCodigo:     _destacadoCodigo,
                 )
               : EstanteScene(
@@ -2371,6 +2463,7 @@ class _EstantePageState extends State<EstantePage> {
                   produtoSelecionadoId: _produtoSelecionadoId,
                   corPorProduto:        _corPorProduto,
                   onTapCelula:          _onTapCelula,
+                  onTapCelulaVisualizar: _onTapCelulaVisualizar,
                   destacadoCodigo:      _destacadoCodigo,
                 ),
         ),

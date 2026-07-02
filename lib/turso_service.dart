@@ -39,6 +39,12 @@ class TursoService {
 
   bool get isConnected => _connected;
 
+  // Acessor para serviços satélite (ex: EstoqueLocalizadoService) reaproveitarem
+  // esta mesma conexão, em vez de abrir uma segunda.
+  LibsqlClient? get client => _client;
+
+  Future<bool> garantirConexao() => _garantirConexao();
+
   Future<void> init() => _initEmAndamento ??= _init().whenComplete(() {
         _initEmAndamento = null;
       });
@@ -97,6 +103,33 @@ class TursoService {
         CREATE TABLE IF NOT EXISTS app_migrations (
           nome TEXT PRIMARY KEY,
           aplicada_em TEXT NOT NULL
+        )
+      ''');
+      // Quantidade de cada produto por endereço físico (gôndola ou estante).
+      // Chave por endereço lógico — não referencia gondola_layout.id/estante_layout.id
+      // porque salvarLayout/salvarLayoutEstante são destrutivos (DELETE + INSERT).
+      await client.execute('''
+        CREATE TABLE IF NOT EXISTS estoque_localizado (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          produto_codigo TEXT NOT NULL,
+          local_tipo TEXT NOT NULL,
+          local_num  INTEGER NOT NULL,
+          face_ou_coluna INTEGER NOT NULL,
+          andar_ou_nivel INTEGER NOT NULL,
+          quantidade REAL NOT NULL DEFAULT 0,
+          atualizado_em TEXT NOT NULL,
+          UNIQUE(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel)
+        )
+      ''');
+      await client.execute('''
+        CREATE TABLE IF NOT EXISTS contagens_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          produto_codigo TEXT NOT NULL,
+          endereco TEXT NOT NULL,
+          qtd_anterior REAL,
+          qtd_nova REAL NOT NULL,
+          origem TEXT NOT NULL DEFAULT 'gondolas_app',
+          registrado_em TEXT NOT NULL
         )
       ''');
       await _migrarEsquemaLabelsEstante3(client);

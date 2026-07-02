@@ -59,6 +59,17 @@ String letraDoIndice(int index) {
   return s;
 }
 
+/// Letra da posição de uma célula (coluna, nível) de uma estante — mesma
+/// convenção usada no desenho da estante (linhas contadas de cima pra baixo).
+/// A Estante 8 (EDR-300) é coluna única, então usa nColunas=1 e offset 0.
+String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
+  final nNiveis  = niveisProdutoPara(estanteNum);
+  final nColunas = estanteNum == estanteEdr300Num ? 1 : numColunasEstante;
+  final offset   = estanteNum == estanteEdr300Num ? 0 : letraOffsetPara(estanteNum);
+  final row      = nNiveis - 1 - nivel;
+  return letraDoIndice(offset + row * nColunas + coluna);
+}
+
 class Produto {
   final String codigo;
   final String nome;
