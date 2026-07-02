@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
-import 'gondola_scene.dart' show Vec3, Camera, Face;
+import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -29,6 +29,8 @@ class ProdutoLoja {
   final int    numero;
   final String nivel;
   final String produtoCodigo;  // código do produto para destacar na cena
+  final int?   face;           // 1-6 (só gôndolas), para pré-selecionar no detalhe
+  final int?   andar;          // 0-2 (só gôndolas)
 
   const ProdutoLoja({
     required this.nome,
@@ -36,6 +38,8 @@ class ProdutoLoja {
     required this.numero,
     required this.nivel,
     required this.produtoCodigo,
+    this.face,
+    this.andar,
   });
 }
 
@@ -43,6 +47,15 @@ class ProdutoLoja {
 
 const double lojaW = 10.0;
 const double lojaH = 14.0;
+
+// Pontos de referência fixos da loja, escritos no chão do mapa.
+const List<({String nome, double x, double z})> referenciasLoja = [
+  (nome: 'CAIXA',       x: 5.0, z: 0.8),
+  (nome: 'BALCÃO LOJA', x: 0.9, z: 8.0),
+  (nome: 'COZINHA',     x: 9.2, z: 8.0),
+  (nome: 'ENTRADA',     x: 7.5, z: 13.6),
+  (nome: 'ENTRADA 2',   x: 2.5, z: 13.6),
+];
 
 const List<ItemLoja> itensLoja = [
   // 12 gôndolas
@@ -405,6 +418,77 @@ class LojaPainter extends CustomPainter {
       ..color       = camda
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
+
+    // Rótulos de referência escritos no chão (discretos, sem fundo)
+    for (final ref in referenciasLoja) {
+      final hit = project(Vec3(ref.x, 0.02, ref.z));
+      if (hit == null) continue;
+      final (screen, cz) = hit;
+      final fontSize = 11.0 * (9.0 / cz).clamp(0.6, 1.5);
+      final tp = TextPainter(
+        text: TextSpan(
+          text: ref.nome,
+          style: TextStyle(
+            color:         const Color(0x59FFFFFF), // branco 35%
+            fontSize:      fontSize,
+            fontWeight:    FontWeight.w600,
+            letterSpacing: 1.2,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+    }
+
+    // Números de face 1-6 ao redor da gôndola selecionada (mesma convenção
+    // e culling da cena de detalhe, em discos menores)
+    final selIdx = selecionadoIdx;
+    if (selIdx != null &&
+        selIdx < itensLoja.length &&
+        itensLoja[selIdx].tipo == 'gondola') {
+      final item = itensLoja[selIdx];
+      const scale     = LojaGeometry.gondolaR / 3.4;
+      const labelDist = (3.4 + 0.13 + 0.55) * scale;
+      const labelY    = (0.675 + 0.15) * scale;
+
+      for (var k = 1; k <= 6; k++) {
+        final a      = faceAngle(k);
+        final pos    = Vec3(item.x + labelDist * math.cos(a), labelY,
+                            item.z + labelDist * math.sin(a));
+        final normal = Vec3(math.cos(a), 0, math.sin(a));
+        final dot    = normal.dot((eye - pos).normalized);
+        if (dot <= 0.05) continue;
+        final alpha = (dot * 2.2).clamp(0.0, 1.0);
+
+        final hit = project(pos);
+        if (hit == null) continue;
+        final (screen, cz) = hit;
+
+        final fontSize = 12.0 * (6.0 / cz).clamp(0.55, 1.4);
+        final radius   = fontSize * 0.72;
+
+        canvas.drawCircle(screen, radius,
+            Paint()..color = const Color(0xFF12161c).withValues(alpha: 0.92 * alpha));
+        canvas.drawCircle(screen, radius,
+            Paint()
+              ..color       = camda.withValues(alpha: alpha)
+              ..style       = PaintingStyle.stroke
+              ..strokeWidth = 1.5);
+
+        final tp = TextPainter(
+          text: TextSpan(
+            text: '$k',
+            style: TextStyle(
+              color:      camda.withValues(alpha: alpha),
+              fontSize:   fontSize,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+      }
+    }
 
     for (final item in itensLoja) {
       if (item.tipo != 'estante' || item.numero == 8) continue;

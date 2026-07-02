@@ -376,22 +376,35 @@ class TursoService {
   Future<List<ProdutoEncontrado>> _buscarNasGondolas(String like) async {
     try {
       final stmt = await _client!.prepare(
-        'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar '
+        'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar, pos_x, pos_z '
         'FROM gondola_layout WHERE produto_nome LIKE ? ORDER BY produto_nome LIMIT 20',
       );
       final rows = await stmt.query(positional: [like]);
       const andarNomes = ['Base', 'Meio', 'Topo'];
-      return (rows as List<dynamic>).map((dynamic row) {
-        final r = row as Map<String, dynamic>;
-        final a = ((r['andar'] as int?) ?? 0).clamp(0, 2);
-        return ProdutoEncontrado(
-          nome:           r['produto_nome']   as String? ?? '',
+      // A face é derivada de pos_x/pos_z (sem coluna no banco); caixas do
+      // mesmo produto no mesmo endereço G·F·A viram um resultado só.
+      final vistos     = <String>{};
+      final encontrados = <ProdutoEncontrado>[];
+      for (final dynamic row in rows as List<dynamic>) {
+        final r    = row as Map<String, dynamic>;
+        final a    = ((r['andar'] as int?) ?? 0).clamp(0, 2);
+        final posX = (r['pos_x'] as num?)?.toDouble() ?? 0;
+        final posZ = (r['pos_z'] as num?)?.toDouble() ?? 0;
+        final face = faceFromPos(posX, posZ);
+        final codigo  = r['produto_codigo'] as String? ?? '';
+        final gondola = r['gondola_num']    as int?    ?? 0;
+        if (!vistos.add('$codigo|$gondola|$a|$face')) continue;
+        encontrados.add(ProdutoEncontrado(
+          nome:           r['produto_nome'] as String? ?? '',
           tipo:           'gondola',
-          numero:         r['gondola_num']    as int?    ?? 0,
-          nivelDescricao: 'Andar ${andarNomes[a]}',
-          produtoCodigo:  r['produto_codigo'] as String? ?? '',
-        );
-      }).toList();
+          numero:         gondola,
+          nivelDescricao: 'Face $face · Andar ${andarNomes[a]}',
+          produtoCodigo:  codigo,
+          face:           face,
+          andar:          a,
+        ));
+      }
+      return encontrados;
     } catch (_) {
       return [];
     }
