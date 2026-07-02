@@ -1,5 +1,18 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'models.dart' show faceFromPos;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Faces do hexágono — convenção fixa para todas as gôndolas
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Face 1 = face voltada para a entrada (+Z); numeração horária vista de cima.
+// Ângulo central da face k no plano XZ (ângulo = atan2(z, x)).
+
+double faceAngle(int k) => math.pi / 2 - (k - 1) * math.pi / 3;
+
+/// Setor i do prisma (vértices em i·60°, centro de face em 30° + i·60°) → face 1-6.
+int sectorToFace(int i) => (((90 - (30 + i * 60)) ~/ 60) % 6 + 6) % 6 + 1;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Vec3
@@ -101,9 +114,21 @@ class CaixaColocada {
 // ──────────────────────────────────────────────────────────────────────────────
 
 class GondolaGeometry {
-  static const _corCorpo  = Color(0xFF2e6b46);
-  static const _corColuna = Color(0xFF1f4a30);
-  static const _corBorda  = Color(0xFF4a9d6a);
+  static const _corCorpo    = Color(0xFF2e6b46);
+  static const _corColuna   = Color(0xFF1f4a30);
+  static const _corBorda    = Color(0xFF4a9d6a);
+  static const corDestaque  = Color(0xFFe87722);
+
+  // Posição dos labels de face 1-6: um pouco além do anel de borda do andar
+  // base, à altura do corpo da prateleira.
+  static const double labelDist = 3.4 + 0.13 + 0.55;
+  static const double labelY    = 0.675 + 0.15;
+
+  static Vec3 labelPos(int k) => Vec3(
+        labelDist * math.cos(faceAngle(k)),
+        labelY,
+        labelDist * math.sin(faceAngle(k)),
+      );
 
   // yTop = top of shelf surface including the 0.06 accent-ring.
   // This is the Y at which boxes sit and what hit-testing tests against.
@@ -130,12 +155,12 @@ class GondolaGeometry {
   }
 
 
-  static List<Face> buildFaces() {
+  static List<Face> buildFaces({int? faceSelecionada}) {
     final faces = <Face>[];
 
-    // 8 feet
-    for (var i = 0; i < 8; i++) {
-      final a = i * math.pi / 4;
+    // 6 feet nos vértices do hexágono
+    for (var i = 0; i < 6; i++) {
+      final a = i * math.pi / 3;
       _prism(faces,
           cx: 2.8 * math.cos(a), cz: 2.8 * math.sin(a),
           y0: 0.0, y1: 0.5,
@@ -144,30 +169,53 @@ class GondolaGeometry {
     }
 
     // Shelf 0 — base
-    _shelf(faces, r: 3.4, yc: 0.675, h: 0.35);
+    _shelf(faces, r: 3.4, yc: 0.675, h: 0.35, faceSel: faceSelecionada);
     _prism(faces, cx: 0, cz: 0, y0: 0.85, y1: 2.0,
-        r: 0.28, sides: 8, color: _corColuna);
+        r: 0.28, sides: 6, color: _corColuna);
 
     // Shelf 1 — meio
-    _shelf(faces, r: 2.4, yc: 2.15, h: 0.30);
+    _shelf(faces, r: 2.4, yc: 2.15, h: 0.30, faceSel: faceSelecionada);
     _prism(faces, cx: 0, cz: 0, y0: 2.30, y1: 3.30,
-        r: 0.28, sides: 8, color: _corColuna);
+        r: 0.28, sides: 6, color: _corColuna);
 
     // Shelf 2 — topo
-    _shelf(faces, r: 1.5, yc: 3.43, h: 0.26);
+    _shelf(faces, r: 1.5, yc: 3.43, h: 0.26, faceSel: faceSelecionada);
 
     return faces;
   }
 
+  /// Projeta (x, z) para dentro do hexágono do andar quando o ponto cai fora,
+  /// empurrando ao longo da normal da(s) face(s) violada(s). Mantém uma margem
+  /// de meia-caixa para a caixa não ficar pendurada na borda.
+  static ({double x, double z}) clampAoAndar(int andar, double x, double z) {
+    const margem  = 0.2;
+    final apotema = andares[andar].r * math.cos(math.pi / 6) - margem;
+    var px = x, pz = z;
+    for (var i = 0; i < 6; i++) {
+      final a  = math.pi / 6 + i * math.pi / 3; // normal da face do setor i
+      final nx = math.cos(a), nz = math.sin(a);
+      final d  = px * nx + pz * nz;
+      if (d > apotema) {
+        px -= nx * (d - apotema);
+        pz -= nz * (d - apotema);
+      }
+    }
+    return (x: px, z: pz);
+  }
+
   static void _shelf(List<Face> faces,
-      {required double r, required double yc, required double h}) {
-    const rot = math.pi / 8;
+      {required double r, required double yc, required double h, int? faceSel}) {
+    Color destaca(Color base, int i) => faceSel != null && sectorToFace(i) == faceSel
+        ? Color.lerp(base, corDestaque, 0.55)!
+        : base;
     _prism(faces,
         cx: 0, cz: 0, y0: yc - h / 2, y1: yc + h / 2,
-        r: r, sides: 8, color: _corCorpo, rotOff: rot);
+        r: r, sides: 6, color: _corCorpo,
+        sideColor: (i) => destaca(_corCorpo, i));
     _prism(faces,
         cx: 0, cz: 0, y0: yc + h / 2, y1: yc + h / 2 + 0.06,
-        r: r + 0.13, sides: 8, color: _corBorda, rotOff: rot);
+        r: r + 0.13, sides: 6, color: _corBorda,
+        sideColor: (i) => destaca(_corBorda, i));
   }
 
   static void _prism(List<Face> faces, {
@@ -175,6 +223,7 @@ class GondolaGeometry {
     required double y0, required double y1,
     required double r, required int sides,
     required Color color, double rotOff = 0,
+    Color Function(int side)? sideColor,
   }) {
     final angles = List.generate(sides, (i) => i * 2 * math.pi / sides + rotOff);
 
@@ -185,7 +234,7 @@ class GondolaGeometry {
       faces.add(Face([
         Vec3(x0, y0, z0), Vec3(x0, y1, z0),
         Vec3(x1, y1, z1), Vec3(x1, y0, z1),
-      ], color));
+      ], sideColor?.call(i) ?? color));
     }
 
     // Single-polygon top cap — no internal edge lines
@@ -225,6 +274,7 @@ class GondolaGeometry {
 class GondolaPainter extends CustomPainter {
   final Camera camera;
   final List<Face> extraFaces;
+  final int? faceSelecionada;
   // When set, skips buildFaces() and uses this list directly (for the store map).
   final List<Face>? allFacesOverride;
 
@@ -232,18 +282,81 @@ class GondolaPainter extends CustomPainter {
 
   GondolaPainter(this.camera, {
     this.extraFaces = const <Face>[],
+    this.faceSelecionada,
     this.allFacesOverride,
   });
+
+  /// Tamanho perspectivo dos labels de face (compartilhado com o hit-test).
+  static double labelFontSize(double cz) => 20.0 * (7.0 / cz).clamp(0.6, 1.6);
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0e1014));
 
     final faces = allFacesOverride ??
-        (GondolaGeometry.buildFaces()..addAll(extraFaces));
+        (GondolaGeometry.buildFaces(faceSelecionada: faceSelecionada)
+          ..addAll(extraFaces));
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
+    if (allFacesOverride == null) _drawFaceLabels(canvas, size);
+  }
+
+  // Labels 1-6 no padrão visual do EDR-300: disco escuro com borda e texto
+  // laranja CAMDA, tamanho perspectivo. Cull + fade quando a face vira de costas.
+  void _drawFaceLabels(Canvas canvas, Size size) {
+    final eye    = camera.position;
+    final fwd    = (camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 45.0 * math.pi / 180.0;
+    const near   = 0.1;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+    final w = size.width, h = size.height;
+
+    const camda = GondolaGeometry.corDestaque;
+    const disco = Color(0xFF12161c);
+
+    for (var k = 1; k <= 6; k++) {
+      final pos    = GondolaGeometry.labelPos(k);
+      final ang    = faceAngle(k);
+      final normal = Vec3(math.cos(ang), 0, math.sin(ang));
+      final dot    = normal.dot((eye - pos).normalized);
+      if (dot <= 0.05) continue;
+      final alpha = (dot * 2.2).clamp(0.0, 1.0);
+
+      final d  = pos - eye;
+      final cz = d.dot(fwd);
+      if (cz <= near) continue;
+      final cx     = d.dot(right) / (cz * tanH * aspect);
+      final cy     = d.dot(up)    / (cz * tanH);
+      final screen = Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h);
+
+      final fontSize = labelFontSize(cz);
+      final radius   = fontSize * 0.72;
+
+      canvas.drawCircle(screen, radius,
+          Paint()..color = disco.withValues(alpha: 0.92 * alpha));
+      canvas.drawCircle(screen, radius,
+          Paint()
+            ..color       = camda.withValues(alpha: alpha)
+            ..style       = PaintingStyle.stroke
+            ..strokeWidth = 2.0);
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '$k',
+          style: TextStyle(
+            color:      camda.withValues(alpha: alpha),
+            fontSize:   fontSize,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+    }
   }
 
   void _project(List<Face> faces, Size size) {
@@ -339,6 +452,7 @@ class GondolaPainter extends CustomPainter {
     return old.camera.rotY != camera.rotY ||
         old.camera.rotX != camera.rotX ||
         old.camera.dist != camera.dist ||
+        old.faceSelecionada != faceSelecionada ||
         old.extraFaces  != extraFaces;
   }
 }
@@ -354,6 +468,11 @@ class GondolaScene extends StatefulWidget {
   final Map<String, Color> corPorProduto;
   final void Function(int andar, double x, double z)? onTapAndar;
   final String? destacadoCodigo;
+  final int? faceSelecionada;
+  // andar é null quando a seleção veio de um label (que não pertence a andar).
+  final void Function(int face, int? andar)? onFaceTap;
+  // Quando muda para um valor não-nulo, a câmera gira para olhar essa face.
+  final int? faceParaCamera;
 
   const GondolaScene({
     super.key,
@@ -363,6 +482,9 @@ class GondolaScene extends StatefulWidget {
     this.corPorProduto = const {},
     this.onTapAndar,
     this.destacadoCodigo,
+    this.faceSelecionada,
+    this.onFaceTap,
+    this.faceParaCamera,
   });
 
   @override
@@ -372,6 +494,26 @@ class GondolaScene extends StatefulWidget {
 class _GondolaSceneState extends State<GondolaScene> {
   Camera _camera = const Camera();
   final  _painterKey = GlobalKey();
+
+  // Câmera de frente para a face k: posição ao longo da normal da face.
+  // position() usa (sin(rotY), cos(rotY)), então rotY = pi/2 - faceAngle(k).
+  static double _rotYParaFace(int k) => (k - 1) * math.pi / 3;
+
+  @override
+  void initState() {
+    super.initState();
+    final f = widget.faceParaCamera;
+    if (f != null) _camera = _camera.copyWith(rotY: _rotYParaFace(f));
+  }
+
+  @override
+  void didUpdateWidget(GondolaScene old) {
+    super.didUpdateWidget(old);
+    final f = widget.faceParaCamera;
+    if (f != null && f != old.faceParaCamera) {
+      _camera = _camera.copyWith(rotY: _rotYParaFace(f));
+    }
+  }
 
   Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
@@ -407,21 +549,71 @@ class _GondolaSceneState extends State<GondolaScene> {
 
   void _onScaleEnd(ScaleEndDetails _) {
     if (!_isDragging && _gestureOrigin != null) {
-      _tryPlaceBox(_gestureOrigin!);
+      _handleTap(_gestureOrigin!);
     }
     _gestureOrigin        = null;
     _cameraAtGestureStart = null;
     _isDragging           = false;
   }
 
-  void _tryPlaceBox(Offset globalTap) {
-    if (widget.onTapAndar == null || widget.produtoSelecionadoId == null) return;
-
+  void _handleTap(Offset globalTap) {
     final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
+    final local = rb.globalToLocal(globalTap);
 
-    final hit = _hitTest(rb.globalToLocal(globalTap), rb.size);
-    if (hit != null) widget.onTapAndar!(hit.andar, hit.x, hit.z);
+    // 1) Label de face 1-6 (hit circular)
+    final labelFace = _hitTestLabel(local, rb.size);
+    if (labelFace != null) {
+      widget.onFaceTap?.call(labelFace, null);
+      return;
+    }
+
+    // 2) Prateleira: coloca caixa (se há produto ativo) ou seleciona a face
+    //    derivada do atan2 do ponto de interseção.
+    final hit = _hitTest(local, rb.size);
+    if (hit == null) return;
+    if (widget.onTapAndar != null && widget.produtoSelecionadoId != null) {
+      widget.onTapAndar!(hit.andar, hit.x, hit.z);
+    } else {
+      widget.onFaceTap?.call(faceFromPos(hit.x, hit.z), hit.andar);
+    }
+  }
+
+  /// Hit circular nos labels de face (raio do disco + 8px de folga),
+  /// respeitando o mesmo culling do desenho.
+  int? _hitTestLabel(Offset tap, Size size) {
+    final eye    = _camera.position;
+    final fwd    = (_camera.target - eye).normalized;
+    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up     = right.cross(fwd).normalized;
+    const fovY   = 45.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+
+    int?   best;
+    double bestCz = double.infinity;
+
+    for (var k = 1; k <= 6; k++) {
+      final pos    = GondolaGeometry.labelPos(k);
+      final ang    = faceAngle(k);
+      final normal = Vec3(math.cos(ang), 0, math.sin(ang));
+      if (normal.dot((eye - pos).normalized) <= 0.05) continue;
+
+      final d  = pos - eye;
+      final cz = d.dot(fwd);
+      if (cz <= 0.1) continue;
+      final cx     = d.dot(right) / (cz * tanH * aspect);
+      final cy     = d.dot(up)    / (cz * tanH);
+      final screen = Offset((cx + 1) / 2 * size.width,
+                            (1 - cy) / 2 * size.height);
+
+      final radius = GondolaPainter.labelFontSize(cz) * 0.72 + 8;
+      if ((tap - screen).distance <= radius && cz < bestCz) {
+        best   = k;
+        bestCz = cz;
+      }
+    }
+    return best;
   }
 
   /// Ray-plane intersection against each shelf's horizontal surface.
@@ -456,8 +648,15 @@ class _GondolaSceneState extends State<GondolaScene> {
       final hx = eye.x + t * dir.x;
       final hz = eye.z + t * dir.z;
 
-      // Conservative octagon check: point must be within 90% of shelf radius
-      if (math.sqrt(hx * hx + hz * hz) < shelf.r * 0.90) {
+      // Conservative hexagon check: point must be inside 90% of the apothem
+      // on every one of the 6 faces (normais em 30° + i·60°).
+      final apotema = shelf.r * math.cos(math.pi / 6) * 0.90;
+      var dentro = true;
+      for (var f = 0; f < 6 && dentro; f++) {
+        final a = math.pi / 6 + f * math.pi / 3;
+        if (hx * math.cos(a) + hz * math.sin(a) > apotema) dentro = false;
+      }
+      if (dentro) {
         if (nearest == null || t < nearest.t) {
           nearest = (andar: i, x: hx, z: hz, t: t);
         }
@@ -487,7 +686,9 @@ class _GondolaSceneState extends State<GondolaScene> {
       onScaleEnd:    _onScaleEnd,
       child: CustomPaint(
         key:     _painterKey,
-        painter: GondolaPainter(_camera, extraFaces: extraFaces),
+        painter: GondolaPainter(_camera,
+            extraFaces:      extraFaces,
+            faceSelecionada: widget.faceSelecionada),
         child:   const SizedBox.expand(),
       ),
     );

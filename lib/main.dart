@@ -204,6 +204,8 @@ class _LojaPageState extends State<LojaPage> {
             numero:        _produtoSelecionado!.numero,
             nivel:         _produtoSelecionado!.nivelDescricao,
             produtoCodigo: _produtoSelecionado!.produtoCodigo,
+            face:          _produtoSelecionado!.face,
+            andar:         _produtoSelecionado!.andar,
           )
         : null;
     if (item.tipo == 'gondola') {
@@ -289,7 +291,7 @@ class _LojaPageState extends State<LojaPage> {
                     Text(
                       'CAMDA · Mapa da loja — toque numa estrutura ou busque um produto',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.45),
+                        color: Colors.white.withValues(alpha: 0.45),
                         fontSize: 11,
                         letterSpacing: 0.2,
                       ),
@@ -353,7 +355,7 @@ class _SearchBox extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xEE141518),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withOpacity(0.10)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
           ),
           child: TextField(
             controller: controller,
@@ -381,7 +383,7 @@ class _SearchBox extends StatelessWidget {
             margin: const EdgeInsets.only(top: 6),
             decoration: BoxDecoration(
               color: const Color(0xF7141518),
-              border: Border.all(color: Colors.white.withOpacity(0.09)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
               borderRadius: BorderRadius.circular(12),
             ),
             constraints: const BoxConstraints(maxHeight: 260),
@@ -411,7 +413,7 @@ class _SearchBox extends StatelessWidget {
                         padding:     EdgeInsets.zero,
                         itemCount:   sugestoes.length,
                         separatorBuilder: (_, __) =>
-                            Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                            Divider(height: 1, color: Colors.white.withValues(alpha: 0.05)),
                         itemBuilder: (_, i) {
                           final p   = sugestoes[i];
                           final cor = p.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
@@ -472,7 +474,7 @@ class _LegendRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: const Color(0x8C141416),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
@@ -536,7 +538,7 @@ class _LocationCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xEE16171A),
-        border: Border.all(color: Colors.white.withOpacity(0.09)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
         borderRadius: BorderRadius.circular(14),
       ),
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
@@ -627,6 +629,11 @@ class _GondolaPageState extends State<GondolaPage> {
   Timer?  _highlightTimer;
   String? _resultadoBusca;
 
+  // Endereçamento por face: G{n} · F{face} · A{andar}
+  int? _faceSelecionada;
+  int? _andarSelecionado;
+  int? _faceParaCamera;
+
   final Map<int, List<CaixaColocada>> _caixas = {};
 
   List<Produto> _produtos           = [];
@@ -673,8 +680,11 @@ class _GondolaPageState extends State<GondolaPage> {
   @override
   void initState() {
     super.initState();
-    _gondolaAtual    = widget.gondolaInicial;
-    _destacadoCodigo = widget.produtoDestacado?.produtoCodigo;
+    _gondolaAtual     = widget.gondolaInicial;
+    _destacadoCodigo  = widget.produtoDestacado?.produtoCodigo;
+    _faceSelecionada  = widget.produtoDestacado?.face;
+    _andarSelecionado = widget.produtoDestacado?.andar;
+    _faceParaCamera   = widget.produtoDestacado?.face;
     _inicializar();
   }
 
@@ -728,18 +738,25 @@ class _GondolaPageState extends State<GondolaPage> {
     if (_dbConectado) _carregarLayout(nova);
   }
 
+  // Caixas gravadas na era do octógono podem cair fora do hexágono novo
+  // (apótema menor): o clamp corrige só a exibição — a posição no banco
+  // persiste até a próxima edição normal do usuário.
+  CaixaColocada _caixaDoLayout(CaixaLayout l) {
+    final andar = l.andar.clamp(0, 2);
+    final pos   = GondolaGeometry.clampAoAndar(andar, l.posX, l.posZ);
+    return CaixaColocada(
+      andar:     andar,
+      produtoId: l.produtoCodigo,
+      x:         pos.x,
+      z:         pos.z,
+    );
+  }
+
   Future<void> _carregarLayout(int gondolaNum) async {
     final layouts = await TursoService().fetchLayout(gondolaNum);
     if (!mounted) return;
     setState(() {
-      _caixas[gondolaNum] = layouts
-          .map((l) => CaixaColocada(
-                andar:     l.andar,
-                produtoId: l.produtoCodigo,
-                x:         l.posX,
-                z:         l.posZ,
-              ))
-          .toList();
+      _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
       if (_gondolaAtual == gondolaNum) _carregandoLayout = false;
     });
   }
@@ -756,6 +773,15 @@ class _GondolaPageState extends State<GondolaPage> {
           z:         z,
         ),
       ];
+      _faceSelecionada  = faceFromPos(x, z);
+      _andarSelecionado = andar;
+    });
+  }
+
+  void _onFaceTap(int face, int? andar) {
+    setState(() {
+      _faceSelecionada = face;
+      if (andar != null) _andarSelecionado = andar;
     });
   }
 
@@ -990,23 +1016,21 @@ class _GondolaPageState extends State<GondolaPage> {
 
     _highlightTimer?.cancel();
     final andarNome = ['Base', 'Meio', 'Topo'][encontrado.andar.clamp(0, 2)];
+    final face      = faceFromPos(encontrado.posX, encontrado.posZ);
     setState(() {
-      _caixas[encontrado.gondolaNum] = layouts
-          .map((l) => CaixaColocada(
-                andar:     l.andar,
-                produtoId: l.produtoCodigo,
-                x:         l.posX,
-                z:         l.posZ,
-              ))
-          .toList();
+      _caixas[encontrado.gondolaNum] = layouts.map(_caixaDoLayout).toList();
       _carregandoLayout = false;
       _destacadoCodigo  = produto.codigo;
-      _resultadoBusca   = '📍 ${produto.nome}\nGôndola ${encontrado.gondolaNum} · Andar $andarNome';
+      _faceSelecionada  = face;
+      _andarSelecionado = encontrado.andar.clamp(0, 2);
+      _faceParaCamera   = face;
+      _resultadoBusca   =
+          '📍 ${produto.nome}\nGôndola ${encontrado.gondolaNum} · Face $face · Andar $andarNome';
     });
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
-        '📍 ${produto.nome} → Gôndola ${encontrado.gondolaNum}, Andar $andarNome',
+        '📍 ${produto.nome} → Gôndola ${encontrado.gondolaNum}, Face $face, Andar $andarNome',
       ),
       backgroundColor: const Color(0xFF1a3a2a),
       duration: const Duration(seconds: 6),
@@ -1052,6 +1076,9 @@ class _GondolaPageState extends State<GondolaPage> {
       _sugestoes1           = [];
       _sugestoes2           = [];
       _destacadoCodigo      = null;
+      _faceSelecionada      = null;
+      _andarSelecionado     = null;
+      _faceParaCamera       = null;
     });
     _ctrl1.clear();
     _ctrl2.clear();
@@ -1159,14 +1186,29 @@ class _GondolaPageState extends State<GondolaPage> {
 
         // ── Cena 3D ───────────────────────────────────────────────────────
         Expanded(
-          child: GondolaScene(
-            gondolaAtual:         _gondolaAtual,
-            caixas:               _caixasAtuais,
-            produtoSelecionadoId: _produtoSelecionadoId,
-            corPorProduto:        _corPorProduto,
-            onTapAndar:           _onTapAndar,
-            destacadoCodigo:      _destacadoCodigo,
-          ),
+          child: Stack(children: [
+            GondolaScene(
+              gondolaAtual:         _gondolaAtual,
+              caixas:               _caixasAtuais,
+              produtoSelecionadoId: _produtoSelecionadoId,
+              corPorProduto:        _corPorProduto,
+              onTapAndar:           _onTapAndar,
+              destacadoCodigo:      _destacadoCodigo,
+              faceSelecionada:      _faceSelecionada,
+              onFaceTap:            _onFaceTap,
+              faceParaCamera:       _faceParaCamera,
+            ),
+            if (_faceSelecionada != null)
+              Positioned(
+                top:  10,
+                left: 12,
+                child: _EnderecoChip(
+                  gondola: _gondolaAtual,
+                  face:    _faceSelecionada!,
+                  andar:   _andarSelecionado,
+                ),
+              ),
+          ]),
         ),
 
         // ── Painel inferior ───────────────────────────────────────────────
@@ -1565,6 +1607,44 @@ class _Expander extends StatelessWidget {
             child: child,
           ),
       ]),
+    );
+  }
+}
+
+// ── Chip de endereço G·F·A ────────────────────────────────────────────────────
+
+class _EnderecoChip extends StatelessWidget {
+  final int  gondola;
+  final int  face;
+  final int? andar;
+
+  const _EnderecoChip({
+    required this.gondola,
+    required this.face,
+    this.andar,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final texto = andar != null
+        ? 'G$gondola · F$face · A${andar! + 1}'
+        : 'G$gondola · F$face';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xEE16171A),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        texto,
+        style: const TextStyle(
+          color:         Color(0xFFe87722),
+          fontSize:      14,
+          fontWeight:    FontWeight.bold,
+          letterSpacing: 0.5,
+        ),
+      ),
     );
   }
 }

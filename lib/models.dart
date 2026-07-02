@@ -1,4 +1,15 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+
+/// Face 1-6 da gôndola derivada da posição (px, pz) da caixa na prateleira.
+/// Face 1 = voltada para a entrada (+Z), numeração horária vista de cima.
+/// A face não é persistida no Turso — é sempre derivada de pos_x/pos_z.
+int faceFromPos(double px, double pz) {
+  final ang = math.atan2(pz, px) * 180 / math.pi;   // graus
+  var k = (((90 - ang) / 60).round()) % 6;
+  if (k < 0) k += 6;
+  return k + 1;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Esquema de labels (letras) das posições de produto nas estantes
@@ -91,8 +102,10 @@ class ProdutoEncontrado {
   final String nome;
   final String tipo;            // 'gondola' ou 'estante'
   final int    numero;
-  final String nivelDescricao;  // texto pronto: "Andar Base", "Nível 2", etc.
+  final String nivelDescricao;  // texto pronto: "Face 3 · Andar Meio", "Nível 2", etc.
   final String produtoCodigo;
+  final int?   face;            // 1-6, derivada de pos_x/pos_z; null para estantes
+  final int?   andar;           // 0-2; null para estantes
 
   const ProdutoEncontrado({
     required this.nome,
@@ -100,6 +113,8 @@ class ProdutoEncontrado {
     required this.numero,
     required this.nivelDescricao,
     required this.produtoCodigo,
+    this.face,
+    this.andar,
   });
 }
 
