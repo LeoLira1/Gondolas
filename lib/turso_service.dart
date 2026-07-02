@@ -377,9 +377,10 @@ class TursoService {
     try {
       final stmt = await _client!.prepare(
         'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar, pos_x, pos_z '
-        'FROM gondola_layout WHERE produto_nome LIKE ? ORDER BY produto_nome LIMIT 20',
+        'FROM gondola_layout WHERE produto_nome LIKE ? OR produto_codigo LIKE ? '
+        'ORDER BY produto_nome LIMIT 20',
       );
-      final rows = await stmt.query(positional: [like]);
+      final rows = await stmt.query(positional: [like, like]);
       const andarNomes = ['Base', 'Meio', 'Topo'];
       // A face é derivada de pos_x/pos_z (sem coluna no banco); caixas do
       // mesmo produto no mesmo endereço G·F·A viram um resultado só.
@@ -414,9 +415,10 @@ class TursoService {
     try {
       final stmt = await _client!.prepare(
         'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
-        'FROM estante_layout WHERE produto_nome LIKE ? ORDER BY produto_nome LIMIT 20',
+        'FROM estante_layout WHERE produto_nome LIKE ? OR produto_codigo LIKE ? '
+        'ORDER BY produto_nome LIMIT 20',
       );
-      final rows = await stmt.query(positional: [like]);
+      final rows = await stmt.query(positional: [like, like]);
       return (rows as List<dynamic>).map((dynamic row) {
         final r          = row as Map<String, dynamic>;
         final estanteNum = r['estante_num'] as int? ?? 0;
