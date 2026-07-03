@@ -403,7 +403,56 @@ class TursoService {
       _buscarNasGondolas(like),
       _buscarNasEstantes(like),
     ]);
-    return [...resultados[0], ...resultados[1]];
+    return _anexarQuantidades([...resultados[0], ...resultados[1]]);
+  }
+
+  /// Anexa a cada resultado a quantidade contada (estoque_localizado) no seu
+  /// local: gôndola casa pelo endereço exato (face + andar); estante soma as
+  /// colunas do nível, já que a busca agrupa por estante + nível.
+  Future<List<ProdutoEncontrado>> _anexarQuantidades(
+      List<ProdutoEncontrado> encontrados) async {
+    if (encontrados.isEmpty) return encontrados;
+    final codigos = encontrados
+        .map((p) => p.produtoCodigo)
+        .where((c) => c.isNotEmpty)
+        .toSet()
+        .toList();
+    if (codigos.isEmpty) return encontrados;
+    try {
+      final placeholders = List.filled(codigos.length, '?').join(',');
+      final stmt = await _client!.prepare(
+        'SELECT produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel, quantidade '
+        'FROM estoque_localizado WHERE produto_codigo IN ($placeholders)',
+      );
+      final rows = await stmt.query(positional: codigos);
+
+      // gôndola: 'g|codigo|num|face|andar' · estante: 'e|codigo|num|nivel'
+      final somas = <String, double>{};
+      for (final dynamic row in rows as List<dynamic>) {
+        final r        = row as Map<String, dynamic>;
+        final codigo   = r['produto_codigo'] as String? ?? '';
+        final tipo     = r['local_tipo']     as String? ?? '';
+        final localNum = r['local_num']      as int?    ?? 0;
+        final fc       = r['face_ou_coluna'] as int?    ?? 0;
+        final an       = r['andar_ou_nivel'] as int?    ?? 0;
+        final qtd      = (r['quantidade'] as num?)?.toDouble() ?? 0;
+        // Estante: mesmo clamp de nível usado em _buscarNasEstantes, pra
+        // chave casar com o resultado exibido.
+        final chave = tipo == 'gondola'
+            ? 'g|$codigo|$localNum|$fc|$an'
+            : 'e|$codigo|$localNum|${an.clamp(0, niveisProdutoPara(localNum) - 1)}';
+        somas[chave] = (somas[chave] ?? 0) + qtd;
+      }
+
+      return encontrados.map((p) {
+        final chave = p.tipo == 'gondola'
+            ? 'g|${p.produtoCodigo}|${p.numero}|${p.face}|${p.andar}'
+            : 'e|${p.produtoCodigo}|${p.numero}|${p.nivel}';
+        return p.comQuantidade(somas[chave]);
+      }).toList();
+    } catch (_) {
+      return encontrados; // sem quantidade não é motivo pra falhar a busca
+    }
   }
 
   Future<List<ProdutoEncontrado>> _buscarNasGondolas(String like) async {
@@ -463,6 +512,7 @@ class TursoService {
           numero:         estanteNum,
           nivelDescricao: 'Nível ${n + 1}',
           produtoCodigo:  r['produto_codigo'] as String? ?? '',
+          nivel:          n,
         );
       }).toList();
     } catch (_) {

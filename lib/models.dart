@@ -133,6 +133,8 @@ class ProdutoEncontrado {
   final String produtoCodigo;
   final int?   face;            // 1-6, derivada de pos_x/pos_z; null para estantes
   final int?   andar;           // 0-2; null para estantes
+  final int?   nivel;           // 0-based; null para gôndolas
+  final double? quantidade;     // soma em estoque_localizado neste local; null se nunca contado
 
   const ProdutoEncontrado({
     required this.nome,
@@ -142,7 +144,21 @@ class ProdutoEncontrado {
     required this.produtoCodigo,
     this.face,
     this.andar,
+    this.nivel,
+    this.quantidade,
   });
+
+  ProdutoEncontrado comQuantidade(double? quantidade) => ProdutoEncontrado(
+        nome:           nome,
+        tipo:           tipo,
+        numero:         numero,
+        nivelDescricao: nivelDescricao,
+        produtoCodigo:  produtoCodigo,
+        face:           face,
+        andar:          andar,
+        nivel:          nivel,
+        quantidade:     quantidade,
+      );
 }
 
 class CaixaColocadaEstante {
