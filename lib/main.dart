@@ -1544,9 +1544,9 @@ class _GondolaPageState extends State<GondolaPage> {
                 top:  10,
                 left: 12,
                 child: _EnderecoChip(
-                  gondola:     _gondolaAtual,
-                  face:        _faceSelecionada!,
-                  andar:       _andarSelecionado,
+                  endereco: _andarSelecionado != null
+                      ? 'G$_gondolaAtual · F$_faceSelecionada · A${_andarSelecionado! + 1}'
+                      : 'G$_gondolaAtual · F$_faceSelecionada',
                   produtoNome: _produtoNoEnderecoSelecionado?.nome,
                   produtoCor:  _produtoNoEnderecoSelecionado?.cor,
                 ),
@@ -1954,28 +1954,21 @@ class _Expander extends StatelessWidget {
   }
 }
 
-// ── Chip de endereço G·F·A ────────────────────────────────────────────────────
+// ── Chip de endereço + produto selecionado (gôndola e estante) ────────────────
 
 class _EnderecoChip extends StatelessWidget {
-  final int     gondola;
-  final int     face;
-  final int?    andar;
+  final String  endereco;
   final String? produtoNome;
   final Color?  produtoCor;
 
   const _EnderecoChip({
-    required this.gondola,
-    required this.face,
-    this.andar,
+    required this.endereco,
     this.produtoNome,
     this.produtoCor,
   });
 
   @override
   Widget build(BuildContext context) {
-    final texto = andar != null
-        ? 'G$gondola · F$face · A${andar! + 1}'
-        : 'G$gondola · F$face';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       constraints: const BoxConstraints(maxWidth: 250),
@@ -1989,7 +1982,7 @@ class _EnderecoChip extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            texto,
+            endereco,
             style: const TextStyle(
               color:         Color(0xFFe87722),
               fontSize:      14,
@@ -2154,6 +2147,12 @@ class _EstantePageState extends State<EstantePage> {
   String? _destacadoCodigo;
   Timer?  _highlightTimer;
 
+  // Endereço selecionado na cena: célula (coluna, nível) e slot da caixa
+  // tocada — alimenta o chip de endereço com o nome do produto.
+  int? _colunaSelecionada;
+  int? _nivelSelecionado;
+  int? _slotSelecionado;
+
   final Map<int, List<CaixaColocadaEstante>> _caixas = {};
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
@@ -2263,6 +2262,10 @@ class _EstantePageState extends State<EstantePage> {
     setState(() {
       _estanteAtual     = nova;
       _carregandoLayout = _dbConectado;
+      // Células mudam de geometria entre estantes: seleção antiga não vale.
+      _colunaSelecionada = null;
+      _nivelSelecionado  = null;
+      _slotSelecionado   = null;
     });
     if (_dbConectado) _carregarLayout(nova);
   }
@@ -2311,7 +2314,15 @@ class _EstantePageState extends State<EstantePage> {
   void _onTapCelulaVisualizar(int coluna, int nivel, double hx) {
     final ocupantes =
         _caixasAtuais.where((c) => c.coluna == coluna && c.nivel == nivel).toList();
-    if (ocupantes.isEmpty) return;
+    if (ocupantes.isEmpty) {
+      // Célula vazia: só marca o endereço no chip, sem produto.
+      setState(() {
+        _colunaSelecionada = coluna;
+        _nivelSelecionado  = nivel;
+        _slotSelecionado   = null;
+      });
+      return;
+    }
 
     final geo = _geometriaCelula(coluna, nivel);
     final slotEstimado = ((hx - geo.xMin) / (geo.wCaixa + geo.gap))
@@ -2321,6 +2332,12 @@ class _EstantePageState extends State<EstantePage> {
         (a, b) => (a.slot - slotEstimado).abs().compareTo((b.slot - slotEstimado).abs()));
     final caixa = ocupantes.first;
 
+    setState(() {
+      _colunaSelecionada = coluna;
+      _nivelSelecionado  = nivel;
+      _slotSelecionado   = caixa.slot;
+    });
+
     _abrirQuantidade(
       produtoCodigo: caixa.produtoId,
       localTipo:     'estante',
@@ -2328,6 +2345,35 @@ class _EstantePageState extends State<EstantePage> {
       faceOuColuna:  coluna,
       andarOuNivel:  nivel,
     );
+  }
+
+  // Produto da caixa no endereço selecionado (célula + slot) — alimenta o
+  // nome exibido no chip de endereço para o usuário saber qual produto tocou.
+  Produto? get _produtoNoEnderecoSelecionado {
+    if (_slotSelecionado == null) return null;
+    final matches = _caixasAtuais.where((c) =>
+        c.coluna == _colunaSelecionada &&
+        c.nivel  == _nivelSelecionado &&
+        c.slot   == _slotSelecionado);
+    if (matches.isEmpty) return null;
+    final caixa = matches.first;
+    final produtos = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
+    if (produtos.isNotEmpty) return produtos.first;
+    // Produto fora do catálogo carregado: mostra ao menos o código.
+    return Produto(
+      codigo:    caixa.produtoId,
+      nome:      caixa.produtoId,
+      categoria: '',
+      corHex:    '#888888',
+    );
+  }
+
+  String get _enderecoSelecionadoTexto {
+    final letra = letraEstanteCelula(
+        _estanteAtual, _colunaSelecionada!, _nivelSelecionado!);
+    return _slotSelecionado != null
+        ? 'E$_estanteAtual · $letra · Slot ${_slotSelecionado! + 1}'
+        : 'E$_estanteAtual · $letra';
   }
 
   Future<void> _abrirQuantidade({
@@ -2401,6 +2447,9 @@ class _EstantePageState extends State<EstantePage> {
           produtoId: _produtoSelecionadoId!,
         ),
       ];
+      _colunaSelecionada = coluna;
+      _nivelSelecionado  = nivel;
+      _slotSelecionado   = slotDesejado;
     });
   }
 
@@ -2640,8 +2689,12 @@ class _EstantePageState extends State<EstantePage> {
                 produtoId: l.produtoCodigo,
               ))
           .toList();
-      _carregandoLayout = false;
-      _destacadoCodigo  = produto.codigo;
+      _carregandoLayout  = false;
+      _destacadoCodigo   = produto.codigo;
+      _colunaSelecionada = encontrado.coluna.clamp(0, numColunasEstante - 1);
+      _nivelSelecionado  = encontrado.nivel
+          .clamp(0, niveisProdutoPara(encontrado.estanteNum) - 1);
+      _slotSelecionado   = encontrado.slot;
     });
 
     final nivProduto = niveisProdutoPara(encontrado.estanteNum);
@@ -2696,6 +2749,9 @@ class _EstantePageState extends State<EstantePage> {
       _sugestoes1           = [];
       _sugestoes2           = [];
       _destacadoCodigo      = null;
+      _colunaSelecionada    = null;
+      _nivelSelecionado     = null;
+      _slotSelecionado      = null;
       _destacadosCodigos    = widget.codigosConferencia ?? {};
     });
     _ctrl1.clear();
@@ -2811,30 +2867,42 @@ class _EstantePageState extends State<EstantePage> {
         ),
 
         Expanded(
-          child: _estanteAtual == 8
-              ? Edr300Scene(
-                  geometry:            const Edr300Geometry(showFloor: false),
-                  autoRotate:          false,
-                  caixas:              _caixasAtuais,
-                  produtoSelecionadoId: _produtoSelecionadoId,
-                  corPorProduto:       _corPorProduto,
-                  onTapCelula:         _onTapCelula,
-                  onTapCelulaVisualizar: _onTapCelulaVisualizar,
-                  destacadoCodigo:     _destacadoCodigo,
-                  desatualizados:      _desatualizados,
-                  destacadosCodigos:   _destacadosCodigos,
-                )
-              : EstanteScene(
-                  estanteAtual:         _estanteAtual,
-                  caixas:               _caixasAtuais,
-                  produtoSelecionadoId: _produtoSelecionadoId,
-                  corPorProduto:        _corPorProduto,
-                  onTapCelula:          _onTapCelula,
-                  onTapCelulaVisualizar: _onTapCelulaVisualizar,
-                  destacadoCodigo:      _destacadoCodigo,
-                  desatualizados:       _desatualizados,
-                  destacadosCodigos:    _destacadosCodigos,
+          child: Stack(children: [
+            _estanteAtual == 8
+                ? Edr300Scene(
+                    geometry:            const Edr300Geometry(showFloor: false),
+                    autoRotate:          false,
+                    caixas:              _caixasAtuais,
+                    produtoSelecionadoId: _produtoSelecionadoId,
+                    corPorProduto:       _corPorProduto,
+                    onTapCelula:         _onTapCelula,
+                    onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                    destacadoCodigo:     _destacadoCodigo,
+                    desatualizados:      _desatualizados,
+                    destacadosCodigos:   _destacadosCodigos,
+                  )
+                : EstanteScene(
+                    estanteAtual:         _estanteAtual,
+                    caixas:               _caixasAtuais,
+                    produtoSelecionadoId: _produtoSelecionadoId,
+                    corPorProduto:        _corPorProduto,
+                    onTapCelula:          _onTapCelula,
+                    onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                    destacadoCodigo:      _destacadoCodigo,
+                    desatualizados:       _desatualizados,
+                    destacadosCodigos:    _destacadosCodigos,
+                  ),
+            if (_colunaSelecionada != null && _nivelSelecionado != null)
+              Positioned(
+                top:  10,
+                left: 12,
+                child: _EnderecoChip(
+                  endereco:    _enderecoSelecionadoTexto,
+                  produtoNome: _produtoNoEnderecoSelecionado?.nome,
+                  produtoCor:  _produtoNoEnderecoSelecionado?.cor,
                 ),
+              ),
+          ]),
         ),
 
         Container(
