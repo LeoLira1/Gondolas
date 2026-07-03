@@ -579,6 +579,9 @@ class _BannerConferencia extends StatelessWidget {
 
 // ── _SearchBox ────────────────────────────────────────────────────────────────
 
+String _fmtQtdSugestao(double q) =>
+    q == q.roundToDouble() ? q.round().toString() : q.toString();
+
 class _SearchBox extends StatelessWidget {
   final TextEditingController          controller;
   final FocusNode                      focusNode;
@@ -678,26 +681,44 @@ class _SearchBox extends StatelessWidget {
                             onTap: () => onSelecionar(p),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              child: Row(
                                 children: [
-                                  Text(p.nome,
-                                      style: const TextStyle(
-                                          color: Color(0xFFf0eee9), fontSize: 13)),
-                                  const SizedBox(height: 3),
-                                  Row(children: [
-                                    Container(
-                                      width: 7, height: 7,
-                                      decoration: BoxDecoration(
-                                        color: cor, borderRadius: BorderRadius.circular(2)),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(p.nome,
+                                            style: const TextStyle(
+                                                color: Color(0xFFf0eee9), fontSize: 13)),
+                                        const SizedBox(height: 3),
+                                        Row(children: [
+                                          Container(
+                                            width: 7, height: 7,
+                                            decoration: BoxDecoration(
+                                              color: cor, borderRadius: BorderRadius.circular(2)),
+                                          ),
+                                          const SizedBox(width: 5),
+                                          Flexible(
+                                            child: Text(
+                                              '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivelDescricao}',
+                                              style: const TextStyle(
+                                                  color: Color(0xFF9b9893), fontSize: 11),
+                                            ),
+                                          ),
+                                        ]),
+                                      ],
                                     ),
-                                    const SizedBox(width: 5),
+                                  ),
+                                  if (p.quantidade != null) ...[
+                                    const SizedBox(width: 8),
                                     Text(
-                                      '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivelDescricao}',
+                                      '${_fmtQtdSugestao(p.quantidade!)} un',
                                       style: const TextStyle(
-                                          color: Color(0xFF9b9893), fontSize: 11),
+                                          color: Color(0xFFf0eee9),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600),
                                     ),
-                                  ]),
+                                  ],
                                 ],
                               ),
                             ),
