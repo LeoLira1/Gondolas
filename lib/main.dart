@@ -1082,6 +1082,23 @@ class _GondolaPageState extends State<GondolaPage> {
     return null;
   }
 
+  // Produto da caixa no endereço selecionado (face + andar) — alimenta o nome
+  // exibido no chip de endereço para o usuário saber qual produto selecionou.
+  Produto? get _produtoNoEnderecoSelecionado {
+    if (_faceSelecionada == null || _andarSelecionado == null) return null;
+    final caixa = _caixaEm(_faceSelecionada!, _andarSelecionado!);
+    if (caixa == null) return null;
+    final matches = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
+    if (matches.isNotEmpty) return matches.first;
+    // Produto fora do catálogo carregado: mostra ao menos o código.
+    return Produto(
+      codigo:    caixa.produtoId,
+      nome:      caixa.produtoId,
+      categoria: '',
+      corHex:    '#888888',
+    );
+  }
+
   Future<void> _abrirQuantidade({
     required String produtoCodigo,
     required String localTipo,
@@ -1527,9 +1544,11 @@ class _GondolaPageState extends State<GondolaPage> {
                 top:  10,
                 left: 12,
                 child: _EnderecoChip(
-                  gondola: _gondolaAtual,
-                  face:    _faceSelecionada!,
-                  andar:   _andarSelecionado,
+                  gondola:     _gondolaAtual,
+                  face:        _faceSelecionada!,
+                  andar:       _andarSelecionado,
+                  produtoNome: _produtoNoEnderecoSelecionado?.nome,
+                  produtoCor:  _produtoNoEnderecoSelecionado?.cor,
                 ),
               ),
           ]),
@@ -1938,14 +1957,18 @@ class _Expander extends StatelessWidget {
 // ── Chip de endereço G·F·A ────────────────────────────────────────────────────
 
 class _EnderecoChip extends StatelessWidget {
-  final int  gondola;
-  final int  face;
-  final int? andar;
+  final int     gondola;
+  final int     face;
+  final int?    andar;
+  final String? produtoNome;
+  final Color?  produtoCor;
 
   const _EnderecoChip({
     required this.gondola,
     required this.face,
     this.andar,
+    this.produtoNome,
+    this.produtoCor,
   });
 
   @override
@@ -1955,19 +1978,55 @@ class _EnderecoChip extends StatelessWidget {
         : 'G$gondola · F$face';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      constraints: const BoxConstraints(maxWidth: 250),
       decoration: BoxDecoration(
         color: const Color(0xEE16171A),
         border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Text(
-        texto,
-        style: const TextStyle(
-          color:         Color(0xFFe87722),
-          fontSize:      14,
-          fontWeight:    FontWeight.bold,
-          letterSpacing: 0.5,
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            texto,
+            style: const TextStyle(
+              color:         Color(0xFFe87722),
+              fontSize:      14,
+              fontWeight:    FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+          if (produtoNome != null) ...[
+            const SizedBox(height: 5),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width:  10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: produtoCor ?? const Color(0xFF888888),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    produtoNome!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color:    Colors.white,
+                      fontSize: 12,
+                      height:   1.25,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }
