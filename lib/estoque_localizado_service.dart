@@ -53,6 +53,37 @@ class InfoEstoqueMestre {
   });
 }
 
+/// Um endereço cujo atualizado_em é anterior à última contagem confirmada do
+/// produto (inventário cíclico ou contagem diária do dashboard) — indica que
+/// a distribuição gravada pode não refletir mais a realidade.
+class EnderecoDesatualizado {
+  final String produtoCodigo;
+  final String localTipo;
+  final int    localNum;
+  final int    faceOuColuna;
+  final int    andarOuNivel;
+  final String atualizadoEm;      // do endereço em estoque_localizado
+  final String ultimaContagemEm;  // MAX(contado_em, confirmado_em) do produto
+
+  const EnderecoDesatualizado({
+    required this.produtoCodigo,
+    required this.localTipo,
+    required this.localNum,
+    required this.faceOuColuna,
+    required this.andarOuNivel,
+    required this.atualizadoEm,
+    required this.ultimaContagemEm,
+  });
+
+  String get chave => chaveEnderecoEstoque(
+        produtoCodigo: produtoCodigo,
+        localTipo:     localTipo,
+        localNum:      localNum,
+        faceOuColuna:  faceOuColuna,
+        andarOuNivel:  andarOuNivel,
+      );
+}
+
 /// Resultado de concluirContagem: o que foi sincronizado com o cíclico.
 class ResultadoContagem {
   final double total;
@@ -78,6 +109,111 @@ class EstoqueLocalizadoService {
     if (!await TursoService().garantirConexao()) return null;
     return TursoService().client;
   }
+
+  // Cache em memória dos endereços desatualizados, carregado uma vez ao abrir
+  // cada cena (e recarregado após salvar no dialog de quantidade) — nunca
+  // consultado durante o paint.
+  Map<String, EnderecoDesatualizado> _desatualizadosCache = {};
+
+  /// Busca, numa única query (JOIN com subquery de MAX das duas fontes de
+  /// contagem confirmada), todos os endereços cujo atualizado_em é anterior
+  /// à última contagem confirmada do produto. Atualiza o cache em memória e
+  /// devolve o conjunto de chaves (ver [chaveEnderecoEstoque]).
+  ///
+  /// contagem_itens.confirmado_em é uma coluna adicionada por migração no
+  /// dashboard e pode não existir em todos os ambientes: se a query falhar
+  /// por isso, refaz usando registrado_em como fallback.
+  Future<Set<String>> fetchEnderecosDesatualizados() async {
+    final client = await _conexao();
+    if (client == null) return _desatualizadosCache.keys.toSet();
+
+    List<dynamic> rows;
+    try {
+      rows = await _queryDesatualizados(client, colunaConfirmacao: 'confirmado_em');
+    } catch (_) {
+      try {
+        rows = await _queryDesatualizados(client, colunaConfirmacao: 'registrado_em');
+      } catch (_) {
+        return _desatualizadosCache.keys.toSet();
+      }
+    }
+
+    final novoCache = <String, EnderecoDesatualizado>{};
+    for (final dynamic row in rows) {
+      final r      = row as Map<String, dynamic>;
+      final ultima = r['ultima']        as String?;
+      final atual  = r['atualizado_em'] as String?;
+      if (ultima == null || atual == null) continue;
+
+      final dtUltima = DateTime.tryParse(ultima);
+      final dtAtual  = DateTime.tryParse(atual);
+      if (dtUltima == null || dtAtual == null) continue; // formato inválido: ignora
+      if (!dtAtual.isBefore(dtUltima)) continue;
+
+      final item = EnderecoDesatualizado(
+        produtoCodigo: r['produto_codigo']  as String? ?? '',
+        localTipo:     r['local_tipo']      as String? ?? 'gondola',
+        localNum:      r['local_num']       as int?    ?? 0,
+        faceOuColuna:  r['face_ou_coluna']  as int?    ?? 0,
+        andarOuNivel:  r['andar_ou_nivel']  as int?    ?? 0,
+        atualizadoEm:  atual,
+        ultimaContagemEm: ultima,
+      );
+      novoCache[item.chave] = item;
+    }
+    _desatualizadosCache = novoCache;
+    return novoCache.keys.toSet();
+  }
+
+  Future<List<dynamic>> _queryDesatualizados(
+    LibsqlClient client, {
+    required String colunaConfirmacao,
+  }) async {
+    final stmt = await client.prepare('''
+      SELECT el.produto_codigo, el.local_tipo, el.local_num, el.face_ou_coluna,
+             el.andar_ou_nivel, el.atualizado_em, uc.ultima
+      FROM estoque_localizado el
+      JOIN (
+        SELECT produto_codigo, MAX(dt) AS ultima FROM (
+          SELECT produto_id AS produto_codigo, contado_em AS dt
+          FROM inventario_cicli WHERE contado_em IS NOT NULL
+          UNION ALL
+          SELECT codigo AS produto_codigo, $colunaConfirmacao AS dt
+          FROM contagem_itens WHERE status != 'pendente' AND $colunaConfirmacao IS NOT NULL
+        )
+        GROUP BY produto_codigo
+      ) uc ON uc.produto_codigo = el.produto_codigo
+    ''');
+    return (await stmt.query()) as List<dynamic>;
+  }
+
+  /// Consulta o cache em memória (sem ida ao banco) — usado pelo painter das
+  /// cenas 3D para decidir se desenha o badge de endereço desatualizado.
+  bool isDesatualizado({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+    required int faceOuColuna,
+    required int andarOuNivel,
+  }) =>
+      _desatualizadosCache.containsKey(chaveEnderecoEstoque(
+        produtoCodigo: produtoCodigo,
+        localTipo:     localTipo,
+        localNum:      localNum,
+        faceOuColuna:  faceOuColuna,
+        andarOuNivel:  andarOuNivel,
+      ));
+
+  /// Detalhe (datas) do aviso de endereço desatualizado, ou null se o
+  /// endereço estiver em dia. Usado pelo dialog de quantidade.
+  EnderecoDesatualizado? infoDesatualizado(EnderecoLocalizado endereco) =>
+      _desatualizadosCache[chaveEnderecoEstoque(
+        produtoCodigo: endereco.produtoCodigo,
+        localTipo:     endereco.localTipo,
+        localNum:      endereco.localNum,
+        faceOuColuna:  endereco.faceOuColuna,
+        andarOuNivel:  endereco.andarOuNivel,
+      )];
 
   Future<List<EnderecoLocalizado>> fetchEnderecosProduto(
       String produtoCodigo) async {

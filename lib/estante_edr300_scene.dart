@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'gondola_scene.dart' show Vec3, Camera, Face;
-import 'models.dart' show CaixaColocadaEstante;
+import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
+import 'models.dart' show CaixaColocadaEstante, chaveEnderecoEstoque, estanteEdr300Num;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Edr300Cell — célula de produto na estante metálica
@@ -95,13 +95,20 @@ class Edr300Geometry {
     required Edr300Cell celula,
     required int slot,
     required Color color,
+    bool desatualizado = false,
   }) {
     final xCenter = celula.xMin + wCaixa / 2 + slot * (wCaixa + gap);
+    final x1 = xCenter + wCaixa / 2;
+    final y1 = celula.yTop + hCaixa;
+    final z1 = dCaixa / 2;
     _box(faces,
-      x0: xCenter - wCaixa / 2, x1: xCenter + wCaixa / 2,
-      y0: celula.yTop,           y1: celula.yTop + hCaixa,
-      z0: -dCaixa / 2,           z1: dCaixa / 2,
+      x0: xCenter - wCaixa / 2, x1: x1,
+      y0: celula.yTop,           y1: y1,
+      z0: -dCaixa / 2,           z1: z1,
       color: color);
+    if (desatualizado) {
+      addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: wCaixa * 0.6);
+    }
   }
 
   List<Face> buildFaces() {
@@ -372,6 +379,9 @@ class Edr300Scene extends StatefulWidget {
   // caem aqui em vez de onTapCelula — usado pra abrir detalhe/quantidade.
   final void Function(int coluna, int nivel, double hx)? onTapCelulaVisualizar;
   final String?                                         destacadoCodigo;
+  // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
+  // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
+  final Set<String>                                     desatualizados;
 
   const Edr300Scene({
     super.key,
@@ -385,6 +395,7 @@ class Edr300Scene extends StatefulWidget {
     this.onTapCelula,
     this.onTapCelulaVisualizar,
     this.destacadoCodigo,
+    this.desatualizados      = const {},
   });
 
   @override
@@ -532,8 +543,18 @@ class _Edr300SceneState extends State<Edr300Scene>
           .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
           .toList();
       if (celulaList.isEmpty) continue;
+      // Edr300Scene com caixas em uso sempre representa a Estante 8 (a única
+      // de aço no layout atual).
+      final chave = chaveEnderecoEstoque(
+        produtoCodigo: caixa.produtoId,
+        localTipo:     'estante',
+        localNum:      estanteEdr300Num,
+        faceOuColuna:  caixa.coluna,
+        andarOuNivel:  caixa.nivel,
+      );
       Edr300Geometry.addBoxProduto(extraFaces,
-          celula: celulaList.first, slot: caixa.slot, color: cor);
+          celula: celulaList.first, slot: caixa.slot, color: cor,
+          desatualizado: widget.desatualizados.contains(chave));
     }
 
     return GestureDetector(

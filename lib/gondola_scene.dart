@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'models.dart' show faceFromPos;
+import 'models.dart' show faceFromPos, chaveEnderecoEstoque;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Faces do hexágono — convenção fixa para todas as gôndolas
@@ -87,6 +87,31 @@ class Face {
   double light = 1.0;
 
   Face(this.verts, this.color);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Badge de endereço desatualizado — indicador discreto e estático (sem
+// animação contínua, pra não conflitar com o pulsar de busca da LojaScene).
+// ──────────────────────────────────────────────────────────────────────────────
+
+const Color corEnderecoDesatualizado = Color(0xFFffc107);
+
+/// Pequeno triângulo âmbar achatado no canto superior-frontal-direito de uma
+/// caixa, levemente elevado do topo para não empatar no depth-sort do
+/// pintor com a face de cima.
+void addBadgeEnderecoDesatualizado(
+  List<Face> faces, {
+  required double x1,
+  required double y1,
+  required double z1,
+  required double tamanho,
+}) {
+  const elevacao = 0.006;
+  faces.add(Face([
+    Vec3(x1,           y1 + elevacao, z1),
+    Vec3(x1 - tamanho, y1 + elevacao, z1),
+    Vec3(x1,           y1 + elevacao, z1 - tamanho),
+  ], corEnderecoDesatualizado));
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -248,6 +273,7 @@ class GondolaGeometry {
   static void addBox(List<Face> faces, {
     required double cx, required double cy, required double cz,
     required Color color,
+    bool desatualizado = false,
   }) {
     const w = 0.40, h = 0.52, d = 0.40;
     final x0 = cx - w / 2, x1 = cx + w / 2;
@@ -264,6 +290,10 @@ class GondolaGeometry {
     faces.add(Face([Vec3(x1,y0,z1), Vec3(x1,y0,z0), Vec3(x1,y1,z0), Vec3(x1,y1,z1)], color));
     // Left  (-X)
     faces.add(Face([Vec3(x0,y0,z0), Vec3(x0,y0,z1), Vec3(x0,y1,z1), Vec3(x0,y1,z0)], color));
+
+    if (desatualizado) {
+      addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: w * 0.4);
+    }
   }
 }
 
@@ -473,6 +503,9 @@ class GondolaScene extends StatefulWidget {
   final void Function(int face, int? andar)? onFaceTap;
   // Quando muda para um valor não-nulo, a câmera gira para olhar essa face.
   final int? faceParaCamera;
+  // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
+  // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
+  final Set<String> desatualizados;
 
   const GondolaScene({
     super.key,
@@ -485,6 +518,7 @@ class GondolaScene extends StatefulWidget {
     this.faceSelecionada,
     this.onFaceTap,
     this.faceParaCamera,
+    this.desatualizados = const {},
   });
 
   @override
@@ -676,8 +710,16 @@ class _GondolaSceneState extends State<GondolaScene> {
           ? const Color(0xFFe87722)
           : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final shelf = GondolaGeometry.andares[caixa.andar];
+      final chave = chaveEnderecoEstoque(
+        produtoCodigo: caixa.produtoId,
+        localTipo:     'gondola',
+        localNum:      widget.gondolaAtual,
+        faceOuColuna:  faceFromPos(caixa.x, caixa.z),
+        andarOuNivel:  caixa.andar,
+      );
       GondolaGeometry.addBox(extraFaces,
-          cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor);
+          cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor,
+          desatualizado: widget.desatualizados.contains(chave));
     }
 
     return GestureDetector(

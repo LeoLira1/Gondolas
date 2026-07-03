@@ -50,6 +50,13 @@ String _fmtData(String iso) {
   return '${two(dt.day)}/${two(dt.month)} ${two(dt.hour)}:${two(dt.minute)}';
 }
 
+String _fmtDataCurta(String iso) {
+  final dt = DateTime.tryParse(iso);
+  if (dt == null) return iso;
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${two(dt.day)}/${two(dt.month)}';
+}
+
 double _parseQtd(String s) =>
     double.tryParse(s.trim().replaceAll(',', '.')) ?? 0;
 
@@ -115,6 +122,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     final resultados = await Future.wait([
       _service.fetchEnderecosProduto(widget.produtoCodigo),
       _service.buscarInfoMestre(widget.produtoCodigo),
+      _service.fetchEnderecosDesatualizados(),
     ]);
     final enderecos = resultados[0] as List<EnderecoLocalizado>;
     final info      = resultados[1] as InfoEstoqueMestre?;
@@ -159,6 +167,11 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
 
   double get _totalContado =>
       _linhas.fold<double>(0, (soma, l) => soma + l.quantidadeAtual);
+
+  // Endereço novo (l.endereco.atualizadoEm == null) nunca está desatualizado
+  // — não há nada gravado ainda pra comparar.
+  EnderecoDesatualizado? _avisoDesatualizado(EnderecoLocalizado endereco) =>
+      endereco.atualizadoEm == null ? null : _service.infoDesatualizado(endereco);
 
   Future<bool> _salvarEditados() async {
     var ok = true;
@@ -316,6 +329,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   }
 
   Widget _buildLinha(_LinhaEndereco l) {
+    final aviso = _avisoDesatualizado(l.endereco);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -346,6 +360,17 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                     'Atualizado em ${_fmtData(l.endereco.atualizadoEm!)}',
                     style: const TextStyle(
                         color: Color(0xFF6a7a88), fontSize: 10),
+                  ),
+                if (aviso != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      '⚠️ Total conferido em ${_fmtDataCurta(aviso.ultimaContagemEm)} '
+                      '· este endereço foi atualizado pela última vez em '
+                      '${_fmtDataCurta(aviso.atualizadoEm)}',
+                      style: const TextStyle(
+                          color: Color(0xFFe0a030), fontSize: 10),
+                    ),
                   ),
               ],
             ),

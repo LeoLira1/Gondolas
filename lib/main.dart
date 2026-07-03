@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_scene.dart';
+import 'estoque_localizado_service.dart';
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'models.dart';
@@ -637,6 +638,10 @@ class _GondolaPageState extends State<GondolaPage> {
 
   final Map<int, List<CaixaColocada>> _caixas = {};
 
+  // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
+  // e recarregado após salvar no dialog de quantidade.
+  Set<String> _desatualizados = {};
+
   List<Produto> _produtos           = [];
   bool          _dbConectado        = false;
   bool          _carregandoProdutos = false;
@@ -710,22 +715,30 @@ class _GondolaPageState extends State<GondolaPage> {
     setState(() => _dbConectado = conectado);
 
     if (conectado) {
-      // Catálogo e layout em paralelo: corta uma ida ao servidor do caminho
-      // crítico de abertura da página.
+      // Catálogo, layout e endereços desatualizados em paralelo: corta idas
+      // ao servidor do caminho crítico de abertura da página.
       final layoutFuture = _carregarLayout(_gondolaAtual);
+      final desatualizadosFuture = _carregarDesatualizados();
       final produtos = await TursoService().fetchProdutos();
       if (!mounted) return;
       setState(() {
         _produtos           = produtos;
         _carregandoProdutos = false;
       });
-      await layoutFuture;
+      await Future.wait([layoutFuture, desatualizadosFuture]);
     } else {
       setState(() {
         _produtos           = [];
         _carregandoProdutos = false;
       });
     }
+  }
+
+  Future<void> _carregarDesatualizados() async {
+    final desatualizados =
+        await EstoqueLocalizadoService().fetchEnderecosDesatualizados();
+    if (!mounted) return;
+    setState(() => _desatualizados = desatualizados);
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -806,17 +819,17 @@ class _GondolaPageState extends State<GondolaPage> {
     return null;
   }
 
-  void _abrirQuantidade({
+  Future<void> _abrirQuantidade({
     required String produtoCodigo,
     required String localTipo,
     required int localNum,
     required int faceOuColuna,
     required int andarOuNivel,
-  }) {
+  }) async {
     final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
     final produtoNome =
         produto.isNotEmpty ? produto.first.nome : produtoCodigo;
-    mostrarQuantidadeDialog(
+    await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
       produtoNome:   produtoNome,
@@ -825,6 +838,9 @@ class _GondolaPageState extends State<GondolaPage> {
       faceOuColuna:  faceOuColuna,
       andarOuNivel:  andarOuNivel,
     );
+    // O dialog pode ter alterado atualizado_em de algum endereço: recarrega
+    // o conjunto de desatualizados pro badge refletir o estado atual.
+    _carregarDesatualizados();
   }
 
   void _limparGondola() => setState(() => _caixas.remove(_gondolaAtual));
@@ -1239,6 +1255,7 @@ class _GondolaPageState extends State<GondolaPage> {
               faceSelecionada:      _faceSelecionada,
               onFaceTap:            _onFaceTap,
               faceParaCamera:       _faceParaCamera,
+              desatualizados:       _desatualizados,
             ),
             if (_faceSelecionada != null)
               Positioned(
@@ -1811,6 +1828,10 @@ class _EstantePageState extends State<EstantePage> {
 
   final Map<int, List<CaixaColocadaEstante>> _caixas = {};
 
+  // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
+  // e recarregado após salvar no dialog de quantidade.
+  Set<String> _desatualizados = {};
+
   List<Produto> _produtos           = [];
   bool          _dbConectado        = false;
   bool          _carregandoProdutos = false;
@@ -1880,19 +1901,27 @@ class _EstantePageState extends State<EstantePage> {
 
     if (conectado) {
       final layoutFuture = _carregarLayout(_estanteAtual);
+      final desatualizadosFuture = _carregarDesatualizados();
       final produtos = await TursoService().fetchProdutos();
       if (!mounted) return;
       setState(() {
         _produtos           = produtos;
         _carregandoProdutos = false;
       });
-      await layoutFuture;
+      await Future.wait([layoutFuture, desatualizadosFuture]);
     } else {
       setState(() {
         _produtos           = [];
         _carregandoProdutos = false;
       });
     }
+  }
+
+  Future<void> _carregarDesatualizados() async {
+    final desatualizados =
+        await EstoqueLocalizadoService().fetchEnderecosDesatualizados();
+    if (!mounted) return;
+    setState(() => _desatualizados = desatualizados);
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -1969,17 +1998,17 @@ class _EstantePageState extends State<EstantePage> {
     );
   }
 
-  void _abrirQuantidade({
+  Future<void> _abrirQuantidade({
     required String produtoCodigo,
     required String localTipo,
     required int localNum,
     required int faceOuColuna,
     required int andarOuNivel,
-  }) {
+  }) async {
     final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
     final produtoNome =
         produto.isNotEmpty ? produto.first.nome : produtoCodigo;
-    mostrarQuantidadeDialog(
+    await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
       produtoNome:   produtoNome,
@@ -1988,6 +2017,9 @@ class _EstantePageState extends State<EstantePage> {
       faceOuColuna:  faceOuColuna,
       andarOuNivel:  andarOuNivel,
     );
+    // O dialog pode ter alterado atualizado_em de algum endereço: recarrega
+    // o conjunto de desatualizados pro badge refletir o estado atual.
+    _carregarDesatualizados();
   }
 
   void _onTapCelula(int coluna, int nivel, double hx) {
@@ -2456,6 +2488,7 @@ class _EstantePageState extends State<EstantePage> {
                   onTapCelula:         _onTapCelula,
                   onTapCelulaVisualizar: _onTapCelulaVisualizar,
                   destacadoCodigo:     _destacadoCodigo,
+                  desatualizados:      _desatualizados,
                 )
               : EstanteScene(
                   estanteAtual:         _estanteAtual,
@@ -2465,6 +2498,7 @@ class _EstantePageState extends State<EstantePage> {
                   onTapCelula:          _onTapCelula,
                   onTapCelulaVisualizar: _onTapCelulaVisualizar,
                   destacadoCodigo:      _destacadoCodigo,
+                  desatualizados:       _desatualizados,
                 ),
         ),
 
