@@ -342,6 +342,16 @@ class _LojaPageState extends State<LojaPage> {
                   },
                 ),
               ),
+              // Itens de depósito (Fase 3.1) ficam fora da lista por completo
+              // — só um rodapé discreto avisando quantos foram ocultados.
+              if ((_conferencia?.totalFiltradosDeposito ?? 0) > 0) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '${_conferencia!.totalFiltradosDeposito} itens de depósito ocultos '
+                  'pelo filtro de categorias',
+                  style: const TextStyle(color: Color(0xFF5a6a78), fontSize: 11),
+                ),
+              ],
               const SizedBox(height: 8),
             ],
           ),
@@ -518,6 +528,9 @@ class _BannerConferencia extends StatelessWidget {
     final r     = resultado;
     final vazio = !carregando && (r == null || r.vazioHoje);
     final temSemEndereco = r != null && r.semEndereco.isNotEmpty;
+    final temFiltrados   = r != null && r.totalFiltradosDeposito > 0;
+    final filtradosTexto =
+        temFiltrados ? ' · ${r.totalFiltradosDeposito} depósito (filtrados)' : '';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -540,13 +553,14 @@ class _BannerConferencia extends StatelessWidget {
                   style: TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
                 )
               : GestureDetector(
-                  onTap: temSemEndereco ? onVerSemEndereco : null,
+                  onTap: (temSemEndereco || temFiltrados) ? onVerSemEndereco : null,
                   child: Text(
                     vazio
-                        ? 'Nenhuma conferência pendente hoje 🎉'
+                        ? 'Nenhuma conferência pendente hoje 🎉$filtradosTexto'
                         : 'Conferência do dia: ${r!.totalProdutos} produto(s) · '
                           '${r.totalEstruturas} estrutura(s)'
-                          '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}',
+                          '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
+                          '$filtradosTexto',
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
