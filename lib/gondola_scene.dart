@@ -500,7 +500,9 @@ class GondolaScene extends StatefulWidget {
   final String? destacadoCodigo;
   final int? faceSelecionada;
   // andar é null quando a seleção veio de um label (que não pertence a andar).
-  final void Function(int face, int? andar)? onFaceTap;
+  // x/z são o ponto de interseção do toque na prateleira (null no label) —
+  // permitem escolher a caixa mais próxima quando há várias na mesma face.
+  final void Function(int face, int? andar, double? x, double? z)? onFaceTap;
   // Quando muda para um valor não-nulo, a câmera gira para olhar essa face.
   final int? faceParaCamera;
   // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
@@ -603,7 +605,7 @@ class _GondolaSceneState extends State<GondolaScene> {
     // 1) Label de face 1-6 (hit circular)
     final labelFace = _hitTestLabel(local, rb.size);
     if (labelFace != null) {
-      widget.onFaceTap?.call(labelFace, null);
+      widget.onFaceTap?.call(labelFace, null, null, null);
       return;
     }
 
@@ -614,7 +616,7 @@ class _GondolaSceneState extends State<GondolaScene> {
     if (widget.onTapAndar != null && widget.produtoSelecionadoId != null) {
       widget.onTapAndar!(hit.andar, hit.x, hit.z);
     } else {
-      widget.onFaceTap?.call(faceFromPos(hit.x, hit.z), hit.andar);
+      widget.onFaceTap?.call(faceFromPos(hit.x, hit.z), hit.andar, hit.x, hit.z);
     }
   }
 
