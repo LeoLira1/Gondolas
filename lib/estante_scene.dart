@@ -143,13 +143,20 @@ class EstanteGeometry {
     required CelulaEstante celula,
     required int slot,
     required Color color,
+    bool desatualizado = false,
   }) {
     final xCenter = celula.xMin + wCaixa / 2 + slot * (wCaixa + gap);
+    final x1 = xCenter + wCaixa / 2;
+    final y1 = celula.yTop + hCaixa;
+    final z1 = dCaixa / 2;
     _box(faces,
-        x0: xCenter - wCaixa / 2, x1: xCenter + wCaixa / 2,
-        y0: celula.yTop,          y1: celula.yTop + hCaixa,
-        z0: -dCaixa / 2,          z1: dCaixa / 2,
+        x0: xCenter - wCaixa / 2, x1: x1,
+        y0: celula.yTop,          y1: y1,
+        z0: -dCaixa / 2,          z1: z1,
         color: color);
+    if (desatualizado) {
+      addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: wCaixa * 0.4);
+    }
   }
 }
 
@@ -329,6 +336,9 @@ class EstanteScene extends StatefulWidget {
   final void Function(int coluna, int nivel, double hx)? onTapCelulaVisualizar;
   final String? destacadoCodigo;
   final bool showLabels;
+  // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
+  // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
+  final Set<String> desatualizados;
 
   const EstanteScene({
     super.key,
@@ -340,6 +350,7 @@ class EstanteScene extends StatefulWidget {
     this.onTapCelulaVisualizar,
     this.destacadoCodigo,
     this.showLabels           = true,
+    this.desatualizados       = const {},
   });
 
   @override
@@ -459,8 +470,16 @@ class _EstanteSceneState extends State<EstanteScene> {
       final celula = EstanteGeometry.celulasPara(widget.estanteAtual).firstWhere(
         (c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel,
       );
+      final chave = chaveEnderecoEstoque(
+        produtoCodigo: caixa.produtoId,
+        localTipo:     'estante',
+        localNum:      widget.estanteAtual,
+        faceOuColuna:  caixa.coluna,
+        andarOuNivel:  caixa.nivel,
+      );
       EstanteGeometry.addBoxProduto(extraFaces,
-          celula: celula, slot: caixa.slot, color: cor);
+          celula: celula, slot: caixa.slot, color: cor,
+          desatualizado: widget.desatualizados.contains(chave));
     }
 
     return GestureDetector(

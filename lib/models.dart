@@ -70,6 +70,17 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   return letraDoIndice(offset + row * nColunas + coluna);
 }
 
+/// Chave que identifica unicamente um endereço físico + produto, usada para
+/// casar linhas de estoque_localizado com o conjunto de endereços
+/// desatualizados (Fase 2 — aviso de endereço desatualizado).
+String chaveEnderecoEstoque({
+  required String produtoCodigo,
+  required String localTipo,
+  required int localNum,
+  required int faceOuColuna,
+  required int andarOuNivel,
+}) => '$produtoCodigo|$localTipo|$localNum|$faceOuColuna|$andarOuNivel';
+
 class Produto {
   final String codigo;
   final String nome;
