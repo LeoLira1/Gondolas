@@ -895,6 +895,10 @@ class _GondolaPageState extends State<GondolaPage> {
   int? _andarSelecionado;
   int? _faceParaCamera;
 
+  // Caixa exata tocada na cena — uma face+andar pode ter caixas de vários
+  // produtos, então o endereço sozinho não identifica qual foi selecionada.
+  CaixaColocada? _caixaSelecionada;
+
   final Map<int, List<CaixaColocada>> _caixas = {};
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
@@ -1010,7 +1014,10 @@ class _GondolaPageState extends State<GondolaPage> {
     final nova = (_gondolaAtual + delta).clamp(1, 12);
     setState(() {
       _gondolaAtual     = nova;
-      _carregandoLayout = _dbConectado;
+      // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
+      // a barra de progresso só aparece na primeira visita à gôndola.
+      _carregandoLayout = _dbConectado && !_caixas.containsKey(nova);
+      _caixaSelecionada = null;
     });
     if (_dbConectado) _carregarLayout(nova);
   }
@@ -1040,32 +1047,35 @@ class _GondolaPageState extends State<GondolaPage> {
 
   void _onTapAndar(int andar, double x, double z) {
     if (_produtoSelecionadoId == null) return;
+    final nova = CaixaColocada(
+      andar:     andar,
+      produtoId: _produtoSelecionadoId!,
+      x:         x,
+      z:         z,
+    );
     setState(() {
-      _caixas[_gondolaAtual] = [
-        ..._caixasAtuais,
-        CaixaColocada(
-          andar:     andar,
-          produtoId: _produtoSelecionadoId!,
-          x:         x,
-          z:         z,
-        ),
-      ];
+      _caixas[_gondolaAtual] = [..._caixasAtuais, nova];
       _faceSelecionada  = faceFromPos(x, z);
       _andarSelecionado = andar;
+      _caixaSelecionada = nova;
     });
   }
 
-  void _onFaceTap(int face, int? andar) {
+  void _onFaceTap(int face, int? andar, double? x, double? z) {
+    // Uma face+andar pode ter várias caixas de produtos diferentes: escolhe
+    // a mais próxima do ponto exato do toque, não a primeira cadastrada.
+    final caixa = (andar != null && x != null && z != null)
+        ? _caixaMaisProximaEm(face, andar, x, z)
+        : null;
     setState(() {
       _faceSelecionada = face;
       if (andar != null) _andarSelecionado = andar;
+      _caixaSelecionada = caixa;
     });
     // Só abre o dialog de quantidade quando o toque veio de uma prateleira
     // (andar != null) e há de fato uma caixa colocada ali — tap num label
     // de face (andar == null) ou numa prateleira vazia só seleciona a face.
-    if (andar == null) return;
-    final caixa = _caixaEm(face, andar);
-    if (caixa == null) return;
+    if (andar == null || caixa == null) return;
     _abrirQuantidade(
       produtoCodigo: caixa.produtoId,
       localTipo:     'gondola',
@@ -1082,11 +1092,31 @@ class _GondolaPageState extends State<GondolaPage> {
     return null;
   }
 
-  // Produto da caixa no endereço selecionado (face + andar) — alimenta o nome
-  // exibido no chip de endereço para o usuário saber qual produto selecionou.
+  CaixaColocada? _caixaMaisProximaEm(int face, int andar, double x, double z) {
+    CaixaColocada? melhor;
+    var melhorDist = double.infinity;
+    for (final c in _caixasAtuais) {
+      if (c.andar != andar || faceFromPos(c.x, c.z) != face) continue;
+      final dx = c.x - x, dz = c.z - z;
+      final dist = dx * dx + dz * dz;
+      if (dist < melhorDist) {
+        melhorDist = dist;
+        melhor     = c;
+      }
+    }
+    return melhor;
+  }
+
+  // Produto da caixa no endereço selecionado — alimenta o nome exibido no
+  // chip de endereço para o usuário saber qual produto selecionou. Prioriza
+  // a caixa exata tocada; cai no endereço (face + andar) quando ela não vale
+  // mais (layout recarregado, caixa removida).
   Produto? get _produtoNoEnderecoSelecionado {
     if (_faceSelecionada == null || _andarSelecionado == null) return null;
-    final caixa = _caixaEm(_faceSelecionada!, _andarSelecionado!);
+    final selecionada = _caixaSelecionada;
+    final caixa = (selecionada != null && _caixasAtuais.contains(selecionada))
+        ? selecionada
+        : _caixaEm(_faceSelecionada!, _andarSelecionado!);
     if (caixa == null) return null;
     final matches = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
     if (matches.isNotEmpty) return matches.first;
@@ -1302,15 +1332,17 @@ class _GondolaPageState extends State<GondolaPage> {
       return;
     }
 
-    final encontrado = await TursoService().buscarProduto(produto.codigo);
+    // Consulta gôndolas e estantes em paralelo: corta pela metade a latência
+    // do caso em que o produto só existe numa estante.
+    final resultados = await Future.wait([
+      TursoService().buscarProduto(produto.codigo),
+      TursoService().buscarProdutoEstante(produto.codigo),
+    ]);
     if (!mounted) return;
+    final encontrado = resultados[0] as CaixaLayout?;
+    final naEstante  = resultados[1] as CaixaLayoutEstante?;
 
     if (encontrado == null) {
-      // fallback: tenta na estante
-      final naEstante =
-          await TursoService().buscarProdutoEstante(produto.codigo);
-      if (!mounted) return;
-
       if (naEstante != null) {
         final nivProduto = niveisProdutoPara(naEstante.estanteNum);
         final nivelNomes =
@@ -1353,14 +1385,26 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
 
     _highlightTimer?.cancel();
-    final andarNome = ['Base', 'Meio', 'Topo'][encontrado.andar.clamp(0, 2)];
+    final andar     = encontrado.andar.clamp(0, 2);
+    final andarNome = ['Base', 'Meio', 'Topo'][andar];
     final face      = faceFromPos(encontrado.posX, encontrado.posZ);
+    final caixasNovas = layouts.map(_caixaDoLayout).toList();
+    CaixaColocada? caixaEncontrada;
+    for (final c in caixasNovas) {
+      if (c.produtoId == produto.codigo &&
+          c.andar == andar &&
+          faceFromPos(c.x, c.z) == face) {
+        caixaEncontrada = c;
+        break;
+      }
+    }
     setState(() {
-      _caixas[encontrado.gondolaNum] = layouts.map(_caixaDoLayout).toList();
+      _caixas[encontrado.gondolaNum] = caixasNovas;
       _carregandoLayout = false;
       _destacadoCodigo  = produto.codigo;
       _faceSelecionada  = face;
-      _andarSelecionado = encontrado.andar.clamp(0, 2);
+      _andarSelecionado = andar;
+      _caixaSelecionada = caixaEncontrada;
       _faceParaCamera   = face;
       _resultadoBusca   =
           '📍 ${produto.nome}\nGôndola ${encontrado.gondolaNum} · Face $face · Andar $andarNome';
@@ -1416,6 +1460,7 @@ class _GondolaPageState extends State<GondolaPage> {
       _destacadoCodigo      = null;
       _faceSelecionada      = null;
       _andarSelecionado     = null;
+      _caixaSelecionada     = null;
       _faceParaCamera       = null;
       _destacadosCodigos    = widget.codigosConferencia ?? {};
     });
@@ -2261,7 +2306,9 @@ class _EstantePageState extends State<EstantePage> {
     final nova = (_estanteAtual + delta).clamp(1, 12);
     setState(() {
       _estanteAtual     = nova;
-      _carregandoLayout = _dbConectado;
+      // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
+      // a barra de progresso só aparece na primeira visita à estante.
+      _carregandoLayout = _dbConectado && !_caixas.containsKey(nova);
       // Células mudam de geometria entre estantes: seleção antiga não vale.
       _colunaSelecionada = null;
       _nivelSelecionado  = null;
@@ -2633,16 +2680,17 @@ class _EstantePageState extends State<EstantePage> {
       return;
     }
 
-    final encontrado =
-        await TursoService().buscarProdutoEstante(produto.codigo);
+    // Consulta estantes e gôndolas em paralelo: corta pela metade a latência
+    // do caso em que o produto só existe numa gôndola.
+    final resultados = await Future.wait([
+      TursoService().buscarProdutoEstante(produto.codigo),
+      TursoService().buscarProduto(produto.codigo),
+    ]);
     if (!mounted) return;
+    final encontrado = resultados[0] as CaixaLayoutEstante?;
+    final naGondola  = resultados[1] as CaixaLayout?;
 
     if (encontrado == null) {
-      // fallback: tenta na gôndola
-      final naGondola =
-          await TursoService().buscarProduto(produto.codigo);
-      if (!mounted) return;
-
       if (naGondola != null) {
         final andarNome =
             ['Base', 'Meio', 'Topo'][naGondola.andar.clamp(0, 2)];
