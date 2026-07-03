@@ -1,6 +1,53 @@
 import 'package:libsql_dart/libsql_dart.dart';
 import 'turso_service.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Filtro de categorias de depósito (Fase 3.1)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// O mapa 3D representa só a LOJA (gôndolas/estantes de equipamentos e itens
+// de balcão) — produtos destas categorias moram no DEPÓSITO e nunca terão
+// endereço cadastrado, então só inflariam a lista "sem endereço". Ficam de
+// fora do Modo Conferência por completo (nem estrutura, nem sem endereço),
+// mas continuam contados à parte pro total bater com o dashboard.
+//
+// Edite esta lista livremente — é o único lugar que precisa mudar.
+const List<String> categoriasExcluidasKeywords = [
+  'HERBICID',      // herbicidas
+  'FUNGICID',      // fungicidas
+  'INSETICID',     // inseticidas
+  'INOCULANTE',
+  'LUBRIFIC',      // óleos lubrificantes (categoria LUBRIFICANTES)
+  'OLEO MINERAL',
+  'OLEO VEGETAL',
+  'ADUBO',         // pega ADUBOS, ADUBOS FOLIARES etc.
+  'RACAO',
+  'MATURADOR',
+  'FORMICID',
+  'NEMATICID',
+];
+
+// Keywords cuja categoria pode variar/estar errada no cadastro: além da
+// categoria, testamos também o nome do produto normalizado.
+const List<String> _keywordsTambemNoNomeProduto = [
+  'OLEO MINERAL',
+  'OLEO VEGETAL',
+];
+
+/// Uppercase + remoção de acentos, pra comparar categoria/nome sem depender
+/// de como foram digitados no cadastro (Ó vs O, Ç vs C etc.).
+String normalizarTexto(String s) {
+  const comAcento = 'ÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ';
+  const semAcento  = 'AAAAAEEEEIIIIOOOOOUUUUCN';
+  final upper  = s.toUpperCase();
+  final buffer = StringBuffer();
+  for (final ch in upper.split('')) {
+    final idx = comAcento.indexOf(ch);
+    buffer.write(idx == -1 ? ch : semAcento[idx]);
+  }
+  return buffer.toString();
+}
+
 /// Um item pendente de conferência — linha de contagem_itens (tabela do
 /// dashboard Streamlit, SOMENTE LEITURA aqui) ainda não confirmada hoje.
 class ItemPendente {
@@ -15,6 +62,19 @@ class ItemPendente {
     required this.categoria,
     required this.qtdEstoque,
   });
+}
+
+/// Verifica se um pendente pertence a uma categoria de depósito (ver
+/// [categoriasExcluidasKeywords]) e por isso deve ficar fora do Modo
+/// Conferência por completo.
+bool ehCategoriaDeDeposito(ItemPendente item) {
+  final categoriaNorm = normalizarTexto(item.categoria);
+  if (categoriasExcluidasKeywords.any(categoriaNorm.contains)) return true;
+
+  // OLEO MINERAL/VEGETAL podem estar cadastrados numa categoria diferente:
+  // testa também o nome do produto antes de descartar.
+  final produtoNorm = normalizarTexto(item.produto);
+  return _keywordsTambemNoNomeProduto.any(produtoNorm.contains);
 }
 
 /// Uma estrutura do mapa (gôndola ou estante) que contém pendentes de hoje.
@@ -38,18 +98,24 @@ class EstruturaConferencia {
 class ModoConferenciaResultado {
   final Map<String, EstruturaConferencia> estruturas; // chave '$tipo:$numero'
   final List<ItemPendente> semEndereco;
-  final int totalProdutos; // pendentes únicos de hoje (contagem_itens)
+  final int totalProdutos; // pendentes únicos de hoje relevantes à loja
+  // Pendentes de categorias de depósito (ver categoriasExcluidasKeywords),
+  // ocultos do Modo Conferência — contados à parte pro total bater com o
+  // dashboard (totalProdutos + totalFiltradosDeposito = pendentes do dia).
+  final int totalFiltradosDeposito;
 
   const ModoConferenciaResultado({
     required this.estruturas,
     required this.semEndereco,
     required this.totalProdutos,
+    required this.totalFiltradosDeposito,
   });
 
   static const vazio = ModoConferenciaResultado(
     estruturas: {},
     semEndereco: [],
     totalProdutos: 0,
+    totalFiltradosDeposito: 0,
   );
 
   int get totalEstruturas => estruturas.length;
@@ -79,8 +145,31 @@ class ModoConferenciaService {
     if (client == null) return ModoConferenciaResultado.vazio;
 
     try {
-      final pendentes = await _buscarPendentes(client);
-      if (pendentes.isEmpty) return ModoConferenciaResultado.vazio;
+      final todosPendentes = await _buscarPendentes(client);
+      if (todosPendentes.isEmpty) return ModoConferenciaResultado.vazio;
+
+      // Filtro de categorias de depósito (Fase 3.1): aplicado logo após
+      // buscar os pendentes, ANTES do cruzamento com os layouts — esses
+      // itens nunca terão endereço no mapa da loja. Contados à parte pro
+      // total do banner continuar reconciliável com o dashboard.
+      final pendentes = <ItemPendente>[];
+      var filtradosDeposito = 0;
+      for (final item in todosPendentes) {
+        if (ehCategoriaDeDeposito(item)) {
+          filtradosDeposito++;
+        } else {
+          pendentes.add(item);
+        }
+      }
+
+      if (pendentes.isEmpty) {
+        return ModoConferenciaResultado(
+          estruturas: const {},
+          semEndereco: const [],
+          totalProdutos: 0,
+          totalFiltradosDeposito: filtradosDeposito,
+        );
+      }
 
       final codigos = pendentes.map((p) => p.codigo).toList();
       final resultados = await Future.wait([
@@ -119,6 +208,7 @@ class ModoConferenciaService {
         },
         semEndereco:  semEndereco,
         totalProdutos: pendentes.length,
+        totalFiltradosDeposito: filtradosDeposito,
       );
     } catch (_) {
       return ModoConferenciaResultado.vazio;
