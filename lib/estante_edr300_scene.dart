@@ -2,7 +2,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
-import 'models.dart' show CaixaColocadaEstante, chaveEnderecoEstoque, estanteEdr300Num;
+import 'models.dart'
+    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano, estanteEdr300Num;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Edr300Cell — célula de produto na estante metálica
@@ -382,6 +383,10 @@ class Edr300Scene extends StatefulWidget {
   // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
   // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
   final Set<String>                                     desatualizados;
+  // Códigos destacados pelo Modo Conferência (Fase 3) — generalização de
+  // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
+  // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
+  final Set<String>                                     destacadosCodigos;
 
   const Edr300Scene({
     super.key,
@@ -396,6 +401,7 @@ class Edr300Scene extends StatefulWidget {
     this.onTapCelulaVisualizar,
     this.destacadoCodigo,
     this.desatualizados      = const {},
+    this.destacadosCodigos   = const {},
   });
 
   @override
@@ -535,10 +541,13 @@ class _Edr300SceneState extends State<Edr300Scene>
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
     for (final caixa in widget.caixas) {
+      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isHighlighted
-          ? const Color(0xFFe87722)
-          : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final celulaList = widget.geometry.cells
           .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
           .toList();

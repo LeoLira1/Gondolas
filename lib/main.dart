@@ -7,6 +7,7 @@ import 'estante_scene.dart';
 import 'estoque_localizado_service.dart';
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
+import 'modo_conferencia_service.dart';
 import 'models.dart';
 import 'quantidade_dialog.dart';
 import 'turso_service.dart';
@@ -112,6 +113,12 @@ class _LojaPageState extends State<LojaPage> {
   bool                    _semResultados  = false;
   Timer?                  _debounce;
 
+  // Modo Conferência (Fase 3): transforma a lista de pendentes do dia numa
+  // rota visual no mapa. _conferencia é null até a primeira carga.
+  bool                        _modoConferencia     = false;
+  bool                        _carregandoConferencia = false;
+  ModoConferenciaResultado?   _conferencia;
+
   @override
   void initState() {
     super.initState();
@@ -197,8 +204,24 @@ class _LojaPageState extends State<LojaPage> {
     _searchFocus.unfocus();
   }
 
-  void _verDetalhes(int idx) {
+  Future<void> _verDetalhes(int idx) async {
     final item = itensLoja[idx];
+
+    if (_modoConferencia) {
+      final estrutura =
+          _conferencia?.estruturas['${item.tipo}:${item.numero}'];
+      final codigos = estrutura?.codigos ?? const <String>{};
+      await Navigator.push(context, MaterialPageRoute(
+        builder: (_) => item.tipo == 'gondola'
+            ? GondolaPage(gondolaInicial: item.numero, codigosConferencia: codigos)
+            : EstantePage(estanteInicial: item.numero, codigosConferencia: codigos),
+      ));
+      // O usuário pode ter confirmado itens no app de contagem enquanto
+      // estava na cena — recarrega pra refletir o estado atual ao voltar.
+      if (mounted && _modoConferencia) _carregarConferencia();
+      return;
+    }
+
     final produto = _produtoSelecionado != null
         ? ProdutoLoja(
             nome:          _produtoSelecionado!.nome,
@@ -227,6 +250,106 @@ class _LojaPageState extends State<LojaPage> {
     }
   }
 
+  // ── Modo Conferência (Fase 3) ──────────────────────────────────────────────
+
+  Future<void> _toggleModoConferencia() async {
+    if (_modoConferencia) {
+      setState(() {
+        _modoConferencia    = false;
+        _conferencia        = null;
+        _selecionadoIdx     = null;
+        _produtoSelecionado = null;
+      });
+      return;
+    }
+    setState(() {
+      _modoConferencia    = true;
+      _selecionadoIdx     = null;
+      _produtoSelecionado = null;
+    });
+    await _carregarConferencia();
+  }
+
+  Future<void> _carregarConferencia() async {
+    setState(() => _carregandoConferencia = true);
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    if (!mounted) return;
+    setState(() {
+      _conferencia           = resultado;
+      _carregandoConferencia = false;
+    });
+  }
+
+  // idx (em itensLoja) → nº de pendentes na estrutura, pronto pro painter.
+  Map<int, int> get _contagemPorIdx {
+    final conferencia = _conferencia;
+    if (conferencia == null) return {};
+    final mapa = <int, int>{};
+    for (final estrutura in conferencia.estruturas.values) {
+      final idx = itensLoja.indexWhere(
+          (it) => it.tipo == estrutura.tipo && it.numero == estrutura.numero);
+      if (idx != -1) mapa[idx] = estrutura.itens.length;
+    }
+    return mapa;
+  }
+
+  void _mostrarSemEndereco() {
+    final itens = _conferencia?.semEndereco ?? const [];
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF141a22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Sem endereço no mapa',
+                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${itens.length} produto(s) pendente(s) não têm endereço cadastrado — '
+                'confira "no braço" e cadastre no mapa quando possível.',
+                style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: itens.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: Color(0xFF232f3a), height: 16),
+                  itemBuilder: (_, i) {
+                    final item = itens[i];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(item.produto,
+                            style: const TextStyle(color: Colors.white, fontSize: 13)),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${item.codigo} · ${item.categoria}',
+                          style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _limparBusca() {
     _debounce?.cancel();
     _searchCtrl.clear();
@@ -252,10 +375,12 @@ class _LojaPageState extends State<LojaPage> {
         children: [
           // ── Cena 3D (fundo) ─────────────────────────────────────────────
           LojaScene(
-            selecionadoIdx: _selecionadoIdx,
-            onSelecionado:  _onSelecionado,
-            onVerDetalhes:  _verDetalhes,
-            focarEm:        _focarEm,
+            selecionadoIdx:       _selecionadoIdx,
+            onSelecionado:        _onSelecionado,
+            onVerDetalhes:        _verDetalhes,
+            focarEm:              _focarEm,
+            modoConferencia:      _modoConferencia,
+            contagemConferencia:  _contagemPorIdx,
           ),
 
           // ── HUD superior: busca + legenda + título ───────────────────────
@@ -267,7 +392,7 @@ class _LojaPageState extends State<LojaPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Linha: campo de busca + legenda
+                    // Linha: campo de busca + legenda + toggle conferência
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -285,10 +410,25 @@ class _LojaPageState extends State<LojaPage> {
                           ),
                         ),
                         const SizedBox(width: 10),
+                        _ModoConferenciaToggle(
+                          ativo: _modoConferencia,
+                          onTap: _toggleModoConferencia,
+                        ),
+                        const SizedBox(width: 10),
                         const _LegendRow(),
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (_modoConferencia)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _BannerConferencia(
+                          carregando: _carregandoConferencia,
+                          resultado:  _conferencia,
+                          onRefresh:  _carregarConferencia,
+                          onVerSemEndereco: _mostrarSemEndereco,
+                        ),
+                      ),
                     // Título / dica
                     Text(
                       'CAMDA · Mapa da loja — toque numa estrutura ou busque um produto',
@@ -305,7 +445,7 @@ class _LojaPageState extends State<LojaPage> {
           ),
 
           // ── Card inferior ────────────────────────────────────────────────
-          if (item != null)
+          if (item != null && !_modoConferencia)
             Positioned(
               bottom: 24,
               left: 20,
@@ -318,6 +458,107 @@ class _LojaPageState extends State<LojaPage> {
             ),
         ],
       ),
+    );
+  }
+}
+
+// ── _ModoConferenciaToggle ──────────────────────────────────────────────────
+
+class _ModoConferenciaToggle extends StatelessWidget {
+  final bool         ativo;
+  final VoidCallback onTap;
+
+  const _ModoConferenciaToggle({required this.ativo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color: ativo
+              ? corConferenciaCiano.withValues(alpha: 0.18)
+              : const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: ativo
+                ? corConferenciaCiano
+                : Colors.white.withValues(alpha: 0.10),
+          ),
+        ),
+        child: Icon(
+          ativo ? Icons.fact_check : Icons.fact_check_outlined,
+          color: ativo ? corConferenciaCiano : const Color(0xFF8a877f),
+          size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+// ── _BannerConferencia ───────────────────────────────────────────────────────
+
+class _BannerConferencia extends StatelessWidget {
+  final bool                      carregando;
+  final ModoConferenciaResultado? resultado;
+  final VoidCallback              onRefresh;
+  final VoidCallback              onVerSemEndereco;
+
+  const _BannerConferencia({
+    required this.carregando,
+    required this.resultado,
+    required this.onRefresh,
+    required this.onVerSemEndereco,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final r     = resultado;
+    final vazio = !carregando && (r == null || r.vazioHoje);
+    final temSemEndereco = r != null && r.semEndereco.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xE60d2226),
+        border: Border.all(color: corConferenciaCiano.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(
+          vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
+          color: corConferenciaCiano,
+          size: 15,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: carregando
+              ? const Text(
+                  'Carregando conferência do dia...',
+                  style: TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
+                )
+              : GestureDetector(
+                  onTap: temSemEndereco ? onVerSemEndereco : null,
+                  child: Text(
+                    vazio
+                        ? 'Nenhuma conferência pendente hoje 🎉'
+                        : 'Conferência do dia: ${r!.totalProdutos} produto(s) · '
+                          '${r.totalEstruturas} estrutura(s)'
+                          '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}',
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
+          onPressed: carregando ? null : onRefresh,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          tooltip: 'Atualizar',
+        ),
+      ]),
     );
   }
 }
@@ -613,11 +854,15 @@ class _LocationCard extends StatelessWidget {
 class GondolaPage extends StatefulWidget {
   final int          gondolaInicial;
   final ProdutoLoja? produtoDestacado;
+  // Modo Conferência (Fase 3): códigos pendentes de hoje que moram nesta
+  // gôndola, vindos do mapa — acende todas as caixas de uma vez.
+  final Set<String>? codigosConferencia;
 
   const GondolaPage({
     super.key,
     this.gondolaInicial   = 1,
     this.produtoDestacado,
+    this.codigosConferencia,
   });
 
   @override
@@ -641,6 +886,9 @@ class _GondolaPageState extends State<GondolaPage> {
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
   // e recarregado após salvar no dialog de quantidade.
   Set<String> _desatualizados = {};
+
+  // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
+  late Set<String> _destacadosCodigos;
 
   List<Produto> _produtos           = [];
   bool          _dbConectado        = false;
@@ -686,11 +934,12 @@ class _GondolaPageState extends State<GondolaPage> {
   @override
   void initState() {
     super.initState();
-    _gondolaAtual     = widget.gondolaInicial;
-    _destacadoCodigo  = widget.produtoDestacado?.produtoCodigo;
-    _faceSelecionada  = widget.produtoDestacado?.face;
-    _andarSelecionado = widget.produtoDestacado?.andar;
-    _faceParaCamera   = widget.produtoDestacado?.face;
+    _gondolaAtual       = widget.gondolaInicial;
+    _destacadoCodigo    = widget.produtoDestacado?.produtoCodigo;
+    _faceSelecionada    = widget.produtoDestacado?.face;
+    _andarSelecionado   = widget.produtoDestacado?.andar;
+    _faceParaCamera     = widget.produtoDestacado?.face;
+    _destacadosCodigos  = widget.codigosConferencia ?? {};
     _inicializar();
   }
 
@@ -1137,6 +1386,7 @@ class _GondolaPageState extends State<GondolaPage> {
       _faceSelecionada      = null;
       _andarSelecionado     = null;
       _faceParaCamera       = null;
+      _destacadosCodigos    = widget.codigosConferencia ?? {};
     });
     _ctrl1.clear();
     _ctrl2.clear();
@@ -1256,6 +1506,7 @@ class _GondolaPageState extends State<GondolaPage> {
               onFaceTap:            _onFaceTap,
               faceParaCamera:       _faceParaCamera,
               desatualizados:       _desatualizados,
+              destacadosCodigos:    _destacadosCodigos,
             ),
             if (_faceSelecionada != null)
               Positioned(
@@ -1809,11 +2060,15 @@ class _ArrowBtn extends StatelessWidget {
 class EstantePage extends StatefulWidget {
   final int          estanteInicial;
   final ProdutoLoja? produtoDestacado;
+  // Modo Conferência (Fase 3): códigos pendentes de hoje que moram nesta
+  // estante, vindos do mapa — acende todas as caixas de uma vez.
+  final Set<String>? codigosConferencia;
 
   const EstantePage({
     super.key,
     this.estanteInicial  = 1,
     this.produtoDestacado,
+    this.codigosConferencia,
   });
 
   @override
@@ -1831,6 +2086,9 @@ class _EstantePageState extends State<EstantePage> {
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
   // e recarregado após salvar no dialog de quantidade.
   Set<String> _desatualizados = {};
+
+  // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
+  late Set<String> _destacadosCodigos;
 
   List<Produto> _produtos           = [];
   bool          _dbConectado        = false;
@@ -1874,8 +2132,9 @@ class _EstantePageState extends State<EstantePage> {
   @override
   void initState() {
     super.initState();
-    _estanteAtual    = widget.estanteInicial;
-    _destacadoCodigo = widget.produtoDestacado?.produtoCodigo;
+    _estanteAtual      = widget.estanteInicial;
+    _destacadoCodigo   = widget.produtoDestacado?.produtoCodigo;
+    _destacadosCodigos = widget.codigosConferencia ?? {};
     _inicializar();
   }
 
@@ -2364,6 +2623,7 @@ class _EstantePageState extends State<EstantePage> {
       _sugestoes1           = [];
       _sugestoes2           = [];
       _destacadoCodigo      = null;
+      _destacadosCodigos    = widget.codigosConferencia ?? {};
     });
     _ctrl1.clear();
     _ctrl2.clear();
@@ -2489,6 +2749,7 @@ class _EstantePageState extends State<EstantePage> {
                   onTapCelulaVisualizar: _onTapCelulaVisualizar,
                   destacadoCodigo:     _destacadoCodigo,
                   desatualizados:      _desatualizados,
+                  destacadosCodigos:   _destacadosCodigos,
                 )
               : EstanteScene(
                   estanteAtual:         _estanteAtual,
@@ -2499,6 +2760,7 @@ class _EstantePageState extends State<EstantePage> {
                   onTapCelulaVisualizar: _onTapCelulaVisualizar,
                   destacadoCodigo:      _destacadoCodigo,
                   desatualizados:       _desatualizados,
+                  destacadosCodigos:    _destacadosCodigos,
                 ),
         ),
 

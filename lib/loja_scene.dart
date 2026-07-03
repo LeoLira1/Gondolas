@@ -1,7 +1,9 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
+import 'models.dart' show corConferenciaCiano;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -116,7 +118,12 @@ class LojaGeometry {
   static double _nivelY(int i) =>
       i * (_estanteH - _shelfT) / (_estanteNiveis - 1);
 
-  static List<Face> buildFaces(int? selecionadoIdx, double pulseT) {
+  static List<Face> buildFaces(
+    int? selecionadoIdx,
+    double pulseT, {
+    bool modoConferencia = false,
+    Set<int> idxConferencia = const {},
+  }) {
     final faces = <Face>[];
 
     // Paredes perimetrais
@@ -132,7 +139,16 @@ class LojaGeometry {
       final hasSel = selecionadoIdx != null;
 
       final Color cor;
-      if (!hasSel) {
+      if (modoConferencia) {
+        // Modo Conferência (Fase 3) substitui o esquema de seleção normal:
+        // ciano pulsante nas estruturas com pendentes, apagado nas demais.
+        if (idxConferencia.contains(i)) {
+          final pulse = (0.35 + 0.25 * math.sin(pulseT * 2.2)).clamp(0.0, 1.0);
+          cor = Color.lerp(corConferenciaCiano, Colors.white, pulse * 0.3)!;
+        } else {
+          cor = _corApagado;
+        }
+      } else if (!hasSel) {
         cor = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
       } else if (isSel) {
         final base  = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
@@ -295,15 +311,31 @@ class LojaPainter extends CustomPainter {
   final Camera camera;
   final int?   selecionadoIdx;
   final double pulseT;
+  // Modo Conferência (Fase 3): quando ativo, idxContagem traz o índice de
+  // cada estrutura com pendentes (em itensLoja) e a contagem de produtos
+  // pendentes nela, pra desenhar o badge "G9 · 3" sem nenhuma query no paint.
+  final bool          modoConferencia;
+  final Map<int, int> contagemConferencia;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
-  LojaPainter(this.camera, {this.selecionadoIdx, this.pulseT = 0});
+  LojaPainter(
+    this.camera, {
+    this.selecionadoIdx,
+    this.pulseT = 0,
+    this.modoConferencia = false,
+    this.contagemConferencia = const {},
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = _corBg);
-    final faces = LojaGeometry.buildFaces(selecionadoIdx, pulseT);
+    final faces = LojaGeometry.buildFaces(
+      selecionadoIdx,
+      pulseT,
+      modoConferencia: modoConferencia,
+      idxConferencia: contagemConferencia.keys.toSet(),
+    );
     _project(faces, size);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
@@ -519,16 +551,63 @@ class LojaPainter extends CustomPainter {
         tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
       }
     }
+
+    // Badges do Modo Conferência (Fase 3): contador de pendentes por
+    // estrutura, sempre visível (sem culling de ângulo), acima do topo dela.
+    if (modoConferencia) {
+      for (final entry in contagemConferencia.entries) {
+        final idx = entry.key;
+        if (idx < 0 || idx >= itensLoja.length) continue;
+        final item = itensLoja[idx];
+        final hit  = project(Vec3(item.x, 1.35, item.z));
+        if (hit == null) continue;
+        final (screen, cz) = hit;
+
+        final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
+        final texto   = '$prefixo${item.numero} · ${entry.value}';
+        final fontSize = 13.0 * (9.0 / cz).clamp(0.6, 1.4);
+
+        final tp = TextPainter(
+          text: TextSpan(
+            text: texto,
+            style: TextStyle(
+              color:      const Color(0xFF04232a),
+              fontSize:   fontSize,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+
+        final padH  = fontSize * 0.5;
+        final padV  = fontSize * 0.28;
+        final rect  = Rect.fromCenter(
+          center: screen,
+          width:  tp.width + padH * 2,
+          height: tp.height + padV * 2,
+        );
+        final rrect = RRect.fromRectAndRadius(rect, Radius.circular(rect.height / 2));
+
+        canvas.drawRRect(rrect, Paint()..color = corConferenciaCiano.withValues(alpha: 0.94));
+        canvas.drawRRect(rrect, Paint()
+          ..color       = const Color(0xFF0b3a42)
+          ..style       = PaintingStyle.stroke
+          ..strokeWidth = 1.2);
+        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+      }
+    }
   }
 
   @override
   bool shouldRepaint(LojaPainter old) =>
-      old.camera.rotY     != camera.rotY     ||
-      old.camera.rotX     != camera.rotX     ||
-      old.camera.dist     != camera.dist     ||
-      old.camera.target.x != camera.target.x ||
-      old.camera.target.z != camera.target.z ||
-      old.selecionadoIdx  != selecionadoIdx  ||
+      old.camera.rotY         != camera.rotY         ||
+      old.camera.rotX         != camera.rotX         ||
+      old.camera.dist         != camera.dist         ||
+      old.camera.target.x     != camera.target.x     ||
+      old.camera.target.z     != camera.target.z     ||
+      old.selecionadoIdx      != selecionadoIdx       ||
+      old.modoConferencia     != modoConferencia      ||
+      !mapEquals(old.contagemConferencia, contagemConferencia) ||
       (old.pulseT - pulseT).abs() > 0.001;
 }
 
@@ -539,6 +618,12 @@ class LojaScene extends StatefulWidget {
   final void Function(int? idx)    onSelecionado;
   final void Function(int idx)?    onVerDetalhes;
   final Vec3?                      focarEm;
+  // Modo Conferência (Fase 3): quando ativo, um toque numa estrutura com
+  // pendentes abre a cena dela direto (sem passar pela seleção normal de
+  // duas etapas); contagemConferencia mapeia índice em itensLoja → nº de
+  // produtos pendentes ali, usado tanto pro destaque quanto pro badge.
+  final bool          modoConferencia;
+  final Map<int, int> contagemConferencia;
 
   const LojaScene({
     super.key,
@@ -546,6 +631,8 @@ class LojaScene extends StatefulWidget {
     required this.onSelecionado,
     this.onVerDetalhes,
     this.focarEm,
+    this.modoConferencia = false,
+    this.contagemConferencia = const {},
   });
 
   @override
@@ -610,7 +697,7 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
     if (!mounted) return;
     bool dirty = false;
 
-    if (widget.selecionadoIdx != null) {
+    if (widget.selecionadoIdx != null || widget.modoConferencia) {
       _pulseT += 0.04;
       dirty = true;
     }
@@ -714,6 +801,18 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
     final rb = _key.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
     final idx = _hitTest(rb.globalToLocal(globalTap), rb.size);
+
+    if (widget.modoConferencia) {
+      // No Modo Conferência, um único toque numa estrutura com pendentes já
+      // abre a cena dela — não há necessidade do fluxo normal de duas etapas.
+      if (idx != null && widget.contagemConferencia.containsKey(idx)) {
+        widget.onVerDetalhes?.call(idx);
+      } else {
+        widget.onSelecionado(idx);
+      }
+      return;
+    }
+
     if (idx != null && idx == widget.selecionadoIdx) {
       widget.onVerDetalhes?.call(idx);
     } else {
@@ -798,8 +897,10 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
         key:     _key,
         painter: LojaPainter(
           _camera,
-          selecionadoIdx: widget.selecionadoIdx,
-          pulseT:         _pulseT,
+          selecionadoIdx:       widget.selecionadoIdx,
+          pulseT:               _pulseT,
+          modoConferencia:      widget.modoConferencia,
+          contagemConferencia:  widget.contagemConferencia,
         ),
         child: const SizedBox.expand(),
       ),
