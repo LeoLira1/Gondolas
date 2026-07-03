@@ -339,6 +339,10 @@ class EstanteScene extends StatefulWidget {
   // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
   // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
   final Set<String> desatualizados;
+  // Códigos destacados pelo Modo Conferência (Fase 3) — generalização de
+  // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
+  // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
+  final Set<String> destacadosCodigos;
 
   const EstanteScene({
     super.key,
@@ -351,6 +355,7 @@ class EstanteScene extends StatefulWidget {
     this.destacadoCodigo,
     this.showLabels           = true,
     this.desatualizados       = const {},
+    this.destacadosCodigos    = const {},
   });
 
   @override
@@ -463,10 +468,13 @@ class _EstanteSceneState extends State<EstanteScene> {
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
     for (final caixa in widget.caixas) {
+      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isHighlighted
-          ? const Color(0xFFe87722)
-          : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final celula = EstanteGeometry.celulasPara(widget.estanteAtual).firstWhere(
         (c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel,
       );

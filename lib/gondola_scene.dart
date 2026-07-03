@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'models.dart' show faceFromPos, chaveEnderecoEstoque;
+import 'models.dart' show faceFromPos, chaveEnderecoEstoque, corConferenciaCiano;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Faces do hexágono — convenção fixa para todas as gôndolas
@@ -506,6 +506,10 @@ class GondolaScene extends StatefulWidget {
   // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
   // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
   final Set<String> desatualizados;
+  // Códigos destacados pelo Modo Conferência (Fase 3) — generalização de
+  // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
+  // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
+  final Set<String> destacadosCodigos;
 
   const GondolaScene({
     super.key,
@@ -519,6 +523,7 @@ class GondolaScene extends StatefulWidget {
     this.onFaceTap,
     this.faceParaCamera,
     this.desatualizados = const {},
+    this.destacadosCodigos = const {},
   });
 
   @override
@@ -705,10 +710,13 @@ class _GondolaSceneState extends State<GondolaScene> {
     // Build box faces from current gondola's placed boxes
     final extraFaces = <Face>[];
     for (final caixa in widget.caixas) {
+      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isHighlighted
-          ? const Color(0xFFe87722)
-          : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final shelf = GondolaGeometry.andares[caixa.andar];
       final chave = chaveEnderecoEstoque(
         produtoCodigo: caixa.produtoId,

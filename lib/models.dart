@@ -70,6 +70,11 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   return letraDoIndice(offset + row * nColunas + coluna);
 }
 
+// Cor própria do Modo Conferência (Fase 3) — ciano CAMDA, para não conflitar
+// visualmente com o pulsar laranja da busca nem com o badge âmbar de
+// endereço desatualizado (Fase 2).
+const Color corConferenciaCiano = Color(0xFF22d3ee);
+
 /// Chave que identifica unicamente um endereço físico + produto, usada para
 /// casar linhas de estoque_localizado com o conjunto de endereços
 /// desatualizados (Fase 2 — aviso de endereço desatualizado).
