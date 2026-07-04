@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'estoque_localizado_service.dart';
 import 'models.dart';
+import 'sugestao_deducao.dart';
 
 const List<String> _andarNomes = ['Base', 'Meio', 'Topo'];
 
@@ -65,12 +66,20 @@ class _LinhaEndereco {
   final bool destaque;
   final TextEditingController controller;
   bool dirty;
+  // "Conferi fisicamente e a quantidade está certa" — ao salvar, a linha é
+  // regravada com o mesmo valor só pra renovar o atualizado_em (limpa o selo
+  // âmbar de endereço desatualizado).
+  bool confirmado = false;
+  // Linhas de endereço ainda não gravado nascem dirty e precisam continuar
+  // dirty mesmo que o ✓ seja desligado.
+  final bool nasceuDirty;
 
   _LinhaEndereco({
     required this.endereco,
     required this.destaque,
     this.dirty = false,
-  }) : controller = TextEditingController(text: _fmtQtd(endereco.quantidade));
+  })  : nasceuDirty = dirty,
+        controller = TextEditingController(text: _fmtQtd(endereco.quantidade));
 
   double get quantidadeAtual => _parseQtd(controller.text);
 }
@@ -103,6 +112,11 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   bool    _salvando   = false;
   double? _qtdSistema;
   List<_LinhaEndereco> _linhas = [];
+  // Sugestão de abatimento calculada uma única vez a partir dos valores
+  // PERSISTIDOS (imune à digitação em andamento). Null = sem excesso ou sem
+  // linha no estoque_mestre.
+  ResultadoSugestao? _sugestao;
+  bool _sugestaoAplicada = false;
 
   @override
   void initState() {
@@ -148,6 +162,9 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
       return aTocado ? -1 : 1;
     });
 
+    final somaPersistida =
+        enderecos.fold<double>(0, (soma, e) => soma + e.quantidade);
+
     if (!mounted) return;
     setState(() {
       _linhas = todos.map((e) {
@@ -161,6 +178,12 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
         );
       }).toList();
       _qtdSistema = info?.qtdSistema;
+      _sugestao = info == null
+          ? null
+          : sugerirDeducao(
+              enderecos: enderecos,
+              excesso:   somaPersistida - info.qtdSistema,
+            );
       _carregando = false;
     });
   }
@@ -172,6 +195,42 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   // — não há nada gravado ainda pra comparar.
   EnderecoDesatualizado? _avisoDesatualizado(EnderecoLocalizado endereco) =>
       endereco.atualizadoEm == null ? null : _service.infoDesatualizado(endereco);
+
+  /// Preenche os campos com as quantidades sugeridas e marca as linhas como
+  /// editadas. Nada é gravado no banco até Salvar/Concluir contagem — o
+  /// usuário ainda confere fisicamente.
+  void _aplicarSugestao() {
+    final sugestao = _sugestao;
+    if (sugestao == null) return;
+    setState(() {
+      for (final d in sugestao.deducoes) {
+        for (final l in _linhas) {
+          if (!l.endereco.mesmoEndereco(d.endereco)) continue;
+          l.controller.text = _fmtQtd(d.qtdSugerida);
+          l.dirty = true;
+          l.confirmado = false;
+        }
+      }
+      _sugestaoAplicada = true;
+    });
+  }
+
+  void _toggleConfirmado(_LinhaEndereco l) {
+    setState(() {
+      if (l.confirmado) {
+        l.confirmado = false;
+        // Só desfaz o dirty se o campo continua com o valor persistido e a
+        // linha não nasceu dirty (endereço novo precisa ser criado ao salvar).
+        if (!l.nasceuDirty &&
+            l.controller.text == _fmtQtd(l.endereco.quantidade)) {
+          l.dirty = false;
+        }
+      } else {
+        l.confirmado = true;
+        l.dirty = true;
+      }
+    });
+  }
 
   Future<bool> _salvarEditados() async {
     var ok = true;
@@ -293,6 +352,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (_sugestao != null) _buildSugestaoCard(_sugestao!),
                   ..._linhas.map(_buildLinha),
                   const SizedBox(height: 10),
                   _buildResumo(),
@@ -328,16 +388,101 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     );
   }
 
+  Widget _buildSugestaoCard(ResultadoSugestao sugestao) {
+    final excesso = sugestao.deducoes.fold<double>(
+            0, (soma, d) => soma + d.deduzido) +
+        sugestao.restante;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0d1117),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF5a3a1a)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '💡 Δ +${_fmtQtd(excesso)} vs sistema — sugestão (gôndola primeiro)',
+            style: const TextStyle(
+                color: Color(0xFFe0a030),
+                fontSize: 12,
+                fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          ...sugestao.deducoes.map((d) => Text(
+                'Provavelmente saíram ${_fmtQtd(d.deduzido)} un de '
+                '${_labelEndereco(d.endereco)}',
+                style:
+                    const TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
+              )),
+          if (sugestao.restante > 0)
+            Text(
+              'Ainda restam ${_fmtQtd(sugestao.restante)} un não localizadas.',
+              style: const TextStyle(color: Color(0xFFe57373), fontSize: 12),
+            ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _salvando || _sugestaoAplicada || sugestao.deducoes.isEmpty
+                    ? null
+                    : _aplicarSugestao,
+                icon: Icon(
+                  _sugestaoAplicada ? Icons.check : Icons.auto_fix_high,
+                  size: 16,
+                  color: _sugestaoAplicada
+                      ? const Color(0xFF6fcf97)
+                      : const Color(0xFFe0a030),
+                ),
+                label: Text(
+                  _sugestaoAplicada ? 'Sugestão aplicada' : 'Aplicar sugestão',
+                  style: TextStyle(
+                    color: _sugestaoAplicada
+                        ? const Color(0xFF6fcf97)
+                        : const Color(0xFFe0a030),
+                    fontSize: 12,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(
+                      color: _sugestaoAplicada
+                          ? const Color(0xFF2e6b46)
+                          : const Color(0xFF5a3a1a)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Confira fisicamente antes de salvar.',
+                  style: TextStyle(color: Color(0xFF6a7a88), fontSize: 10),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildLinha(_LinhaEndereco l) {
     final aviso = _avisoDesatualizado(l.endereco);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: l.destaque ? const Color(0xFF162416) : const Color(0xFF0d1117),
+        color: l.destaque
+            ? const Color(0xFF162416)
+            : l.confirmado
+                ? const Color(0xFF12211a)
+                : const Color(0xFF0d1117),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-            color: l.destaque
+            color: l.destaque || l.confirmado
                 ? const Color(0xFF2e6b46)
                 : const Color(0xFF262b33)),
       ),
@@ -391,7 +536,24 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                 contentPadding:
                     EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               ),
-              onChanged: (_) => setState(() => l.dirty = true),
+              onChanged: (_) => setState(() {
+                l.dirty = true;
+                // Edição manual invalida a confirmação de "nada mudou".
+                l.confirmado = false;
+              }),
+            ),
+          ),
+          IconButton(
+            onPressed: _salvando ? null : () => _toggleConfirmado(l),
+            tooltip: 'Conferi, quantidade correta',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            icon: Icon(
+              l.confirmado ? Icons.check_circle : Icons.check_circle_outline,
+              size: 20,
+              color: l.confirmado
+                  ? const Color(0xFF6fcf97)
+                  : const Color(0xFF6a7a88),
             ),
           ),
         ],
