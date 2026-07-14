@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:path_provider/path_provider.dart';
@@ -66,9 +68,17 @@ class TursoService {
 
   Future<bool> garantirConexao() => _garantirConexao();
 
-  Future<void> init() => _initEmAndamento ??= _init().whenComplete(() {
-        _initEmAndamento = null;
-      });
+  // Serializa os inits em vez de "pegar carona" no que está no ar: se um
+  // init antigo ainda roda com preferências velhas (ex: usuário acabou de
+  // desligar o cache local), o próximo espera e roda em seguida, aplicando
+  // as novas. A checagem de reaproveitamento no _init torna repetições
+  // baratas (early-return quando nada mudou).
+  Future<void> init() {
+    final anterior = _initEmAndamento ?? Future<void>.value();
+    final novo = anterior.catchError((_) {}).then<void>((_) => _init());
+    _initEmAndamento = novo;
+    return novo;
+  }
 
   Future<void> _init() async {
     final prefs      = await SharedPreferences.getInstance();
@@ -88,6 +98,8 @@ class TursoService {
       return;
     }
 
+    final clienteAntigo = _client;
+
     _connected       = false;
     _client          = null;
     _urlAtiva        = null;
@@ -96,6 +108,12 @@ class TursoService {
     _modoLocal       = false;
     _produtosCache   = null;
     _produtosCacheEm = null;
+
+    if (clienteAntigo != null) {
+      // Solta a conexão anterior (troca de credenciais ou de modo) sem
+      // segurar o init novo.
+      unawaited(clienteAntigo.dispose().catchError((_) {}));
+    }
 
     if (url.isEmpty || token.isEmpty) return;
 
@@ -126,31 +144,61 @@ class TursoService {
     }
   }
 
+  // Limites de tempo: nenhuma etapa de conexão/sincronização pode segurar o
+  // app indefinidamente — estourou, cai no fallback (remoto) ou falha o botão
+  // de sincronizar com aviso, mantendo os dados locais intactos.
+  static const Duration _timeoutConexao   = Duration(seconds: 20);
+  static const Duration _timeoutBootstrap = Duration(seconds: 90);
+  static const Duration _timeoutSync      = Duration(minutes: 3);
+
   Future<LibsqlClient?> _conectarComCacheLocal(String url, String token) async {
+    LibsqlClient? client;
     try {
       final dir  = await getApplicationSupportDirectory();
       final path = '${dir.path}/camda_gondolas_cache.db';
-      final client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
-      await client.connect();
-      // Primeira sincronização antes dos CREATE TABLEs: num arquivo novo ela
-      // baixa o esquema e os dados do remoto, e os IF NOT EXISTS viram no-op.
-      // Sem internet, segue com o que já está no arquivo local (que pode
-      // estar vazio na primeiríssima execução — o app funciona e o usuário
-      // sincroniza quando a rede voltar).
-      try {
-        await client.sync();
-        await _registrarSincronizacao();
-      } catch (_) {}
+      client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
+      await client.connect().timeout(_timeoutConexao);
+
+      // Fora da primeiríssima execução, NUNCA sincroniza sozinho: abrir o
+      // app usa só o arquivo local (instantâneo) e a rede entra apenas
+      // quando o usuário toca em Sincronizar.
+      if (!await _bancoLocalVazio(client)) return client;
+
+      // Arquivo local novo (sem tabela nenhuma): precisa da carga inicial —
+      // baixa o esquema e os dados do remoto, e os CREATE TABLE IF NOT
+      // EXISTS viram no-op. Se falhar (sem internet/estourou o tempo), cai
+      // pro modo remoto e tenta o bootstrap de novo na próxima abertura.
+      await client.sync().timeout(_timeoutBootstrap);
+      await _registrarSincronizacao();
       return client;
     } catch (_) {
+      if (client != null) {
+        unawaited(client.dispose().catchError((_) {}));
+      }
       return null;
+    }
+  }
+
+  /// True se o arquivo local acabou de ser criado (nenhuma tabela ainda).
+  Future<bool> _bancoLocalVazio(LibsqlClient client) async {
+    try {
+      final stmt = await client.prepare(
+        "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'",
+      );
+      final rows = await stmt.query() as List<dynamic>;
+      final n = (rows.first as Map<String, dynamic>)['n'] as int? ?? 0;
+      return n == 0;
+    } catch (_) {
+      // Na dúvida, não força bootstrap — o esquema local é criado logo em
+      // seguida e a carga completa acontece no primeiro Sincronizar.
+      return false;
     }
   }
 
   Future<LibsqlClient?> _conectarRemoto(String url, String token) async {
     try {
       final client = LibsqlClient.remote(url, authToken: token);
-      await client.connect();
+      await client.connect().timeout(_timeoutConexao);
       return client;
     } catch (_) {
       return null;
@@ -237,7 +285,7 @@ class TursoService {
     if (!await _garantirConexao()) return false;
     _sincronizando = true;
     try {
-      if (_modoLocal) await _client!.sync();
+      if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
       _produtosCache   = null;
       _produtosCacheEm = null;
       await _registrarSincronizacao();
