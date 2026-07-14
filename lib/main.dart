@@ -119,6 +119,8 @@ class _LojaPageState extends State<LojaPage> {
   bool                        _carregandoConferencia = false;
   ModoConferenciaResultado?   _conferencia;
 
+  bool _sincronizando = false;
+
   @override
   void initState() {
     super.initState();
@@ -360,6 +362,22 @@ class _LojaPageState extends State<LojaPage> {
     );
   }
 
+  Future<void> _sincronizar() async {
+    if (_sincronizando) return;
+    setState(() => _sincronizando = true);
+    final ok = await TursoService().sincronizar();
+    if (!mounted) return;
+    setState(() => _sincronizando = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Sincronizado com o banco online ✓'
+          : 'Não foi possível sincronizar — verifique a conexão'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 2),
+    ));
+    if (ok && _modoConferencia) _carregarConferencia();
+  }
+
   void _limparBusca() {
     _debounce?.cancel();
     _searchCtrl.clear();
@@ -420,6 +438,11 @@ class _LojaPageState extends State<LojaPage> {
                           ),
                         ),
                         const SizedBox(width: 10),
+                        _SyncButton(
+                          sincronizando: _sincronizando,
+                          onTap: _sincronizar,
+                        ),
+                        const SizedBox(width: 10),
                         _ModoConferenciaToggle(
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
@@ -467,6 +490,160 @@ class _LojaPageState extends State<LojaPage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+// ── _DialogLimparProduto ─────────────────────────────────────────────────────
+// Conteúdo do dialog "Limpar produto" (gôndola e estante): a lista de produtos
+// rola quando não cabe na tela, com barra de rolagem sempre visível, e a ação
+// "Limpar tudo" fica fixa embaixo, fora da área rolável.
+
+class _DialogLimparProduto extends StatefulWidget {
+  final List<Produto>        produtos;
+  final Map<String, int>     qtdPorProduto;
+  final ValueChanged<String> onExcluirProduto;
+  final VoidCallback         onLimparTudo;
+
+  const _DialogLimparProduto({
+    required this.produtos,
+    required this.qtdPorProduto,
+    required this.onExcluirProduto,
+    required this.onLimparTudo,
+  });
+
+  @override
+  State<_DialogLimparProduto> createState() => _DialogLimparProdutoState();
+}
+
+class _DialogLimparProdutoState extends State<_DialogLimparProduto> {
+  final _scrollCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // width: double.maxFinite evita o IntrinsicWidth do AlertDialog, que não
+    // convive com ListView; Flexible deixa a lista encolher pro "Limpar tudo"
+    // continuar visível mesmo com muitos produtos.
+    return SizedBox(
+      width: double.maxFinite,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Scrollbar(
+              controller: _scrollCtrl,
+              thumbVisibility: true,
+              child: ListView.builder(
+                controller: _scrollCtrl,
+                shrinkWrap: true,
+                padding: const EdgeInsets.only(right: 10),
+                itemCount: widget.produtos.length,
+                itemBuilder: (_, i) {
+                  final p   = widget.produtos[i];
+                  final qtd = widget.qtdPorProduto[p.codigo] ?? 0;
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => widget.onExcluirProduto(p.codigo),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 18,
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: p.cor,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                                Text(
+                                  '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
+                                  style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.delete_outline, color: Color(0xFFe57373), size: 20),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          if (widget.produtos.length > 1) ...[
+            const Divider(color: Color(0xFF2a3540), height: 20),
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: widget.onLimparTudo,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_forever, color: Color(0xFFe57373), size: 20),
+                    SizedBox(width: 10),
+                    Text(
+                      'Limpar tudo',
+                      style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── _SyncButton ─────────────────────────────────────────────────────────────
+// Sincroniza o cache local com o banco online (ver TursoService.sincronizar).
+
+class _SyncButton extends StatelessWidget {
+  final bool         sincronizando;
+  final VoidCallback onTap;
+
+  const _SyncButton({required this.sincronizando, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: sincronizando ? null : onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color: const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: sincronizando
+            ? const Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF4a9d6a),
+                  ),
+                ),
+              )
+            : const Icon(Icons.sync, color: Color(0xFF8a877f), size: 20),
       ),
     );
   }
@@ -934,6 +1111,7 @@ class _GondolaPageState extends State<GondolaPage> {
   bool          _carregandoProdutos = false;
   bool          _carregandoLayout   = false;
   bool          _salvando           = false;
+  bool          _sincronizando      = false;
 
   // null = nenhum aberto, 1 = Adicionar, 2 = Buscar
   int? _expanderAberto;
@@ -1201,105 +1379,58 @@ class _GondolaPageState extends State<GondolaPage> {
           'Limpar produto',
           style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ...produtos.map((p) {
-              final qtd = _caixasAtuais.where((c) => c.produtoId == p.codigo).length;
-              return InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _limparPorProduto(p.codigo);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 18,
-                        height: 18,
-                        decoration: BoxDecoration(
-                          color: p.cor,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
-                            Text(
-                              '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
-                              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.delete_outline, color: Color(0xFFe57373), size: 20),
-                    ],
-                  ),
-                ),
-              );
-            }),
-            if (produtos.length > 1) ...[
-              const Divider(color: Color(0xFF2a3540), height: 20),
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showDialog<void>(
-                    context: context,
-                    builder: (ctx2) => AlertDialog(
-                      backgroundColor: const Color(0xFF141a22),
-                      surfaceTintColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      title: const Text(
-                        'Limpar tudo?',
-                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-                      ),
-                      content: const Text(
-                        'Todos os produtos desta gôndola serão removidos.',
-                        style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx2),
-                          child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pop(ctx2);
-                            _limparGondola();
-                          },
-                          child: const Text('Limpar tudo', style: TextStyle(color: Color(0xFFe57373))),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_forever, color: Color(0xFFe57373), size: 20),
-                      SizedBox(width: 10),
-                      Text(
-                        'Limpar tudo',
-                        style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
+        content: _DialogLimparProduto(
+          produtos: produtos,
+          qtdPorProduto: {
+            for (final p in produtos)
+              p.codigo:
+                  _caixasAtuais.where((c) => c.produtoId == p.codigo).length,
+          },
+          onExcluirProduto: (codigo) {
+            Navigator.pop(ctx);
+            _limparPorProduto(codigo);
+          },
+          onLimparTudo: () {
+            Navigator.pop(ctx);
+            _confirmarLimparTudo();
+          },
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmarLimparTudo() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx2) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          'Limpar tudo?',
+          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        content: const Text(
+          'Todos os produtos desta gôndola serão removidos.',
+          style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx2),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx2);
+              _limparGondola();
+            },
+            child: const Text('Limpar tudo', style: TextStyle(color: Color(0xFFe57373))),
           ),
         ],
       ),
@@ -1341,6 +1472,27 @@ class _GondolaPageState extends State<GondolaPage> {
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: const Duration(seconds: 2),
     ));
+  }
+
+  Future<void> _sincronizar() async {
+    if (_sincronizando) return;
+    setState(() => _sincronizando = true);
+    final ok = await TursoService().sincronizar();
+    if (!mounted) return;
+    setState(() => _sincronizando = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Sincronizado com o banco online ✓'
+          : 'Não foi possível sincronizar — verifique a conexão'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 2),
+    ));
+    if (ok) {
+      // Descarta os layouts em memória e recarrega tudo do banco recém-
+      // sincronizado (edições não salvas são substituídas).
+      _caixas.clear();
+      _inicializar();
+    }
   }
 
   Future<void> _buscarProduto(Produto produto) async {
@@ -1532,6 +1684,21 @@ class _GondolaPageState extends State<GondolaPage> {
             const Padding(
               padding: EdgeInsets.only(right: 4),
               child: Icon(Icons.circle, color: Color(0xFF4a9d6a), size: 8),
+            ),
+          if (_dbConectado)
+            IconButton(
+              icon: _sincronizando
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF4a9d6a),
+                      ),
+                    )
+                  : const Icon(Icons.sync, color: Color(0xFF8a9aa8), size: 22),
+              tooltip: 'Sincronizar com o banco online',
+              onPressed: _sincronizando ? null : _sincronizar,
             ),
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
@@ -2233,6 +2400,7 @@ class _EstantePageState extends State<EstantePage> {
   bool          _carregandoProdutos = false;
   bool          _carregandoLayout   = false;
   bool          _salvando           = false;
+  bool          _sincronizando      = false;
 
   int? _expanderAberto;
 
@@ -2548,105 +2716,58 @@ class _EstantePageState extends State<EstantePage> {
           'Limpar produto',
           style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ...produtos.map((p) {
-              final qtd = _caixasAtuais.where((c) => c.produtoId == p.codigo).length;
-              return InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _limparEstantePorProduto(p.codigo);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 18,
-                        height: 18,
-                        decoration: BoxDecoration(
-                          color: p.cor,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
-                            Text(
-                              '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
-                              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.delete_outline, color: Color(0xFFe57373), size: 20),
-                    ],
-                  ),
-                ),
-              );
-            }),
-            if (produtos.length > 1) ...[
-              const Divider(color: Color(0xFF2a3540), height: 20),
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showDialog<void>(
-                    context: context,
-                    builder: (ctx2) => AlertDialog(
-                      backgroundColor: const Color(0xFF141a22),
-                      surfaceTintColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      title: const Text(
-                        'Limpar tudo?',
-                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-                      ),
-                      content: const Text(
-                        'Todos os produtos desta prateleira serão removidos.',
-                        style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx2),
-                          child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pop(ctx2);
-                            _limparEstante();
-                          },
-                          child: const Text('Limpar tudo', style: TextStyle(color: Color(0xFFe57373))),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_forever, color: Color(0xFFe57373), size: 20),
-                      SizedBox(width: 10),
-                      Text(
-                        'Limpar tudo',
-                        style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
+        content: _DialogLimparProduto(
+          produtos: produtos,
+          qtdPorProduto: {
+            for (final p in produtos)
+              p.codigo:
+                  _caixasAtuais.where((c) => c.produtoId == p.codigo).length,
+          },
+          onExcluirProduto: (codigo) {
+            Navigator.pop(ctx);
+            _limparEstantePorProduto(codigo);
+          },
+          onLimparTudo: () {
+            Navigator.pop(ctx);
+            _confirmarLimparTudoEstante();
+          },
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmarLimparTudoEstante() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx2) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          'Limpar tudo?',
+          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        content: const Text(
+          'Todos os produtos desta prateleira serão removidos.',
+          style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx2),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx2);
+              _limparEstante();
+            },
+            child: const Text('Limpar tudo', style: TextStyle(color: Color(0xFFe57373))),
           ),
         ],
       ),
@@ -2689,6 +2810,27 @@ class _EstantePageState extends State<EstantePage> {
           ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: const Duration(seconds: 2),
     ));
+  }
+
+  Future<void> _sincronizar() async {
+    if (_sincronizando) return;
+    setState(() => _sincronizando = true);
+    final ok = await TursoService().sincronizar();
+    if (!mounted) return;
+    setState(() => _sincronizando = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Sincronizado com o banco online ✓'
+          : 'Não foi possível sincronizar — verifique a conexão'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 2),
+    ));
+    if (ok) {
+      // Descarta os layouts em memória e recarrega tudo do banco recém-
+      // sincronizado (edições não salvas são substituídas).
+      _caixas.clear();
+      _inicializar();
+    }
   }
 
   Future<void> _buscarProduto(Produto produto) async {
@@ -2870,6 +3012,21 @@ class _EstantePageState extends State<EstantePage> {
             const Padding(
               padding: EdgeInsets.only(right: 4),
               child: Icon(Icons.circle, color: Color(0xFF4a9d6a), size: 8),
+            ),
+          if (_dbConectado)
+            IconButton(
+              icon: _sincronizando
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF4a9d6a),
+                      ),
+                    )
+                  : const Icon(Icons.sync, color: Color(0xFF8a9aa8), size: 22),
+              tooltip: 'Sincronizar com o banco online',
+              onPressed: _sincronizando ? null : _sincronizar,
             ),
           if (_estanteAtual == 8)
             IconButton(

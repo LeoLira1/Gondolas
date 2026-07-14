@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,6 +18,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   bool    _testando    = false;
   String? _statusTeste;
   bool    _testeOk     = false;
+  bool    _cacheLocal  = true;
+  bool    _sincronizando = false;
 
   @override
   void initState() {
@@ -37,7 +40,38 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     setState(() {
       _urlCtrl.text   = prefs.getString(TursoService.keyDbUrl)   ?? '';
       _tokenCtrl.text = prefs.getString(TursoService.keyDbToken) ?? '';
+      _cacheLocal     = prefs.getBool(TursoService.keyCacheLocal) ?? true;
     });
+  }
+
+  Future<void> _alterarCacheLocal(bool valor) async {
+    setState(() => _cacheLocal = valor);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(TursoService.keyCacheLocal, valor);
+    // A troca de modo (local ⇄ remoto) é aplicada pelo init() quando as
+    // páginas recarregam ao voltar desta tela.
+  }
+
+  Future<void> _sincronizarAgora() async {
+    setState(() => _sincronizando = true);
+    final ok = await TursoService().sincronizar();
+    if (!mounted) return;
+    setState(() => _sincronizando = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Sincronizado com o banco online ✓'
+          : 'Não foi possível sincronizar — verifique a conexão'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
+  String _textoUltimaSync() {
+    final quando = TursoService().ultimaSincronizacao;
+    if (quando == null) return 'Nunca sincronizado';
+    String dois(int n) => n.toString().padLeft(2, '0');
+    return 'Última sincronização: ${dois(quando.day)}/${dois(quando.month)}/'
+        '${quando.year} ${dois(quando.hour)}:${dois(quando.minute)}';
   }
 
   Future<void> _salvarConfig() async {
@@ -175,6 +209,71 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
+
+            if (!kIsWeb) ...[
+              const SizedBox(height: 28),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0d1117),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF232f3a)),
+                ),
+                child: Column(children: [
+                  SwitchListTile(
+                    value: _cacheLocal,
+                    onChanged: _alterarCacheLocal,
+                    activeColor: const Color(0xFF4a9d6a),
+                    title: const Text(
+                      'Cache local',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                    subtitle: const Text(
+                      'Guarda os dados num arquivo do dispositivo: o app abre '
+                      'e salva na hora, mesmo com internet ruim. Use o botão '
+                      'Sincronizar para enviar/receber do banco online.',
+                      style: TextStyle(
+                          color: Color(0xFF8a9aa8), fontSize: 11, height: 1.4),
+                    ),
+                  ),
+                  if (_cacheLocal)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                      child: Row(children: [
+                        Expanded(
+                          child: Text(
+                            _textoUltimaSync(),
+                            style: const TextStyle(
+                                color: Color(0xFF8a9aa8), fontSize: 11),
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _sincronizando ? null : _sincronizarAgora,
+                          icon: _sincronizando
+                              ? const SizedBox(
+                                  width: 13,
+                                  height: 13,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF4a9d6a),
+                                  ),
+                                )
+                              : const Icon(Icons.sync, size: 15),
+                          label: Text(
+                              _sincronizando ? 'Sincronizando...' : 'Sincronizar'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF4a9d6a),
+                            side: const BorderSide(color: Color(0xFF2e4a38)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                        ),
+                      ]),
+                    ),
+                ]),
+              ),
+            ],
 
             if (_statusTeste != null) ...[
               const SizedBox(height: 20),

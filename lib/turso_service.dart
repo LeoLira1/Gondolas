@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:libsql_dart/libsql_dart.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 
@@ -7,8 +9,10 @@ class TursoService {
   factory TursoService() => _instance;
   TursoService._internal();
 
-  static const String keyDbUrl   = 'turso_db_url';
-  static const String keyDbToken = 'turso_db_token';
+  static const String keyDbUrl      = 'turso_db_url';
+  static const String keyDbToken    = 'turso_db_token';
+  static const String keyCacheLocal = 'turso_cache_local';
+  static const String keyUltimaSync = 'turso_ultima_sync';
 
   static const Map<String, String> categoriaCores = {
     'Lubrificantes': '#2e7d4f',
@@ -24,11 +28,21 @@ class TursoService {
   LibsqlClient? _client;
   bool _connected = false;
 
-  // Credenciais da conexão ativa. Enquanto não mudarem, init() reaproveita a
-  // conexão (e o esquema já criado) em vez de reconectar e reexecutar os
-  // CREATE TABLEs a cada abertura de página.
+  // Cache local (embedded replica com offline writes): o banco vive num
+  // arquivo do dispositivo — leituras e gravações são instantâneas e
+  // funcionam sem internet; sincronizar() empurra/puxa as mudanças para o
+  // Turso quando o usuário pedir. Indisponível no Flutter Web (sem
+  // filesystem), onde o app segue conectando direto no remoto.
+  bool      _modoLocal           = false;
+  bool      _sincronizando       = false;
+  DateTime? _ultimaSincronizacao;
+
+  // Credenciais/modo da conexão ativa. Enquanto não mudarem, init()
+  // reaproveita a conexão (e o esquema já criado) em vez de reconectar e
+  // reexecutar os CREATE TABLEs a cada abertura de página.
   String? _urlAtiva;
   String? _tokenAtivo;
+  bool?   _cacheLocalAtivo;
   Future<void>? _initEmAndamento;
 
   // Cache do catálogo (estoque_mestre): evita repetir o SELECT de até 5000
@@ -38,6 +52,13 @@ class TursoService {
   static const Duration _produtosCacheTtl = Duration(minutes: 5);
 
   bool get isConnected => _connected;
+
+  /// True quando a conexão ativa usa o cache local (arquivo no dispositivo).
+  bool get modoLocal => _modoLocal;
+
+  bool get sincronizando => _sincronizando;
+
+  DateTime? get ultimaSincronizacao => _ultimaSincronizacao;
 
   // Acessor para serviços satélite (ex: EstoqueLocalizadoService) reaproveitarem
   // esta mesma conexão, em vez de abrir uma segunda.
@@ -50,14 +71,20 @@ class TursoService {
       });
 
   Future<void> _init() async {
-    final prefs = await SharedPreferences.getInstance();
-    final url   = prefs.getString(keyDbUrl)   ?? '';
-    final token = prefs.getString(keyDbToken) ?? '';
+    final prefs      = await SharedPreferences.getInstance();
+    final url        = prefs.getString(keyDbUrl)   ?? '';
+    final token      = prefs.getString(keyDbToken) ?? '';
+    final cacheLocal = !kIsWeb && (prefs.getBool(keyCacheLocal) ?? true);
+
+    final ultimaSyncIso = prefs.getString(keyUltimaSync);
+    _ultimaSincronizacao =
+        ultimaSyncIso != null ? DateTime.tryParse(ultimaSyncIso) : null;
 
     if (_connected &&
         _client != null &&
         url == _urlAtiva &&
-        token == _tokenAtivo) {
+        token == _tokenAtivo &&
+        cacheLocal == _cacheLocalAtivo) {
       return;
     }
 
@@ -65,81 +92,160 @@ class TursoService {
     _client          = null;
     _urlAtiva        = null;
     _tokenAtivo      = null;
+    _cacheLocalAtivo = null;
+    _modoLocal       = false;
     _produtosCache   = null;
     _produtosCacheEm = null;
 
     if (url.isEmpty || token.isEmpty) return;
 
+    LibsqlClient? client;
+    var conectouLocal = false;
+
+    if (cacheLocal) {
+      client        = await _conectarComCacheLocal(url, token);
+      conectouLocal = client != null;
+    }
+    // Sem cache local (Web, preferência desligada ou falha ao abrir o
+    // arquivo): conexão direta ao remoto, como antes.
+    client ??= await _conectarRemoto(url, token);
+    if (client == null) return;
+
     try {
-      final client = LibsqlClient.remote(url, authToken: token);
-      await client.connect();
-      await client.execute('''
-        CREATE TABLE IF NOT EXISTS gondola_layout (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          gondola_num INTEGER NOT NULL,
-          andar INTEGER NOT NULL,
-          produto_codigo TEXT NOT NULL,
-          produto_nome TEXT NOT NULL,
-          pos_x REAL NOT NULL DEFAULT 0,
-          pos_z REAL NOT NULL DEFAULT 0,
-          cor_hex TEXT NOT NULL DEFAULT '#E87722',
-          registrado_em TEXT NOT NULL
-        )
-      ''');
-      await client.execute('''
-        CREATE TABLE IF NOT EXISTS estante_layout (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          estante_num INTEGER NOT NULL,
-          coluna INTEGER NOT NULL,
-          nivel INTEGER NOT NULL,
-          slot INTEGER NOT NULL,
-          produto_codigo TEXT NOT NULL,
-          produto_nome TEXT NOT NULL,
-          cor_hex TEXT NOT NULL DEFAULT '#E87722',
-          registrado_em TEXT NOT NULL
-        )
-      ''');
-      await client.execute('''
-        CREATE TABLE IF NOT EXISTS app_migrations (
-          nome TEXT PRIMARY KEY,
-          aplicada_em TEXT NOT NULL
-        )
-      ''');
-      // Quantidade de cada produto por endereço físico (gôndola ou estante).
-      // Chave por endereço lógico — não referencia gondola_layout.id/estante_layout.id
-      // porque salvarLayout/salvarLayoutEstante são destrutivos (DELETE + INSERT).
-      await client.execute('''
-        CREATE TABLE IF NOT EXISTS estoque_localizado (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          produto_codigo TEXT NOT NULL,
-          local_tipo TEXT NOT NULL,
-          local_num  INTEGER NOT NULL,
-          face_ou_coluna INTEGER NOT NULL,
-          andar_ou_nivel INTEGER NOT NULL,
-          quantidade REAL NOT NULL DEFAULT 0,
-          atualizado_em TEXT NOT NULL,
-          UNIQUE(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel)
-        )
-      ''');
-      await client.execute('''
-        CREATE TABLE IF NOT EXISTS contagens_log (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          produto_codigo TEXT NOT NULL,
-          endereco TEXT NOT NULL,
-          qtd_anterior REAL,
-          qtd_nova REAL NOT NULL,
-          origem TEXT NOT NULL DEFAULT 'gondolas_app',
-          registrado_em TEXT NOT NULL
-        )
-      ''');
+      await _criarEsquema(client);
       await _migrarEsquemaLabelsEstante3(client);
-      _client     = client;
-      _connected  = true;
-      _urlAtiva   = url;
-      _tokenAtivo = token;
+      _client          = client;
+      _connected       = true;
+      _modoLocal       = conectouLocal;
+      _urlAtiva        = url;
+      _tokenAtivo      = token;
+      _cacheLocalAtivo = cacheLocal;
     } catch (_) {
       _connected = false;
       _client    = null;
+    }
+  }
+
+  Future<LibsqlClient?> _conectarComCacheLocal(String url, String token) async {
+    try {
+      final dir  = await getApplicationSupportDirectory();
+      final path = '${dir.path}/camda_gondolas_cache.db';
+      final client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
+      await client.connect();
+      // Primeira sincronização antes dos CREATE TABLEs: num arquivo novo ela
+      // baixa o esquema e os dados do remoto, e os IF NOT EXISTS viram no-op.
+      // Sem internet, segue com o que já está no arquivo local (que pode
+      // estar vazio na primeiríssima execução — o app funciona e o usuário
+      // sincroniza quando a rede voltar).
+      try {
+        await client.sync();
+        await _registrarSincronizacao();
+      } catch (_) {}
+      return client;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<LibsqlClient?> _conectarRemoto(String url, String token) async {
+    try {
+      final client = LibsqlClient.remote(url, authToken: token);
+      await client.connect();
+      return client;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _criarEsquema(LibsqlClient client) async {
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS gondola_layout (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gondola_num INTEGER NOT NULL,
+        andar INTEGER NOT NULL,
+        produto_codigo TEXT NOT NULL,
+        produto_nome TEXT NOT NULL,
+        pos_x REAL NOT NULL DEFAULT 0,
+        pos_z REAL NOT NULL DEFAULT 0,
+        cor_hex TEXT NOT NULL DEFAULT '#E87722',
+        registrado_em TEXT NOT NULL
+      )
+    ''');
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS estante_layout (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        estante_num INTEGER NOT NULL,
+        coluna INTEGER NOT NULL,
+        nivel INTEGER NOT NULL,
+        slot INTEGER NOT NULL,
+        produto_codigo TEXT NOT NULL,
+        produto_nome TEXT NOT NULL,
+        cor_hex TEXT NOT NULL DEFAULT '#E87722',
+        registrado_em TEXT NOT NULL
+      )
+    ''');
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS app_migrations (
+        nome TEXT PRIMARY KEY,
+        aplicada_em TEXT NOT NULL
+      )
+    ''');
+    // Quantidade de cada produto por endereço físico (gôndola ou estante).
+    // Chave por endereço lógico — não referencia gondola_layout.id/estante_layout.id
+    // porque salvarLayout/salvarLayoutEstante são destrutivos (DELETE + INSERT).
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS estoque_localizado (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        produto_codigo TEXT NOT NULL,
+        local_tipo TEXT NOT NULL,
+        local_num  INTEGER NOT NULL,
+        face_ou_coluna INTEGER NOT NULL,
+        andar_ou_nivel INTEGER NOT NULL,
+        quantidade REAL NOT NULL DEFAULT 0,
+        atualizado_em TEXT NOT NULL,
+        UNIQUE(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel)
+      )
+    ''');
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS contagens_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        produto_codigo TEXT NOT NULL,
+        endereco TEXT NOT NULL,
+        qtd_anterior REAL,
+        qtd_nova REAL NOT NULL,
+        origem TEXT NOT NULL DEFAULT 'gondolas_app',
+        registrado_em TEXT NOT NULL
+      )
+    ''');
+  }
+
+  Future<void> _registrarSincronizacao() async {
+    _ultimaSincronizacao = DateTime.now();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        keyUltimaSync, _ultimaSincronizacao!.toIso8601String());
+  }
+
+  /// Sincroniza o cache local com o banco online: envia as gravações feitas
+  /// no dispositivo e baixa as novidades do Turso. Retorna false quando não
+  /// há conexão configurada ou a sincronização falhou (ex: sem internet) —
+  /// nesse caso os dados locais ficam intactos e dá pra tentar de novo.
+  /// No modo remoto (sem cache local) não há o que empurrar: só renova o
+  /// cache do catálogo em memória.
+  Future<bool> sincronizar() async {
+    if (_sincronizando) return false;
+    if (!await _garantirConexao()) return false;
+    _sincronizando = true;
+    try {
+      if (_modoLocal) await _client!.sync();
+      _produtosCache   = null;
+      _produtosCacheEm = null;
+      await _registrarSincronizacao();
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _sincronizando = false;
     }
   }
 
