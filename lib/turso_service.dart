@@ -38,6 +38,7 @@ class TursoService {
   bool      _modoLocal           = false;
   bool      _sincronizando       = false;
   DateTime? _ultimaSincronizacao;
+  String?   _ultimoErroSync;
 
   // Credenciais/modo da conexão ativa. Enquanto não mudarem, init()
   // reaproveita a conexão (e o esquema já criado) em vez de reconectar e
@@ -61,6 +62,10 @@ class TursoService {
   bool get sincronizando => _sincronizando;
 
   DateTime? get ultimaSincronizacao => _ultimaSincronizacao;
+
+  /// Descrição curta (para o usuário) do motivo da última falha de
+  /// sincronização, ou null se a última tentativa deu certo.
+  String? get ultimoErroSync => _ultimoErroSync;
 
   // Acessor para serviços satélite (ex: EstoqueLocalizadoService) reaproveitarem
   // esta mesma conexão, em vez de abrir uma segunda.
@@ -281,20 +286,59 @@ class TursoService {
   /// No modo remoto (sem cache local) não há o que empurrar: só renova o
   /// cache do catálogo em memória.
   Future<bool> sincronizar() async {
-    if (_sincronizando) return false;
-    if (!await _garantirConexao()) return false;
+    if (_sincronizando) {
+      _ultimoErroSync = 'já existe uma sincronização em andamento';
+      return false;
+    }
+    if (!await _garantirConexao()) {
+      final prefs = await SharedPreferences.getInstance();
+      final configurado = (prefs.getString(keyDbUrl) ?? '').isNotEmpty &&
+          (prefs.getString(keyDbToken) ?? '').isNotEmpty;
+      _ultimoErroSync = configurado
+          ? 'sem conexão com o banco — verifique a internet'
+          : 'configure URL e token do banco em ⚙️';
+      return false;
+    }
     _sincronizando = true;
     try {
       if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
       _produtosCache   = null;
       _produtosCacheEm = null;
       await _registrarSincronizacao();
+      _ultimoErroSync = null;
       return true;
-    } catch (_) {
+    } catch (e) {
+      _ultimoErroSync = _descreverErroSync(e);
       return false;
     } finally {
       _sincronizando = false;
     }
+  }
+
+  /// Traduz a exceção do sync numa dica curta e acionável — a causa real
+  /// (token expirado ≠ sem internet ≠ demora da rede) muda o que o usuário
+  /// precisa fazer para resolver.
+  String _descreverErroSync(Object e) {
+    if (e is TimeoutException) {
+      return 'a rede demorou demais para responder — tente novamente';
+    }
+    final msg   = e.toString().replaceAll('\n', ' ').trim();
+    final lower = msg.toLowerCase();
+    if (lower.contains('401') ||
+        lower.contains('unauthorized') ||
+        lower.contains('forbidden') ||
+        lower.contains('auth')) {
+      return 'token inválido ou expirado — confira em ⚙️';
+    }
+    if (lower.contains('dns') ||
+        lower.contains('socket') ||
+        lower.contains('network') ||
+        lower.contains('connection refused') ||
+        lower.contains('failed to connect') ||
+        lower.contains('timed out')) {
+      return 'sem conexão com o banco — verifique a internet';
+    }
+    return msg.length > 140 ? '${msg.substring(0, 140)}…' : msg;
   }
 
   // Garante que existe conexão antes de uma query: se o init() disparado na

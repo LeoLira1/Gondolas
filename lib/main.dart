@@ -371,9 +371,10 @@ class _LojaPageState extends State<LojaPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? 'Sincronizado com o banco online ✓'
-          : 'Não foi possível sincronizar — verifique a conexão'),
+          : 'Não foi possível sincronizar — '
+              '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 2),
+      duration: Duration(seconds: ok ? 2 : 6),
     ));
     if (ok && _modoConferencia) _carregarConferencia();
   }
@@ -1483,9 +1484,10 @@ class _GondolaPageState extends State<GondolaPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? 'Sincronizado com o banco online ✓'
-          : 'Não foi possível sincronizar — verifique a conexão'),
+          : 'Não foi possível sincronizar — '
+              '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 2),
+      duration: Duration(seconds: ok ? 2 : 6),
     ));
     if (ok) {
       // Descarta os layouts em memória e recarrega tudo do banco recém-
@@ -2821,9 +2823,10 @@ class _EstantePageState extends State<EstantePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? 'Sincronizado com o banco online ✓'
-          : 'Não foi possível sincronizar — verifique a conexão'),
+          : 'Não foi possível sincronizar — '
+              '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 2),
+      duration: Duration(seconds: ok ? 2 : 6),
     ));
     if (ok) {
       // Descarta os layouts em memória e recarrega tudo do banco recém-
