@@ -60,9 +60,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? 'Sincronizado com o banco online ✓'
-          : 'Não foi possível sincronizar — verifique a conexão'),
+          : 'Não foi possível sincronizar — '
+              '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 2),
+      duration: Duration(seconds: ok ? 2 : 6),
     ));
   }
 
@@ -240,10 +241,26 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                       child: Row(children: [
                         Expanded(
-                          child: Text(
-                            _textoUltimaSync(),
-                            style: const TextStyle(
-                                color: Color(0xFF8a9aa8), fontSize: 11),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _textoUltimaSync(),
+                                style: const TextStyle(
+                                    color: Color(0xFF8a9aa8), fontSize: 11),
+                              ),
+                              if (TursoService().ultimoErroSync != null) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Última falha: '
+                                  '${TursoService().ultimoErroSync}',
+                                  style: const TextStyle(
+                                      color: Color(0xFFe57373),
+                                      fontSize: 11,
+                                      height: 1.3),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                         OutlinedButton.icon(
