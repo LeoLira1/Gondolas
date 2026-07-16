@@ -772,7 +772,9 @@ void expositorMagnojetLoja(
   Color cor,
 ) {
   final hw = w / 2, hd = d / 2;
-  const h  = 1.9;
+  // Mesma altura das demais estruturas do mapa (LojaGeometry._estanteH),
+  // pra não estourar a linha da parede na miniatura.
+  const h  = 0.85;
   final corTest = Color.lerp(cor, Colors.white, 0.35)!;
 
   void box(double x0, double x1, double y0, double y1,

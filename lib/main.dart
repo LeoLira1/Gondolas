@@ -572,7 +572,7 @@ class _DialogLimparProdutoState extends State<_DialogLimparProduto> {
                               children: [
                                 Text(p.nome, style: const TextStyle(color: Colors.white, fontSize: 13)),
                                 Text(
-                                  '$qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
+                                  '${p.codigo} · $qtd ${qtd == 1 ? 'unidade' : 'unidades'}',
                                   style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
                                 ),
                               ],
