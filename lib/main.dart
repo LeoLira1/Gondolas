@@ -5,6 +5,7 @@ import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_scene.dart';
 import 'estoque_localizado_service.dart';
+import 'expositor_magnojet_scene.dart';
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
@@ -1520,12 +1521,14 @@ class _GondolaPageState extends State<GondolaPage> {
     if (encontrado == null) {
       if (naEstante != null) {
         final nivProduto = niveisProdutoPara(naEstante.estanteNum);
+        final maxColunas = numColunasPara(naEstante.estanteNum);
         final nivelNomes =
             List.generate(nivProduto, (i) => 'Nível ${i + 1}');
-        const colNomes   = ['Col. 1',  'Col. 2',  'Col. 3' ];
+        final colNomes   =
+            List.generate(maxColunas, (i) => 'Col. ${i + 1}');
         final locEstante =
             '📦 ${produto.nome}\n'
-            'Estante ${naEstante.estanteNum} · ${colNomes[naEstante.coluna.clamp(0, 2)]} · '
+            'Estante ${naEstante.estanteNum} · ${colNomes[naEstante.coluna.clamp(0, maxColunas - 1)]} · '
             '${nivelNomes[naEstante.nivel.clamp(0, nivProduto - 1)]} · Slot ${naEstante.slot + 1}';
         setState(() => _resultadoBusca = locEstante);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -2537,6 +2540,18 @@ class _EstantePageState extends State<EstantePage> {
         gap:      Edr300Geometry.gap,
       );
     }
+    if (_estanteAtual == expositorMagnojetNum) {
+      const geo = ExpositorMagnojetGeometry();
+      final celula = geo.cells
+          .firstWhere((c) => c.coluna == coluna && c.linha == nivel);
+      // Um produto por gancho: slot sempre 0.
+      return (
+        maxSlots: 1,
+        xMin:     celula.xCenter - ExpositorMagnojetGeometry.wPacote / 2,
+        wCaixa:   ExpositorMagnojetGeometry.wPacote,
+        gap:      0.0,
+      );
+    }
     final celula = EstanteGeometry.celulasPara(_estanteAtual)
         .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
     return (
@@ -2905,17 +2920,19 @@ class _EstantePageState extends State<EstantePage> {
           .toList();
       _carregandoLayout  = false;
       _destacadoCodigo   = produto.codigo;
-      _colunaSelecionada = encontrado.coluna.clamp(0, numColunasEstante - 1);
+      _colunaSelecionada = encontrado.coluna
+          .clamp(0, numColunasPara(encontrado.estanteNum) - 1);
       _nivelSelecionado  = encontrado.nivel
           .clamp(0, niveisProdutoPara(encontrado.estanteNum) - 1);
       _slotSelecionado   = encontrado.slot;
     });
 
-    final nivProduto = niveisProdutoPara(encontrado.estanteNum);
-    final nivelNomes = List.generate(nivProduto, (i) => 'Nível ${i + 1}');
-    const colNomes   = ['Col. 1',  'Col. 2',  'Col. 3' ];
-    final nivelNome  = nivelNomes[encontrado.nivel.clamp(0, nivProduto - 1)];
-    final colNome    = colNomes[encontrado.coluna.clamp(0, 2)];
+    final nivProduto  = niveisProdutoPara(encontrado.estanteNum);
+    final maxColunas  = numColunasPara(encontrado.estanteNum);
+    final nivelNomes  = List.generate(nivProduto, (i) => 'Nível ${i + 1}');
+    final colNomes    = List.generate(maxColunas, (i) => 'Col. ${i + 1}');
+    final nivelNome   = nivelNomes[encontrado.nivel.clamp(0, nivProduto - 1)];
+    final colNome     = colNomes[encontrado.coluna.clamp(0, maxColunas - 1)];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
         '📍 ${produto.nome} → Estante ${encontrado.estanteNum}, '
@@ -3039,6 +3056,15 @@ class _EstantePageState extends State<EstantePage> {
               onPressed: () => Navigator.push(context,
                   MaterialPageRoute(builder: (_) => const EstanteEdr300Page())),
             ),
+          if (_estanteAtual == expositorMagnojetNum)
+            IconButton(
+              icon: const Icon(Icons.view_in_ar_outlined,
+                  color: Color(0xFFe0772b), size: 22),
+              tooltip: 'Ver modelo 3D',
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(
+                      builder: (_) => const ExpositorMagnojetPage())),
+            ),
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
             tooltip: 'Ver no mapa',
@@ -3110,6 +3136,19 @@ class _EstantePageState extends State<EstantePage> {
                     desatualizados:      _desatualizados,
                     destacadosCodigos:   _destacadosCodigos,
                   )
+                : _estanteAtual == expositorMagnojetNum
+                    ? ExpositorMagnojetScene(
+                        geometry:            const ExpositorMagnojetGeometry(showFloor: false),
+                        autoRotate:          false,
+                        caixas:              _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:       _corPorProduto,
+                        onTapGancho:           (c, l) => _onTapCelula(c, l, 0),
+                        onTapGanchoVisualizar: (c, l) => _onTapCelulaVisualizar(c, l, 0),
+                        destacadoCodigo:     _destacadoCodigo,
+                        desatualizados:      _desatualizados,
+                        destacadosCodigos:   _destacadosCodigos,
+                      )
                 : EstanteScene(
                     estanteAtual:         _estanteAtual,
                     caixas:               _caixasAtuais,
@@ -3525,6 +3564,271 @@ class _EstanteEdr300PageState extends State<EstanteEdr300Page> {
                                 color: _txt, fontWeight: FontWeight.bold)),
                         const TextSpan(
                             text: '\nMontante perfurado, regulagem livre'),
+                      ],
+                    )),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Botão de ajustes
+          Positioned(
+            right: 18, bottom: 24,
+            child: SafeArea(
+              child: ElevatedButton(
+                onPressed: () => setState(() => _panelOpen = !_panelOpen),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _accent,
+                  foregroundColor: const Color(0xFF1a1208),
+                  shape:           const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 22, vertical: 14),
+                  textStyle: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.bold),
+                  elevation: 8,
+                ),
+                child: Text(_panelOpen ? '✕ Fechar' : '⚙ Ajustes'),
+              ),
+            ),
+          ),
+          // hint
+          const Positioned(
+            left: 22, bottom: 18,
+            child: SafeArea(
+              child: Text('Arraste para girar · pinça para zoom',
+                style: TextStyle(fontSize: 11, color: _txtDim)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 14, top: 8),
+    child: Text(text,
+      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+          letterSpacing: 2.5, color: _txtDim)),
+  );
+
+  Widget _slider(
+    String label, double value, double min, double max, double step,
+    ValueChanged<double> onChanged, {
+    required String Function(double) fmt,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label,
+                style: const TextStyle(fontSize: 13, color: _txt)),
+              Text(fmt(value),
+                style: const TextStyle(fontSize: 13,
+                    color: _accentS, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor:   _accent,
+              inactiveTrackColor: _line,
+              thumbColor:         _accent,
+              overlayColor: _accent.withAlpha(40),
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              trackHeight: 4,
+            ),
+            child: Slider(
+              value:     value,
+              min:       min,
+              max:       max,
+              divisions: ((max - min) / step).round(),
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toggle(String label, bool on, VoidCallback onTap) => Expanded(
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: on ? _accent : Colors.transparent,
+          border: Border.all(color: on ? _accent : _line),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w700,
+            color: on ? const Color(0xFF1a1208) : _txtDim,
+          )),
+      ),
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ExpositorMagnojetPage — modelo 3D interativo do Expositor MagnoJet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ExpositorMagnojetPage extends StatefulWidget {
+  const ExpositorMagnojetPage({super.key});
+
+  @override
+  State<ExpositorMagnojetPage> createState() => _ExpositorMagnojetPageState();
+}
+
+class _ExpositorMagnojetPageState extends State<ExpositorMagnojetPage> {
+  int    _colunas    = 4;
+  int    _linhas     = 6;
+  double _height     = 1.70;
+  double _width      = 1.05;
+  bool   _autoRot    = true;
+  bool   _showCesto  = true;
+  bool   _showFloor  = true;
+  bool   _wireframe  = false;
+  bool   _panelOpen  = false;
+
+  static const _bg      = Color(0xFF0e1116);
+  static const _panel   = Color(0xFF161b22);
+  static const _line    = Color(0xFF262d38);
+  static const _txt     = Color(0xFFc9d3df);
+  static const _txtDim  = Color(0xFF7c8696);
+  static const _accent  = Color(0xFFe0772b);
+  static const _accentS = Color(0xFFf0a868);
+
+  ExpositorMagnojetGeometry get _geo => ExpositorMagnojetGeometry(
+    colunas:   _colunas,
+    linhas:    _linhas,
+    height:    _height,
+    width:     _width,
+    showCesto: _showCesto,
+    showFloor: _showFloor,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: ExpositorMagnojetScene(
+              geometry:   _geo,
+              wireframe:  _wireframe,
+              autoRotate: _autoRot,
+            ),
+          ),
+          // HUD
+          Positioned(
+            top: 0, left: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: const Icon(Icons.arrow_back_ios,
+                              color: _txtDim, size: 20),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text('Expositor',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                          letterSpacing: 2, color: _txtDim)),
+                    const SizedBox(height: 2),
+                    Text.rich(TextSpan(
+                      style: const TextStyle(fontSize: 22,
+                          fontWeight: FontWeight.bold, color: _txt),
+                      children: const [
+                        TextSpan(text: 'MagnoJet · '),
+                        TextSpan(text: 'Painel canaletado',
+                            style: TextStyle(color: _accentS)),
+                      ],
+                    )),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Painel de parâmetros
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 260),
+            curve:    Curves.easeInOut,
+            right: _panelOpen ? 18 : -300,
+            top:   18, bottom: 18,
+            width: 272,
+            child: SingleChildScrollView(
+              child: Container(
+                decoration: BoxDecoration(
+                  color:        _panel,
+                  border:       Border.all(color: _line),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _sectionLabel('Parâmetros'),
+                    _slider('Colunas', _colunas.toDouble(), 3, 5, 1,
+                      (v) => setState(() => _colunas = v.round()),
+                      fmt: (v) => '${v.round()}'),
+                    _slider('Linhas', _linhas.toDouble(), 4, 8, 1,
+                      (v) => setState(() => _linhas = v.round()),
+                      fmt: (v) => '${v.round()}'),
+                    _slider('Altura (cm)', _height * 100, 120, 210, 2,
+                      (v) => setState(() => _height = v / 100),
+                      fmt: (v) => '${v.round()}'),
+                    _slider('Largura (cm)', _width * 100, 70, 140, 2,
+                      (v) => setState(() => _width = v / 100),
+                      fmt: (v) => '${v.round()}'),
+                    const SizedBox(height: 4),
+                    _sectionLabel('Exibição'),
+                    Row(children: [
+                      _toggle('Girar',  _autoRot,
+                        () => setState(() => _autoRot   = !_autoRot)),
+                      const SizedBox(width: 8),
+                      _toggle('Cesto',  _showCesto,
+                        () => setState(() => _showCesto = !_showCesto)),
+                    ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      _toggle('Piso',    _showFloor,
+                        () => setState(() => _showFloor = !_showFloor)),
+                      const SizedBox(width: 8),
+                      _toggle('Aramado', _wireframe,
+                        () => setState(() => _wireframe = !_wireframe)),
+                    ]),
+                    const SizedBox(height: 14),
+                    const Divider(color: _line),
+                    const SizedBox(height: 10),
+                    Text.rich(TextSpan(
+                      style: const TextStyle(fontSize: 12,
+                          color: _txtDim, height: 1.8),
+                      children: [
+                        const TextSpan(text: 'MagnoJet',
+                            style: TextStyle(
+                                color: _txt, fontWeight: FontWeight.bold)),
+                        TextSpan(text: ' · $_colunas × $_linhas ganchos\n'),
+                        const TextSpan(text: 'Painel canaletado · '),
+                        const TextSpan(text: '1 produto/gancho',
+                            style: TextStyle(
+                                color: _txt, fontWeight: FontWeight.bold)),
+                        const TextSpan(
+                            text: '\nSacolinhas empilhadas no pino de arame'),
                       ],
                     )),
                   ],

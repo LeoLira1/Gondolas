@@ -31,14 +31,31 @@ const Set<int>     estantesComLabelEstendido = {3, 4};
 const int estanteEdr300Num    = 8;
 const int niveisProdutoEdr300 = 6;
 
+// O Expositor MagnoJet (painel canaletado com ganchos) reutiliza a infra de
+// estantes: local_tipo 'estante', número próprio, coluna = coluna do gancho,
+// nivel = linha do gancho, slot sempre 0 (um produto por gancho).
+const int expositorMagnojetNum     = 9;
+const int colunasExpositorMagnojet = 4;
+const int linhasExpositorMagnojet  = 6;
+
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 
 int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? niveisProdutoEdr300
-    : temNivelTopoPara(estanteNum)
-        ? niveisProdutoEstendido
-        : niveisProdutoPadrao;
+    : estanteNum == expositorMagnojetNum
+        ? linhasExpositorMagnojet
+        : temNivelTopoPara(estanteNum)
+            ? niveisProdutoEstendido
+            : niveisProdutoPadrao;
+
+/// Número de colunas de uma estante — usado pra clampar/nomear a coluna
+/// encontrada numa busca sem estourar a grade real da estrutura.
+int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
+    ? 1
+    : estanteNum == expositorMagnojetNum
+        ? colunasExpositorMagnojet
+        : numColunasEstante;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
 /// de converter para letra. Só a Estante 4 precisa de offset, para continuar
@@ -64,8 +81,11 @@ String letraDoIndice(int index) {
 /// A Estante 8 (EDR-300) é coluna única, então usa nColunas=1 e offset 0.
 String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   final nNiveis  = niveisProdutoPara(estanteNum);
-  final nColunas = estanteNum == estanteEdr300Num ? 1 : numColunasEstante;
-  final offset   = estanteNum == estanteEdr300Num ? 0 : letraOffsetPara(estanteNum);
+  final nColunas = numColunasPara(estanteNum);
+  final offset   =
+      (estanteNum == estanteEdr300Num || estanteNum == expositorMagnojetNum)
+          ? 0
+          : letraOffsetPara(estanteNum);
   final row      = nNiveis - 1 - nivel;
   return letraDoIndice(offset + row * nColunas + coluna);
 }

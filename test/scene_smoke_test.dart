@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
+import 'package:gondola_camda/expositor_magnojet_scene.dart';
 import 'package:gondola_camda/loja_scene.dart';
 import 'package:gondola_camda/models.dart';
 
@@ -89,6 +90,46 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(tester.takeException(), isNull);
     // Descarta a cena para encerrar o ticker antes do fim do teste.
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  test('expositor MagnoJet: grade de ganchos tem colunas × linhas células', () {
+    const geo = ExpositorMagnojetGeometry();
+    expect(geo.cells.length, geo.colunas * geo.linhas);
+    // Ganchos não colidem: passo vertical maior que a altura da sacolinha.
+    final passoY = geo.linhaY(1) - geo.linhaY(0);
+    expect(passoY, greaterThan(ExpositorMagnojetGeometry.hPacote));
+  });
+
+  test('expositor MagnoJet: letras seguem a convenção (A = topo-esquerda)', () {
+    // Linha do topo (nivel = linhas-1), coluna 0 → 'A'
+    expect(
+      letraEstanteCelula(expositorMagnojetNum, 0, linhasExpositorMagnojet - 1),
+      'A',
+    );
+    // Linha de baixo, última coluna → última letra da grade
+    expect(
+      letraEstanteCelula(
+          expositorMagnojetNum, colunasExpositorMagnojet - 1, 0),
+      letraDoIndice(
+          colunasExpositorMagnojet * linhasExpositorMagnojet - 1),
+    );
+  });
+
+  testWidgets('ExpositorMagnojetScene renderiza sem exceções', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: ExpositorMagnojetScene(
+        geometry:   ExpositorMagnojetGeometry(showFloor: false),
+        autoRotate: false,
+        caixas: [
+          CaixaColocadaEstante(coluna: 0, nivel: 5, slot: 0, produtoId: 'X1'),
+          CaixaColocadaEstante(coluna: 3, nivel: 0, slot: 0, produtoId: 'X2'),
+        ],
+        corPorProduto: {'X1': Colors.green, 'X2': Colors.amber},
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
 }
