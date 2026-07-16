@@ -20,6 +20,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   bool    _testeOk     = false;
   bool    _cacheLocal  = true;
   bool    _sincronizando = false;
+  bool    _limpandoCache = false;
 
   @override
   void initState() {
@@ -64,6 +65,58 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: Duration(seconds: ok ? 2 : 6),
+    ));
+  }
+
+  Future<void> _confirmarLimparCache() async {
+    final confirmou = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          'Limpar cache local?',
+          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        content: const Text(
+          'Apaga o arquivo de dados salvo neste dispositivo e baixa tudo de '
+          'novo do banco online. Use quando a sincronização falhar de forma '
+          'persistente (conflito de replica).\n\n'
+          'Gravações feitas offline e ainda não sincronizadas serão perdidas.',
+          style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Limpar e rebaixar',
+                style: TextStyle(color: Color(0xFFe57373))),
+          ),
+        ],
+      ),
+    );
+    if (confirmou == true) _limparCacheLocal();
+  }
+
+  Future<void> _limparCacheLocal() async {
+    setState(() => _limpandoCache = true);
+    final ok = await TursoService().limparCacheLocal();
+    if (ok) await TursoService().init();
+    if (!mounted) return;
+    setState(() => _limpandoCache = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (TursoService().isConnected
+              ? 'Cache local limpo e rebaixado do banco online ✓'
+              : 'Cache local limpo — sem conexão para rebaixar agora')
+          : 'Não foi possível limpar o cache local'),
+      backgroundColor:
+          ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 4),
     ));
   }
 
@@ -287,6 +340,35 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                           ),
                         ),
                       ]),
+                    ),
+                  if (_cacheLocal)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed:
+                              _limpandoCache ? null : _confirmarLimparCache,
+                          icon: _limpandoCache
+                              ? const SizedBox(
+                                  width: 13,
+                                  height: 13,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFFe57373),
+                                  ),
+                                )
+                              : const Icon(Icons.delete_sweep_outlined, size: 15),
+                          label: Text(_limpandoCache
+                              ? 'Limpando...'
+                              : 'Limpar cache local'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFFe57373),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 4),
+                          ),
+                        ),
+                      ),
                     ),
                 ]),
               ),
