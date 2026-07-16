@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:libsql_dart/libsql_dart.dart';
@@ -156,11 +157,15 @@ class TursoService {
   static const Duration _timeoutBootstrap = Duration(seconds: 90);
   static const Duration _timeoutSync      = Duration(minutes: 3);
 
+  Future<String> _caminhoCacheLocal() async {
+    final dir = await getApplicationSupportDirectory();
+    return '${dir.path}/camda_gondolas_cache.db';
+  }
+
   Future<LibsqlClient?> _conectarComCacheLocal(String url, String token) async {
     LibsqlClient? client;
     try {
-      final dir  = await getApplicationSupportDirectory();
-      final path = '${dir.path}/camda_gondolas_cache.db';
+      final path = await _caminhoCacheLocal();
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       await client.connect().timeout(_timeoutConexao);
 
@@ -339,6 +344,47 @@ class TursoService {
       return 'sem conexão com o banco — verifique a internet';
     }
     return msg.length > 140 ? '${msg.substring(0, 140)}…' : msg;
+  }
+
+  /// Apaga o arquivo de cache local (embedded replica) e reseta a conexão,
+  /// forçando o próximo init() a rebaixar tudo do zero do Turso. É a única
+  /// saída quando o replica local diverge do remoto de um jeito que o push
+  /// não consegue mais reconciliar sozinho (ex: InvalidPushFrameConflict) —
+  /// gravações feitas offline e ainda não sincronizadas são perdidas.
+  Future<bool> limparCacheLocal() async {
+    final clienteAntigo = _client;
+
+    _connected       = false;
+    _client          = null;
+    _urlAtiva        = null;
+    _tokenAtivo      = null;
+    _cacheLocalAtivo = null;
+    _modoLocal       = false;
+    _produtosCache   = null;
+    _produtosCacheEm = null;
+    _ultimoErroSync  = null;
+
+    if (clienteAntigo != null) {
+      try {
+        await clienteAntigo.dispose();
+      } catch (_) {}
+    }
+
+    try {
+      final base = await _caminhoCacheLocal();
+      for (final sufixo in ['', '-wal', '-shm', '-journal']) {
+        final arquivo = File('$base$sufixo');
+        if (await arquivo.exists()) await arquivo.delete();
+      }
+    } catch (_) {
+      return false;
+    }
+
+    _ultimaSincronizacao = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(keyUltimaSync);
+
+    return true;
   }
 
   // Garante que existe conexão antes de uma query: se o init() disparado na
