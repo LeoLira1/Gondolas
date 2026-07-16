@@ -2,8 +2,9 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
+import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
 import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
-import 'models.dart' show corConferenciaCiano;
+import 'models.dart' show corConferenciaCiano, expositorMagnojetNum;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ const List<ItemLoja> itensLoja = [
   // 8 estantes encostadas nas paredes
   ItemLoja(tipo: 'estante', numero: 7, x: 1.00, z:  1.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 8, x: 2.10, z: 0.55, w: 1.4, d: 0.7),
+  ItemLoja(tipo: 'estante', numero: 9, x: 5.0,  z: 0.55, w: 1.05, d: 0.55),
   ItemLoja(tipo: 'estante', numero: 6, x: 3.20, z:  1.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 2, x: 9.45, z:  2.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 1, x: 9.45, z:  4.0, w: 0.7, d: 1.6),
@@ -162,6 +164,8 @@ class LojaGeometry {
         _gondola(faces, item, cor);
       } else if (item.numero == 8) {
         _estanteEdr300(faces, item, cor);
+      } else if (item.numero == expositorMagnojetNum) {
+        expositorMagnojetLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else {
         _estante(faces, item, cor);
       }
