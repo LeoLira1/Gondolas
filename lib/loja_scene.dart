@@ -272,13 +272,13 @@ class LojaGeometry {
   }
 
   // Renderiza a Estante Parede (seções 13–18): peça única comprida e baixa —
-  // 7 prateleiras "flutuantes" e ferros verticais no lado da parede (x menor),
+  // 6 prateleiras "flutuantes" e ferros verticais no lado da parede (x menor),
   // sem montantes na frente.
   static void _estanteParede(List<Face> faces, ItemLoja item, Color cor) {
     final cx = item.x, cz = item.z;
     final hw = item.w / 2, hd = item.d / 2;
     const h       = 0.55;
-    const nNiveis = 7;
+    const nNiveis = 6;
     const nSecoes = 6;
     const sT      = _shelfT;
 
@@ -294,7 +294,7 @@ class LojaGeometry {
         color: corFerro);
     }
 
-    // 7 prateleiras horizontais full-length.
+    // 6 prateleiras horizontais full-length.
     for (var i = 0; i < nNiveis; i++) {
       final y = i * (h - sT) / (nNiveis - 1);
       _boxLoja(faces,

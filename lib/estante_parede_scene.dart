@@ -32,8 +32,9 @@ class CelulaParede {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class EstanteParedeGeometry {
-  // Topo de cada plano: índice 0 = base, 1..6 = níveis 1..6.
-  static const List<double> ys = [0, 0.46, 0.94, 1.42, 1.90, 2.38, 2.86];
+  // Topo de cada plano: índice 0 = base, 1..5 = níveis 1..5 (6 planos, como
+  // a peça real da loja).
+  static const List<double> ys = [0, 0.46, 0.94, 1.42, 1.90, 2.38];
 
   static const double espessura     = 0.08;
   static const double profundidade  = 0.58;
@@ -80,8 +81,8 @@ class EstanteParedeGeometry {
   /// app para converter o toque (hx) em slot com a mesma régua do desenho.
   static double xSlot0(CelulaParede c) => c.xMin + margemSlots;
 
-  // Altura útil da caixa: 74% do vão até a prateleira de cima (nível 6 usa
-  // um vão nominal, já que não tem prateleira acima).
+  // Altura útil da caixa: 74% do vão até a prateleira de cima (o último
+  // nível usa um vão nominal, já que não tem prateleira acima).
   static double alturaCaixa(int nivel) {
     final vao = nivel < niveisProdutoParede - 1
         ? ys[nivel + 1] - ys[nivel] - espessura
@@ -93,7 +94,7 @@ class EstanteParedeGeometry {
     final faces = <Face>[];
     const halfL = larguraTotal / 2;
 
-    // 7 prateleiras full-width: corpo verde escuro + lâmina de topo mais clara.
+    // 6 prateleiras full-width: corpo verde escuro + lâmina de topo mais clara.
     for (final y in ys) {
       _box(faces,
           x0: -halfL,   x1: halfL,
@@ -112,7 +113,7 @@ class EstanteParedeGeometry {
     for (final px in [-halfL, halfL]) {
       _box(faces,
           x0: px - 0.05,  x1: px + 0.05,
-          y0: 0,          y1: ys[6] + espessura + 0.12,
+          y0: 0,          y1: ys.last + espessura + 0.12,
           z0: zParede - 0.03, z1: zParede + 0.05,
           color: _corFerro);
 
@@ -283,7 +284,7 @@ class EstanteParedePainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    // Letra contínua por célula, mesma convenção das outras estantes.
+    // Endereço numérico contínuo por célula (1..72, coluna a coluna).
     for (final celula in EstanteParedeGeometry.celulas()) {
       final xCenter = (celula.xMin + celula.xMax) / 2;
       final hit = project(Vec3(xCenter, celula.yTop + 0.06, 0));
@@ -405,7 +406,7 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene> {
     rotY:   0.35,
     rotX:   0.12,
     dist:   6.4,
-    target: Vec3(0, 1.55, 0),
+    target: Vec3(0, 1.30, 0),
   );
   final _painterKey = GlobalKey();
 

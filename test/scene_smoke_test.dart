@@ -117,22 +117,23 @@ void main() {
     );
   });
 
-  test('estante parede: grade 2×7 e letras contínuas entre as 6 seções', () {
+  test('estante parede: grade 2×6 e números contínuos entre as 6 seções', () {
     expect(EstanteParedeGeometry.celulas().length,
         colunasParede * niveisProdutoParede);
 
-    // Convenção de linhas de letraEstanteCelula: topo-esquerda primeiro.
-    // E13 vai de A (nível 6, col 0) a N (base, col 1).
-    expect(letraEstanteCelula(13, 0, 6), 'A');
-    expect(letraEstanteCelula(13, 1, 0), 'N');
-    // Cada seção continua de onde a anterior parou: E14 O–AB, ..., E18 BS–CF.
-    expect(letraEstanteCelula(14, 0, 6), 'O');
-    expect(letraEstanteCelula(14, 1, 0), 'AB');
-    expect(letraEstanteCelula(15, 0, 6), 'AC');
-    expect(letraEstanteCelula(16, 0, 6), 'AQ');
-    expect(letraEstanteCelula(17, 0, 6), 'BE');
-    expect(letraEstanteCelula(18, 0, 6), 'BS');
-    expect(letraEstanteCelula(18, 1, 0), 'CF');
+    // Endereços numéricos, de cima pra baixo dentro da coluna, coluna
+    // esquerda antes da direita: E13 col 0 = 1..6, col 1 = 7..12.
+    expect(letraEstanteCelula(13, 0, 5), '1');
+    expect(letraEstanteCelula(13, 0, 0), '6');
+    expect(letraEstanteCelula(13, 1, 5), '7');
+    expect(letraEstanteCelula(13, 1, 0), '12');
+    // Cada seção continua de onde a anterior parou, até 72 na E18.
+    expect(letraEstanteCelula(14, 0, 5), '13');
+    expect(letraEstanteCelula(15, 0, 5), '25');
+    expect(letraEstanteCelula(16, 0, 5), '37');
+    expect(letraEstanteCelula(17, 0, 5), '49');
+    expect(letraEstanteCelula(18, 0, 5), '61');
+    expect(letraEstanteCelula(18, 1, 0), '72');
   });
 
   test('estante parede: posição global P1–P12 derivada de seção + coluna', () {
@@ -175,7 +176,7 @@ void main() {
         estanteAtual: 15,
         caixas: [
           CaixaColocadaEstante(coluna: 0, nivel: 0, slot: 0, produtoId: 'W1'),
-          CaixaColocadaEstante(coluna: 1, nivel: 6, slot: 2, produtoId: 'W2'),
+          CaixaColocadaEstante(coluna: 1, nivel: 5, slot: 2, produtoId: 'W2'),
         ],
         corPorProduto: {'W1': Colors.green, 'W2': Colors.amber},
         destacadoCodigo: 'W2',
