@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
+import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
 import 'package:gondola_camda/loja_scene.dart';
 import 'package:gondola_camda/models.dart';
@@ -114,6 +115,71 @@ void main() {
       letraDoIndice(
           colunasExpositorMagnojet * linhasExpositorMagnojet - 1),
     );
+  });
+
+  test('estante parede: grade 2×7 e letras contínuas entre as 6 seções', () {
+    expect(EstanteParedeGeometry.celulas().length,
+        colunasParede * niveisProdutoParede);
+
+    // Convenção de linhas de letraEstanteCelula: topo-esquerda primeiro.
+    // E13 vai de A (nível 6, col 0) a N (base, col 1).
+    expect(letraEstanteCelula(13, 0, 6), 'A');
+    expect(letraEstanteCelula(13, 1, 0), 'N');
+    // Cada seção continua de onde a anterior parou: E14 O–AB, ..., E18 BS–CF.
+    expect(letraEstanteCelula(14, 0, 6), 'O');
+    expect(letraEstanteCelula(14, 1, 0), 'AB');
+    expect(letraEstanteCelula(15, 0, 6), 'AC');
+    expect(letraEstanteCelula(16, 0, 6), 'AQ');
+    expect(letraEstanteCelula(17, 0, 6), 'BE');
+    expect(letraEstanteCelula(18, 0, 6), 'BS');
+    expect(letraEstanteCelula(18, 1, 0), 'CF');
+  });
+
+  test('estante parede: posição global P1–P12 derivada de seção + coluna', () {
+    expect(posicaoGlobalParede(13, 0), 1);
+    expect(posicaoGlobalParede(13, 1), 2);
+    expect(posicaoGlobalParede(15, 1), 6);
+    expect(posicaoGlobalParede(18, 1), 12);
+  });
+
+  test('estantes 3 e 4 continuam com as letras de sempre (A–O / P–AD)', () {
+    expect(letraEstanteCelula(3, 0, 4), 'A');
+    expect(letraEstanteCelula(3, 2, 0), 'O');
+    expect(letraEstanteCelula(4, 0, 4), 'P');
+    expect(letraEstanteCelula(4, 2, 0), 'AD');
+  });
+
+  test('ordem de navegação: parede no lugar das estantes 3 e 4', () {
+    expect(ordemNavegacaoEstantes.contains(3), isFalse);
+    expect(ordemNavegacaoEstantes.contains(4), isFalse);
+    expect(ordemNavegacaoEstantes.sublist(2, 8), [13, 14, 15, 16, 17, 18]);
+    // Mapa: as 6 seções apontam para o retângulo único (numero 13).
+    expect(numeroNoMapaLoja('estante', 16), estanteParedeMin);
+    expect(numeroNoMapaLoja('estante', 8), 8);
+    expect(numeroNoMapaLoja('gondola', 13), 13);
+    expect(
+      itensLoja.any((it) => it.tipo == 'estante' && it.numero == estanteParedeMin),
+      isTrue,
+    );
+    expect(itensLoja.any((it) => it.tipo == 'estante' && it.numero == 3), isFalse);
+    expect(itensLoja.any((it) => it.tipo == 'estante' && it.numero == 4), isFalse);
+  });
+
+  testWidgets('EstanteParedeScene renderiza sem exceções', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: EstanteParedeScene(
+        estanteAtual: 15,
+        caixas: [
+          CaixaColocadaEstante(coluna: 0, nivel: 0, slot: 0, produtoId: 'W1'),
+          CaixaColocadaEstante(coluna: 1, nivel: 6, slot: 2, produtoId: 'W2'),
+        ],
+        corPorProduto: {'W1': Colors.green, 'W2': Colors.amber},
+        destacadoCodigo: 'W2',
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('ExpositorMagnojetScene renderiza sem exceções', (tester) async {
