@@ -35,6 +35,12 @@ String _labelEndereco(EnderecoLocalizado e) {
     return 'Gôndola ${e.localNum} · Face ${e.faceOuColuna} · Andar ${_andarNomes[andar]}';
   }
   final letra = letraEstanteCelula(e.localNum, e.faceOuColuna, e.andarOuNivel);
+  // Endereço antigo de estante que saiu da loja (substituída pela Estante
+  // Parede): continua listado com a quantidade para o usuário zerar/migrar,
+  // mas marcado — a estrutura não existe mais no app.
+  if (estantesRemovidas.contains(e.localNum)) {
+    return 'Estante ${e.localNum} · $letra (removida)';
+  }
   return 'Estante ${e.localNum} · $letra';
 }
 

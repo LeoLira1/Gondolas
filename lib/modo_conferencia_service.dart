@@ -1,4 +1,5 @@
 import 'package:libsql_dart/libsql_dart.dart';
+import 'models.dart' show estantesRemovidas;
 import 'turso_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -266,9 +267,12 @@ class ModoConferenciaService {
           : codigos.length;
       final lote = codigos.sublist(i, fim);
       final placeholders = List.filled(lote.length, '?').join(', ');
+      // Estantes removidas (3/4) ficam fora: produto que só tem endereço
+      // antigo cai na lista "sem endereço" e é conferido no braço.
       final stmt = await client.prepare(
         'SELECT DISTINCT produto_codigo, estante_num FROM estante_layout '
-        'WHERE produto_codigo IN ($placeholders)',
+        'WHERE produto_codigo IN ($placeholders) '
+        'AND estante_num NOT IN (${estantesRemovidas.join(', ')})',
       );
       final rows = await stmt.query(positional: lote);
       for (final dynamic row in rows as List<dynamic>) {
