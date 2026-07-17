@@ -343,6 +343,94 @@ class EstoqueLocalizadoService {
     }
   }
 
+  /// Exclui um endereço de estoque_localizado (pela chave lógica — ids podem
+  /// divergir entre réplicas offline) e registra a exclusão no log.
+  Future<bool> deleteEndereco({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+    required int faceOuColuna,
+    required int andarOuNivel,
+  }) async {
+    final client = await _conexao();
+    if (client == null) return false;
+    try {
+      final stmtAnterior = await client.prepare(
+        'SELECT quantidade FROM estoque_localizado WHERE produto_codigo = ? AND '
+        'local_tipo = ? AND local_num = ? AND face_ou_coluna = ? AND andar_ou_nivel = ? LIMIT 1',
+      );
+      final rowsAnterior = (await stmtAnterior.query(positional: [
+        produtoCodigo,
+        localTipo,
+        localNum,
+        faceOuColuna,
+        andarOuNivel,
+      ])) as List<dynamic>;
+      final qtdAnterior = rowsAnterior.isEmpty
+          ? null
+          : (rowsAnterior.first as Map<String, dynamic>)['quantidade'] as num?;
+
+      final stmtDelete = await client.prepare(
+        'DELETE FROM estoque_localizado WHERE produto_codigo = ? AND '
+        'local_tipo = ? AND local_num = ? AND face_ou_coluna = ? AND andar_ou_nivel = ?',
+      );
+      await stmtDelete.query(positional: [
+        produtoCodigo,
+        localTipo,
+        localNum,
+        faceOuColuna,
+        andarOuNivel,
+      ]);
+
+      final endereco = EnderecoLocalizado(
+        produtoCodigo: produtoCodigo,
+        localTipo:     localTipo,
+        localNum:      localNum,
+        faceOuColuna:  faceOuColuna,
+        andarOuNivel:  andarOuNivel,
+        quantidade:    0,
+      );
+      final stmtLog = await client.prepare(
+        'INSERT INTO contagens_log '
+        '(produto_codigo, endereco, qtd_anterior, qtd_nova, origem, registrado_em) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+      );
+      await stmtLog.query(positional: [
+        produtoCodigo,
+        endereco.enderecoCompacto,
+        qtdAnterior,
+        0,
+        'gondolas_app_exclusao',
+        DateTime.now().toIso8601String(),
+      ]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Exclui os endereços ZERADOS de um produto num local (gôndola/estante).
+  /// Usado pela limpeza automática ao salvar um layout de onde o produto foi
+  /// removido — quantidades > 0 são estoque contado e nunca somem sozinhas.
+  Future<bool> deleteEnderecosZerados({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+  }) async {
+    final client = await _conexao();
+    if (client == null) return false;
+    try {
+      final stmt = await client.prepare(
+        'DELETE FROM estoque_localizado WHERE produto_codigo = ? AND '
+        'local_tipo = ? AND local_num = ? AND quantidade = 0',
+      );
+      await stmt.query(positional: [produtoCodigo, localTipo, localNum]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Grava os endereços informados e sincroniza o total com o inventário
   /// cíclico, no contrato exato usado pelo dashboard e pelo inventariocamda.
   Future<ResultadoContagem?> concluirContagem(String produtoCodigo) async {
