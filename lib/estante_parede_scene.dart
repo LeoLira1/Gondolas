@@ -42,9 +42,9 @@ class EstanteParedeGeometry {
   static const int    numColunas    = colunasParede;
   static const double larguraTotal  = larguraColuna * numColunas;
 
-  static const int    maxSlots = 3;
-  static const double wCaixa   = 0.34;
-  static const double gap      = 0.055;
+  static const int    maxSlots = 4;
+  static const double wCaixa   = 0.27;
+  static const double gap      = 0.045;
 
   // Frente aberta (produtos, toques) voltada para a câmera em +Z; ferros e
   // mãos francesas no fundo (lado da parede), em -Z — como na loja real.
@@ -56,7 +56,7 @@ class EstanteParedeGeometry {
   static const _corFerro          = Color(0xFF18221D);
   static const _corMaoFrancesa    = Color(0xFF1C2822);
 
-  // Margem interna que centraliza os 3 slots dentro da coluna.
+  // Margem interna que centraliza os 4 slots dentro da coluna.
   static double get margemSlots =>
       (larguraColuna - (maxSlots * wCaixa + (maxSlots - 1) * gap)) / 2;
 
