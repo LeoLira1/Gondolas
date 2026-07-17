@@ -4,7 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
 import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
-import 'models.dart' show corConferenciaCiano, expositorMagnojetNum;
+import 'models.dart'
+    show corConferenciaCiano, ehEstanteParede, estanteParedeMin,
+         expositorMagnojetNum;
+
+/// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
+/// Parede (13–18) são um retângulo único no mapa, registrado como o número da
+/// primeira seção (13).
+int numeroNoMapaLoja(String tipo, int numero) =>
+    tipo == 'estante' && ehEstanteParede(numero) ? estanteParedeMin : numero;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -81,8 +89,11 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: 6, x: 3.20, z:  1.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 2, x: 9.45, z:  2.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 1, x: 9.45, z:  4.0, w: 0.7, d: 1.6),
-  ItemLoja(tipo: 'estante', numero: 4, x: 0.55, z:  9.6, w: 0.7, d: 1.6),
-  ItemLoja(tipo: 'estante', numero: 3, x: 0.55, z: 11.6, w: 0.7, d: 1.6),
+  // Estante Parede (seções 13–18): peça única comprida e baixa na parede
+  // esquerda, no lugar das antigas estantes 3 e 4. Toque leva à seção 1
+  // (E13). Posição aproximada — ajuste fino em x/z/d conforme a loja real.
+  ItemLoja(tipo: 'estante', numero: estanteParedeMin,
+      x: 0.45, z: 10.6, w: 0.55, d: 4.4),
 ];
 
 // Catálogo mock — substituir por query Turso quando disponível
@@ -166,6 +177,8 @@ class LojaGeometry {
         _estanteEdr300(faces, item, cor);
       } else if (item.numero == expositorMagnojetNum) {
         expositorMagnojetLoja(faces, item.x, item.z, item.w, item.d, cor);
+      } else if (ehEstanteParede(item.numero)) {
+        _estanteParede(faces, item, cor);
       } else {
         _estante(faces, item, cor);
       }
@@ -254,6 +267,40 @@ class LojaGeometry {
         x0: cx - hw + pW * 2, x1: cx + hw - pW * 2,
         y0: y,                 y1: y + sT,
         z0: cz - hd + pD,     z1: cz + hd - pD,
+        color: cor);
+    }
+  }
+
+  // Renderiza a Estante Parede (seções 13–18): peça única comprida e baixa —
+  // 7 prateleiras "flutuantes" e ferros verticais no lado da parede (x menor),
+  // sem montantes na frente.
+  static void _estanteParede(List<Face> faces, ItemLoja item, Color cor) {
+    final cx = item.x, cz = item.z;
+    final hw = item.w / 2, hd = item.d / 2;
+    const h       = 0.55;
+    const nNiveis = 7;
+    const nSecoes = 6;
+    const sT      = _shelfT;
+
+    final corFerro = Color.lerp(cor, const Color(0xFF000000), 0.45)!;
+
+    // Ferros verticais traseiros nas bordas das 6 seções (7 ferros).
+    for (var i = 0; i <= nSecoes; i++) {
+      final z = cz - hd + item.d * i / nSecoes;
+      _boxLoja(faces,
+        x0: cx - hw,      x1: cx - hw + 0.06,
+        y0: 0,            y1: h + 0.04,
+        z0: z - 0.02,     z1: z + 0.02,
+        color: corFerro);
+    }
+
+    // 7 prateleiras horizontais full-length.
+    for (var i = 0; i < nNiveis; i++) {
+      final y = i * (h - sT) / (nNiveis - 1);
+      _boxLoja(faces,
+        x0: cx - hw + 0.04, x1: cx + hw,
+        y0: y,               y1: y + sT,
+        z0: cz - hd,         z1: cz + hd,
         color: cor);
     }
   }
@@ -527,7 +574,13 @@ class LojaPainter extends CustomPainter {
     }
 
     for (final item in itensLoja) {
-      if (item.tipo != 'estante' || item.numero == 8) continue;
+      // Sem badges A–E na EDR-300 nem na Estante Parede (as letras da parede
+      // são contínuas por seção e só fazem sentido na cena de detalhe).
+      if (item.tipo != 'estante' ||
+          item.numero == 8 ||
+          ehEstanteParede(item.numero)) {
+        continue;
+      }
       for (var i = 0; i < LojaGeometry._estanteNiveis; i++) {
         final y   = LojaGeometry._nivelY(i) + LojaGeometry._shelfT + 0.02;
         final hit = project(Vec3(item.x, y, item.z));

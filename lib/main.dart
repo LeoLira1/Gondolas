@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
+import 'estante_parede_scene.dart';
 import 'estante_scene.dart';
 import 'estoque_localizado_service.dart';
 import 'expositor_magnojet_scene.dart';
@@ -137,8 +138,10 @@ class _LojaPageState extends State<LojaPage> {
     TursoService().init();
 
     if (widget.itemTipoInicial != null && widget.itemNumeroInicial != null) {
+      final numeroMapa =
+          numeroNoMapaLoja(widget.itemTipoInicial!, widget.itemNumeroInicial!);
       final idx = itensLoja.indexWhere((it) =>
-          it.tipo == widget.itemTipoInicial && it.numero == widget.itemNumeroInicial);
+          it.tipo == widget.itemTipoInicial && it.numero == numeroMapa);
       if (idx != -1) {
         _selecionadoIdx = idx;
         _focarEm = Vec3(itensLoja[idx].x, 0.2, itensLoja[idx].z);
@@ -192,8 +195,9 @@ class _LojaPageState extends State<LojaPage> {
   }
 
   void _selecionarProduto(ProdutoEncontrado p) {
+    final numeroMapa = numeroNoMapaLoja(p.tipo, p.numero);
     final idx = itensLoja.indexWhere(
-        (it) => it.tipo == p.tipo && it.numero == p.numero);
+        (it) => it.tipo == p.tipo && it.numero == numeroMapa);
     setState(() {
       _selecionadoIdx    = idx != -1 ? idx : null;
       _produtoSelecionado = p;
@@ -211,9 +215,19 @@ class _LojaPageState extends State<LojaPage> {
     final item = itensLoja[idx];
 
     if (_modoConferencia) {
-      final estrutura =
-          _conferencia?.estruturas['${item.tipo}:${item.numero}'];
-      final codigos = estrutura?.codigos ?? const <String>{};
+      // O retângulo da parede representa as 6 seções (13–18): acende os
+      // pendentes de todas ao abrir a cena pela seção 1.
+      final codigos = <String>{};
+      if (item.tipo == 'estante' && ehEstanteParede(item.numero)) {
+        for (var n = estanteParedeMin; n <= estanteParedeMax; n++) {
+          codigos.addAll(
+              _conferencia?.estruturas['estante:$n']?.codigos ?? const {});
+        }
+      } else {
+        codigos.addAll(_conferencia
+                ?.estruturas['${item.tipo}:${item.numero}']?.codigos ??
+            const {});
+      }
       await Navigator.push(context, MaterialPageRoute(
         builder: (_) => item.tipo == 'gondola'
             ? GondolaPage(gondolaInicial: item.numero, codigosConferencia: codigos)
@@ -244,9 +258,14 @@ class _LojaPageState extends State<LojaPage> {
         ),
       ));
     } else {
+      // Se a busca apontou uma seção específica da parede (13–18), abre nela;
+      // sem produto, o retângulo da parede abre pela seção 1 (E13).
+      final estanteInicial = produto != null && produto.tipo == 'estante'
+          ? produto.numero
+          : item.numero;
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => EstantePage(
-          estanteInicial:   item.numero,
+          estanteInicial:   estanteInicial,
           produtoDestacado: produto,
         ),
       ));
@@ -289,9 +308,12 @@ class _LojaPageState extends State<LojaPage> {
     if (conferencia == null) return {};
     final mapa = <int, int>{};
     for (final estrutura in conferencia.estruturas.values) {
+      // As seções da parede (13–18) compartilham o mesmo retângulo no mapa:
+      // soma os pendentes de todas no badge da estrutura única.
+      final numeroMapa = numeroNoMapaLoja(estrutura.tipo, estrutura.numero);
       final idx = itensLoja.indexWhere(
-          (it) => it.tipo == estrutura.tipo && it.numero == estrutura.numero);
-      if (idx != -1) mapa[idx] = estrutura.itens.length;
+          (it) => it.tipo == estrutura.tipo && it.numero == numeroMapa);
+      if (idx != -1) mapa[idx] = (mapa[idx] ?? 0) + estrutura.itens.length;
     }
     return mapa;
   }
@@ -990,7 +1012,19 @@ class _LocationCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cor    = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
     final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
-    final tipoLabel = item.tipo == 'gondola' ? 'Gôndola' : 'Estante';
+    final ehParede = item.tipo == 'estante' && ehEstanteParede(item.numero);
+    final tipoLabel = item.tipo == 'gondola'
+        ? 'Gôndola'
+        : ehParede
+            ? 'Estante Parede'
+            : 'Estante';
+    // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
+    // resultado da busca quando há produto selecionado.
+    final numeroTitulo = ehParede
+        ? 'E$estanteParedeMin–E$estanteParedeMax'
+        : '$prefixo${item.numero}';
+    final numeroTexto =
+        produto != null && produto!.tipo == item.tipo ? produto!.numero : item.numero;
 
     return Container(
       decoration: BoxDecoration(
@@ -1015,7 +1049,7 @@ class _LocationCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '$prefixo${item.numero}',
+                numeroTitulo,
                 style: TextStyle(
                   color: cor,
                   fontSize: 28,
@@ -1028,8 +1062,10 @@ class _LocationCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             produto != null
-                ? '${produto!.nome} · $tipoLabel nº ${item.numero} · ${produto!.nivelDescricao}'
-                : '$tipoLabel nº ${item.numero}',
+                ? '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
+                : ehParede
+                    ? '$tipoLabel · 6 seções · P1–P12'
+                    : '$tipoLabel nº ${item.numero}',
             style: const TextStyle(
               color: Color(0xFFb0ada8),
               fontSize: 12,
@@ -2496,8 +2532,16 @@ class _EstantePageState extends State<EstantePage> {
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
+  // Índice da estante atual na ordem do carrossel; -1 se ela saiu da
+  // navegação (ex.: dados antigos das estantes 3/4 achados pela busca).
+  int get _idxNavegacao => ordemNavegacaoEstantes.indexOf(_estanteAtual);
+
   void _trocarEstante(int delta) {
-    final nova = (_estanteAtual + delta).clamp(1, 12);
+    final idx  = _idxNavegacao;
+    final nova = idx == -1
+        ? ordemNavegacaoEstantes.first
+        : ordemNavegacaoEstantes[
+            (idx + delta).clamp(0, ordemNavegacaoEstantes.length - 1)];
     setState(() {
       _estanteAtual     = nova;
       // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
@@ -2550,6 +2594,17 @@ class _EstantePageState extends State<EstantePage> {
         xMin:     celula.xCenter - ExpositorMagnojetGeometry.wPacote / 2,
         wCaixa:   ExpositorMagnojetGeometry.wPacote,
         gap:      0.0,
+      );
+    }
+    if (ehEstanteParede(_estanteAtual)) {
+      final celula = EstanteParedeGeometry.celulas()
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      // xMin do slot 0 (não da célula): os slots são centralizados na coluna.
+      return (
+        maxSlots: EstanteParedeGeometry.maxSlots,
+        xMin:     EstanteParedeGeometry.xSlot0(celula),
+        wCaixa:   EstanteParedeGeometry.wCaixa,
+        gap:      EstanteParedeGeometry.gap,
       );
     }
     final celula = EstanteGeometry.celulasPara(_estanteAtual)
@@ -2624,9 +2679,14 @@ class _EstantePageState extends State<EstantePage> {
   String get _enderecoSelecionadoTexto {
     final letra = letraEstanteCelula(
         _estanteAtual, _colunaSelecionada!, _nivelSelecionado!);
+    // Na parede o chip mostra também a posição global P1–P12 (derivada),
+    // ex.: 'E15 · AH · Slot 2 (P6)'.
+    final sufixoParede = ehEstanteParede(_estanteAtual)
+        ? ' (P${posicaoGlobalParede(_estanteAtual, _colunaSelecionada!)})'
+        : '';
     return _slotSelecionado != null
-        ? 'E$_estanteAtual · $letra · Slot ${_slotSelecionado! + 1}'
-        : 'E$_estanteAtual · $letra';
+        ? 'E$_estanteAtual · $letra · Slot ${_slotSelecionado! + 1}$sufixoParede'
+        : 'E$_estanteAtual · $letra$sufixoParede';
   }
 
   Future<void> _abrirQuantidade({
@@ -2930,7 +2990,12 @@ class _EstantePageState extends State<EstantePage> {
     final nivProduto  = niveisProdutoPara(encontrado.estanteNum);
     final maxColunas  = numColunasPara(encontrado.estanteNum);
     final nivelNomes  = List.generate(nivProduto, (i) => 'Nível ${i + 1}');
-    final colNomes    = List.generate(maxColunas, (i) => 'Col. ${i + 1}');
+    // Na parede a coluna é anunciada pela posição global P1–P12.
+    final colNomes    = List.generate(
+        maxColunas,
+        (i) => ehEstanteParede(encontrado.estanteNum)
+            ? 'P${posicaoGlobalParede(encontrado.estanteNum, i)}'
+            : 'Col. ${i + 1}');
     final nivelNome   = nivelNomes[encontrado.nivel.clamp(0, nivProduto - 1)];
     final colNome     = colNomes[encontrado.coluna.clamp(0, maxColunas - 1)];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -3117,8 +3182,10 @@ class _EstantePageState extends State<EstantePage> {
 
         _EstanteSelector(
           estanteAtual: _estanteAtual,
-          onPrev: _estanteAtual > 1  ? () => _trocarEstante(-1) : null,
-          onNext: _estanteAtual < 12 ? () => _trocarEstante(1)  : null,
+          onPrev: _idxNavegacao > 0 ? () => _trocarEstante(-1) : null,
+          onNext: _idxNavegacao < ordemNavegacaoEstantes.length - 1
+              ? () => _trocarEstante(1)
+              : null,
         ),
 
         Expanded(
@@ -3148,6 +3215,18 @@ class _EstantePageState extends State<EstantePage> {
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
                         destacadosCodigos:   _destacadosCodigos,
+                      )
+                : ehEstanteParede(_estanteAtual)
+                    ? EstanteParedeScene(
+                        estanteAtual:         _estanteAtual,
+                        caixas:               _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:        _corPorProduto,
+                        onTapCelula:          _onTapCelula,
+                        onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                        destacadoCodigo:      _destacadoCodigo,
+                        desatualizados:       _desatualizados,
+                        destacadosCodigos:    _destacadosCodigos,
                       )
                 : EstanteScene(
                     estanteAtual:         _estanteAtual,
@@ -3393,9 +3472,13 @@ class _EstanteSelector extends StatelessWidget {
                 height: 0.95,
               ),
             ),
-            const Text(
-              'de 12',
-              style: TextStyle(
+            Text(
+              ehEstanteParede(estanteAtual)
+                  ? 'de ${ordemNavegacaoEstantes.length} · PAREDE '
+                      'P${posicaoGlobalParede(estanteAtual, 0)}–'
+                      'P${posicaoGlobalParede(estanteAtual, colunasParede - 1)}'
+                  : 'de ${ordemNavegacaoEstantes.length}',
+              style: const TextStyle(
                 color: Color(0xFF5a6a78),
                 fontSize: 10,
                 letterSpacing: 0.5,
