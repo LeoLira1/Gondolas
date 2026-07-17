@@ -42,12 +42,12 @@ const int linhasExpositorMagnojet  = 6;
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
 // como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
 // que saíram da navegação (os números 3 e 4 não são reutilizados para não
-// colidir com dados antigos no banco). Cada seção: 2 colunas × 7 níveis de
-// produto (nível 0 = base, 1..6 = prateleiras).
+// colidir com dados antigos no banco). Cada seção: 2 colunas × 6 níveis de
+// produto (nível 0 = base, 1..5 = prateleiras).
 const int      estanteParedeMin    = 13;
 const int      estanteParedeMax    = 18;
 const Set<int> estantesParede      = {13, 14, 15, 16, 17, 18};
-const int      niveisProdutoParede = 7;
+const int      niveisProdutoParede = 6;
 const int      colunasParede       = 2;
 
 bool ehEstanteParede(int estanteNum) =>
@@ -93,16 +93,12 @@ int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
             : numColunasEstante;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
-/// de converter para letra — usado pelas peças fisicamente coladas, cujas
-/// letras continuam de uma seção para a outra sem repetição:
-///   · Estante 4 continua a Estante 3 (que tem 15 posições: 5 níveis × 3 col);
-///   · as seções da parede (13–18) continuam umas às outras, 14 células
-///     (7 níveis × 2 colunas) por seção: E13 A–N, E14 O–AB, ..., E18 BS–CF.
-int letraOffsetPara(int estanteNum) => ehEstanteParede(estanteNum)
-    ? (estanteNum - estanteParedeMin) * niveisProdutoParede * colunasParede
-    : estanteNum == 4
-        ? niveisProdutoPara(3) * numColunasEstante
-        : 0;
+/// de converter para letra. Só a Estante 4 precisa de offset, para continuar
+/// a sequência da Estante 3 (que tem 15 posições: 5 níveis × 3 colunas).
+/// A Estante Parede não passa por aqui: usa endereços numéricos próprios
+/// (ver letraEstanteCelula).
+int letraOffsetPara(int estanteNum) =>
+    estanteNum == 4 ? niveisProdutoPara(3) * numColunasEstante : 0;
 
 /// Converte um índice 0-based em rótulo estilo planilha: A, B, ..., Z, AA,
 /// AB, ..., AD... Suporta labels de mais de uma letra sem truncar.
@@ -120,8 +116,17 @@ String letraDoIndice(int index) {
 /// Letra da posição de uma célula (coluna, nível) de uma estante — mesma
 /// convenção usada no desenho da estante (linhas contadas de cima pra baixo).
 /// A Estante 8 (EDR-300) é coluna única, então usa nColunas=1 e offset 0.
+/// A Estante Parede usa NÚMEROS contínuos (1..72) em vez de letras, contados
+/// de cima pra baixo dentro de cada coluna, coluna esquerda antes da direita,
+/// seção 13 antes da 14... — igual à numeração física etiquetada na loja
+/// (E13: 1–6 e 7–12; E14: 13–24; ...; E18: 61–72).
 String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   final nNiveis  = niveisProdutoPara(estanteNum);
+  if (ehEstanteParede(estanteNum)) {
+    final numero = (estanteNum - estanteParedeMin) * nNiveis * colunasParede +
+        coluna * nNiveis + (nNiveis - 1 - nivel) + 1;
+    return '$numero';
+  }
   final nColunas = numColunasPara(estanteNum);
   final offset   =
       (estanteNum == estanteEdr300Num || estanteNum == expositorMagnojetNum)
