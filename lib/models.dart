@@ -64,6 +64,11 @@ const List<int> ordemNavegacaoEstantes = [
   1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12,
 ];
 
+/// Estantes que saíram da loja (substituídas pela Estante Parede). As linhas
+/// antigas delas continuam no Turso, mas esses endereços não aparecem mais em
+/// busca nem em conferência — o produto deve ser recadastrado na parede.
+const Set<int> estantesRemovidas = {3, 4};
+
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 

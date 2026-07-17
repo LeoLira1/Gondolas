@@ -152,6 +152,10 @@ void main() {
   test('ordem de navegação: parede no lugar das estantes 3 e 4', () {
     expect(ordemNavegacaoEstantes.contains(3), isFalse);
     expect(ordemNavegacaoEstantes.contains(4), isFalse);
+    // Removidas ficam fora da navegação e nunca colidem com a parede.
+    expect(ordemNavegacaoEstantes.toSet().intersection(estantesRemovidas),
+        isEmpty);
+    expect(estantesRemovidas.intersection(estantesParede), isEmpty);
     expect(ordemNavegacaoEstantes.sublist(2, 8), [13, 14, 15, 16, 17, 18]);
     // Mapa: as 6 seções apontam para o retângulo único (numero 13).
     expect(numeroNoMapaLoja('estante', 16), estanteParedeMin);

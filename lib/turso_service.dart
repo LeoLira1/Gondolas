@@ -501,6 +501,10 @@ class TursoService {
   // statement bem abaixo do limite de variáveis do SQLite (999).
   static const int _maxLinhasPorInsert = 100;
 
+  // Lista das estantes removidas (ex.: '3, 4') para cláusulas NOT IN — só
+  // constantes inteiras de models.dart, nunca entrada do usuário.
+  static final String _sqlEstantesRemovidas = estantesRemovidas.join(', ');
+
   Future<bool> salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
     if (!await _garantirConexao()) return false;
     try {
@@ -615,7 +619,8 @@ class TursoService {
     try {
       final stmt = await _client!.prepare(
         'SELECT estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex '
-        'FROM estante_layout WHERE produto_codigo = ? LIMIT 1',
+        'FROM estante_layout WHERE produto_codigo = ? '
+        'AND estante_num NOT IN ($_sqlEstantesRemovidas) LIMIT 1',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
       final list = rows as List<dynamic>;
@@ -741,7 +746,8 @@ class TursoService {
     try {
       final stmt = await _client!.prepare(
         'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
-        'FROM estante_layout WHERE produto_nome LIKE ? OR produto_codigo LIKE ? '
+        'FROM estante_layout WHERE (produto_nome LIKE ? OR produto_codigo LIKE ?) '
+        'AND estante_num NOT IN ($_sqlEstantesRemovidas) '
         'ORDER BY produto_nome LIMIT 20',
       );
       final rows = await stmt.query(positional: [like, like]);
