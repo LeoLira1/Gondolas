@@ -1501,7 +1501,24 @@ class _GondolaPageState extends State<GondolaPage> {
       );
     }).toList();
 
+    // Produtos que estavam no layout persistido e saíram nesta edição: os
+    // endereços ZERADOS deles nesta gôndola são apagados junto (quantidades
+    // > 0 são estoque contado e só somem pela lixeira do dialog).
+    final antes = (await TursoService().fetchLayout(_gondolaAtual))
+        .map((c) => c.produtoCodigo)
+        .toSet();
+
     final ok = await TursoService().salvarLayout(_gondolaAtual, itens);
+    if (ok) {
+      final depois = itens.map((i) => i.produtoCodigo).toSet();
+      for (final codigo in antes.difference(depois)) {
+        await EstoqueLocalizadoService().deleteEnderecosZerados(
+          produtoCodigo: codigo,
+          localTipo:     'gondola',
+          localNum:      _gondolaAtual,
+        );
+      }
+    }
     if (!mounted) return;
     setState(() => _salvando = false);
 
@@ -2877,7 +2894,24 @@ class _EstantePageState extends State<EstantePage> {
       );
     }).toList();
 
+    // Produtos que estavam no layout persistido e saíram nesta edição: os
+    // endereços ZERADOS deles nesta estante são apagados junto (quantidades
+    // > 0 são estoque contado e só somem pela lixeira do dialog).
+    final antes = (await TursoService().fetchLayoutEstante(_estanteAtual))
+        .map((c) => c.produtoCodigo)
+        .toSet();
+
     final ok = await TursoService().salvarLayoutEstante(_estanteAtual, itens);
+    if (ok) {
+      final depois = itens.map((i) => i.produtoCodigo).toSet();
+      for (final codigo in antes.difference(depois)) {
+        await EstoqueLocalizadoService().deleteEnderecosZerados(
+          produtoCodigo: codigo,
+          localTipo:     'estante',
+          localNum:      _estanteAtual,
+        );
+      }
+    }
     if (!mounted) return;
     setState(() => _salvando = false);
 

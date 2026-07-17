@@ -130,9 +130,17 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     _carregar();
   }
 
+  // Linhas excluídas durante a sessão do dialog: os controllers não podem ser
+  // descartados no mesmo frame em que o campo ainda pode estar montado, então
+  // ficam aqui até o dispose do dialog.
+  final List<_LinhaEndereco> _linhasRemovidas = [];
+
   @override
   void dispose() {
     for (final l in _linhas) {
+      l.controller.dispose();
+    }
+    for (final l in _linhasRemovidas) {
       l.controller.dispose();
     }
     super.dispose();
@@ -236,6 +244,89 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
         l.dirty = true;
       }
     });
+  }
+
+  void _removerLinhaLocal(_LinhaEndereco l) {
+    setState(() {
+      _linhas.remove(l);
+      _linhasRemovidas.add(l);
+    });
+    if (_linhas.isEmpty && mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Endereço excluído.'),
+        backgroundColor: Color(0xFF2a3a1a),
+      ));
+    }
+  }
+
+  Future<void> _excluirEndereco(_LinhaEndereco l) async {
+    // Endereço recém-tocado que nunca foi gravado: não existe no banco,
+    // basta tirar da lista.
+    if (l.endereco.atualizadoEm == null && l.endereco.id == null) {
+      _removerLinhaLocal(l);
+      return;
+    }
+
+    final qtd = l.endereco.quantidade;
+    final avisos = <String>[
+      'Excluir o endereço ${_labelEndereco(l.endereco)}? '
+          'O registro de quantidade deste endereço será apagado.',
+      if (qtd > 0)
+        'Este endereço tem ${_fmtQtd(qtd)} un registradas — o total contado '
+            'do produto vai diminuir.',
+      if (l.dirty) 'A edição não salva desta linha será descartada.',
+    ];
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Excluir endereço',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600)),
+        content: Text(
+          avisos.join('\n\n'),
+          style: const TextStyle(color: Color(0xFFb0ada8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8b1a1a),
+                foregroundColor: Colors.white),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+    if (confirmar != true || !mounted) return;
+
+    setState(() => _salvando = true);
+    final ok = await _service.deleteEndereco(
+      produtoCodigo: l.endereco.produtoCodigo,
+      localTipo:     l.endereco.localTipo,
+      localNum:      l.endereco.localNum,
+      faceOuColuna:  l.endereco.faceOuColuna,
+      andarOuNivel:  l.endereco.andarOuNivel,
+    );
+    if (!mounted) return;
+    setState(() => _salvando = false);
+    if (ok) {
+      _removerLinhaLocal(l);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Falha ao excluir o endereço.'),
+        backgroundColor: Color(0xFF5a1a1a),
+      ));
+    }
   }
 
   Future<bool> _salvarEditados() async {
@@ -560,6 +651,17 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
               color: l.confirmado
                   ? const Color(0xFF6fcf97)
                   : const Color(0xFF6a7a88),
+            ),
+          ),
+          IconButton(
+            onPressed: _salvando ? null : () => _excluirEndereco(l),
+            tooltip: 'Excluir endereço',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            icon: const Icon(
+              Icons.delete_outline,
+              size: 20,
+              color: Color(0xFFe57373),
             ),
           ),
         ],
