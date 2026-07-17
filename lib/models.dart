@@ -38,6 +38,32 @@ const int expositorMagnojetNum     = 9;
 const int colunasExpositorMagnojet = 4;
 const int linhasExpositorMagnojet  = 6;
 
+// A Estante Parede é uma peça física única (prateleiras verdes flutuantes
+// fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
+// como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
+// que saíram da navegação (os números 3 e 4 não são reutilizados para não
+// colidir com dados antigos no banco). Cada seção: 2 colunas × 7 níveis de
+// produto (nível 0 = base, 1..6 = prateleiras).
+const int      estanteParedeMin    = 13;
+const int      estanteParedeMax    = 18;
+const Set<int> estantesParede      = {13, 14, 15, 16, 17, 18};
+const int      niveisProdutoParede = 7;
+const int      colunasParede       = 2;
+
+bool ehEstanteParede(int estanteNum) =>
+    estanteNum >= estanteParedeMin && estanteNum <= estanteParedeMax;
+
+/// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
+/// filosofia do faceFromPos): cada seção contribui com 2 posições.
+int posicaoGlobalParede(int estanteNum, int coluna) =>
+    (estanteNum - estanteParedeMin) * colunasParede + coluna + 1;
+
+/// Ordem de navegação do carrossel de estantes. As seções da parede (13–18)
+/// ocupam o lugar onde ficavam as estantes 3 e 4.
+const List<int> ordemNavegacaoEstantes = [
+  1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12,
+];
+
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 
@@ -45,9 +71,11 @@ int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
         ? linhasExpositorMagnojet
-        : temNivelTopoPara(estanteNum)
-            ? niveisProdutoEstendido
-            : niveisProdutoPadrao;
+        : ehEstanteParede(estanteNum)
+            ? niveisProdutoParede
+            : temNivelTopoPara(estanteNum)
+                ? niveisProdutoEstendido
+                : niveisProdutoPadrao;
 
 /// Número de colunas de uma estante — usado pra clampar/nomear a coluna
 /// encontrada numa busca sem estourar a grade real da estrutura.
@@ -55,13 +83,21 @@ int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == expositorMagnojetNum
         ? colunasExpositorMagnojet
-        : numColunasEstante;
+        : ehEstanteParede(estanteNum)
+            ? colunasParede
+            : numColunasEstante;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
-/// de converter para letra. Só a Estante 4 precisa de offset, para continuar
-/// a sequência da Estante 3 (que tem 15 posições: 5 níveis × 3 colunas).
-int letraOffsetPara(int estanteNum) =>
-    estanteNum == 4 ? niveisProdutoPara(3) * numColunasEstante : 0;
+/// de converter para letra — usado pelas peças fisicamente coladas, cujas
+/// letras continuam de uma seção para a outra sem repetição:
+///   · Estante 4 continua a Estante 3 (que tem 15 posições: 5 níveis × 3 col);
+///   · as seções da parede (13–18) continuam umas às outras, 14 células
+///     (7 níveis × 2 colunas) por seção: E13 A–N, E14 O–AB, ..., E18 BS–CF.
+int letraOffsetPara(int estanteNum) => ehEstanteParede(estanteNum)
+    ? (estanteNum - estanteParedeMin) * niveisProdutoParede * colunasParede
+    : estanteNum == 4
+        ? niveisProdutoPara(3) * numColunasEstante
+        : 0;
 
 /// Converte um índice 0-based em rótulo estilo planilha: A, B, ..., Z, AA,
 /// AB, ..., AD... Suporta labels de mais de uma letra sem truncar.
