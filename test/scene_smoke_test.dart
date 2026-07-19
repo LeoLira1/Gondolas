@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
+import 'package:gondola_camda/expositor_monitor_scene.dart';
 import 'package:gondola_camda/expositor_nellore_scene.dart';
 import 'package:gondola_camda/loja_scene.dart';
 import 'package:gondola_camda/models.dart';
@@ -158,6 +159,37 @@ void main() {
     expect(letraEstanteCelula(expositorNelloreNum, 4, 1), 'X');
   });
 
+  test('expositor Monitor: 20 endereços em 4 níveis × 5 colunas', () {
+    const geo = ExpositorMonitorGeometry();
+    expect(geo.cells.length,
+        ExpositorMonitorGeometry.niveis * ExpositorMonitorGeometry.colunas);
+    expect(niveisProdutoPara(expositorMonitorNum), 4);
+    expect(numColunasPara(expositorMonitorNum), 5);
+    // Profundidade crescente de cima pra baixo: a base é a mais funda.
+    expect(geo.zFrenteNivel(0), greaterThan(geo.zFrenteNivel(1)));
+    expect(geo.zFrenteNivel(1), greaterThan(geo.zFrenteNivel(2)));
+    expect(geo.zFrenteNivel(2), greaterThan(geo.zFrenteNivel(3)));
+    // Fileiras de produto acompanham a profundidade do nível.
+    expect(geo.fileirasNivel(0), 3);
+    expect(geo.fileirasNivel(1), 2);
+    expect(geo.fileirasNivel(2), 2);
+    expect(geo.fileirasNivel(3), 1);
+  });
+
+  test('expositor Monitor: base numerada 1–5 e letras A–E a K–O nos demais', () {
+    // Nível 0 (base/deck) usa números por coluna, sem letra.
+    expect(letraEstanteCelula(expositorMonitorNum, 0, 0), '1');
+    expect(letraEstanteCelula(expositorMonitorNum, 4, 0), '5');
+    // Letras contínuas de cima pra baixo: superior A–E, média F–J,
+    // inferior K–O.
+    expect(letraEstanteCelula(expositorMonitorNum, 0, 3), 'A');
+    expect(letraEstanteCelula(expositorMonitorNum, 4, 3), 'E');
+    expect(letraEstanteCelula(expositorMonitorNum, 0, 2), 'F');
+    expect(letraEstanteCelula(expositorMonitorNum, 4, 2), 'J');
+    expect(letraEstanteCelula(expositorMonitorNum, 0, 1), 'K');
+    expect(letraEstanteCelula(expositorMonitorNum, 4, 1), 'O');
+  });
+
   test('estante parede: grade 2×6 e números contínuos entre as 6 seções', () {
     expect(EstanteParedeGeometry.celulas().length,
         colunasParede * niveisProdutoParede);
@@ -262,6 +294,31 @@ void main() {
           'N2': Colors.amber,
           'N3': Colors.blue,
           'N4': Colors.red,
+        },
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('ExpositorMonitorScene renderiza sem exceções', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: ExpositorMonitorScene(
+        geometry:   ExpositorMonitorGeometry(showFloor: false),
+        autoRotate: false,
+        caixas: [
+          // Um produto em cada nível: base, prateleiras inferior/média/superior.
+          CaixaColocadaEstante(coluna: 0, nivel: 0, slot: 0, produtoId: 'M1'),
+          CaixaColocadaEstante(coluna: 2, nivel: 1, slot: 0, produtoId: 'M2'),
+          CaixaColocadaEstante(coluna: 3, nivel: 2, slot: 0, produtoId: 'M3'),
+          CaixaColocadaEstante(coluna: 4, nivel: 3, slot: 0, produtoId: 'M4'),
+        ],
+        corPorProduto: {
+          'M1': Colors.green,
+          'M2': Colors.amber,
+          'M3': Colors.blue,
+          'M4': Colors.red,
         },
       ),
     ));
