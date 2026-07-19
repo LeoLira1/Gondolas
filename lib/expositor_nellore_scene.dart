@@ -3,30 +3,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
 import 'models.dart'
-    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
-         expositorNelloreNum, letraEstanteCelula;
+    show CaixaColocadaEstante, chaveEnderecoEstoque, colunasNivelNellore,
+         corConferenciaCiano, expositorNelloreNum, letraEstanteCelula;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Expositor Nellore Isoflex/Avant — estrutura amarela com painel slatwall
 // creme e testeira amarela (branding Nellore Isoflex à esquerda, AVANT /
-// multiloc.com.br à direita). De cima pra baixo: 3 linhas de 4 ganchos em J,
+// multiloc.com.br à direita). De cima pra baixo: 2 fileiras de 5 ganchos em J,
 // 1 linha de 4 cestos bin pretos com frente amarela, 2 prateleiras creme com
-// borda amarela e a base amarela com deck creme que também recebe produtos.
+// borda amarela (5 espaços cada) e a base amarela com deck creme que também
+// recebe produtos.
 //
-// São 28 endereços em 7 níveis × 4 colunas, slot = 0 sempre, reaproveitando
-// o esquema (coluna, nivel, slot) do estante_layout na Turso como "estante"
-// nº expositorNelloreNum:
-//   nível 0    = base (deck)      — rotulada com números 1–4
-//   níveis 1–2 = prateleiras      — letras U–X e Q–T
-//   nível 3    = cestos bin       — letras M–P
-//   níveis 4–6 = ganchos          — letras I–L, E–H e A–D (topo)
+// São 28 endereços em 6 níveis com colunas variando por nível, slot = 0
+// sempre, reaproveitando o esquema (coluna, nivel, slot) do estante_layout
+// na Turso como "estante" nº expositorNelloreNum:
+//   nível 0    = base (deck), 4 espaços — rotulada com números 1–4
+//   níveis 1–2 = prateleiras, 5 espaços — letras T–X e O–S
+//   nível 3    = cestos bin, 4 cestos   — letras K–N
+//   níveis 4–5 = ganchos, 5 por fileira — letras F–J e A–E (topo)
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum NelloreTipoNivel { base, prateleira, cesto, gancho }
 
 class ExpositorNelloreCell {
   final int              coluna;
-  final int              nivel;      // 0 = base, 6 = linha de ganchos do topo
+  final int              nivel;      // 0 = base, 5 = fileira de ganchos do topo
   final NelloreTipoNivel tipo;
   final double           xCenter;    // centro da coluna em X
   final double           ySurface;   // gancho: altura do pino; demais: piso de apoio
@@ -55,8 +56,7 @@ class ExpositorNelloreGeometry {
     this.showFloor = true,
   });
 
-  static const int colunas = 4;
-  static const int niveis  = 7;
+  static const int niveis = 6;
 
   // Altura total incluindo a testeira (usada pra centrar a câmera).
   double get alturaTotal => height + _testeiraH + 0.02;
@@ -66,9 +66,9 @@ class ExpositorNelloreGeometry {
   static const double hPacote = 0.195;
   static const double dPacote = 0.035;
   static const double _hAba   = 0.045;  // aba amarela no topo do pacote
-  static const double wCaixa  = 0.185;  // caixa apoiada em prateleira/base
-  static const double hCaixa  = 0.185;
-  static const double dCaixa  = 0.185;
+  static const double wCaixa  = 0.17;   // caixa apoiada em prateleira/base
+  static const double hCaixa  = 0.17;
+  static const double dCaixa  = 0.17;
 
   // ── Estrutura ──────────────────────────────────────────────────────────────
   static const double _painelT     = 0.035;  // espessura do painel slatwall
@@ -110,32 +110,34 @@ class ExpositorNelloreGeometry {
               : NelloreTipoNivel.gancho;
 
   // Y do nível: superfície de apoio (base/prateleira/cesto) ou centro do pino
-  // (gancho). Frações da altura calibradas pela foto: ganchos ocupam a metade
-  // de cima, cestos no meio, prateleiras e deck embaixo.
+  // (gancho). Frações da altura calibradas pelas fotos da loja: 2 fileiras de
+  // ganchos em cima, cestos no meio, prateleiras e deck embaixo.
   double nivelY(int nivel) => switch (nivel) {
         0 => _baseH + _deckT,
-        1 => height * 0.27,
-        2 => height * 0.44,
-        3 => height * 0.575,
-        _ => height * (0.75 + 0.105 * (nivel - 4)),
+        1 => height * 0.29,
+        2 => height * 0.47,
+        3 => height * 0.60,
+        4 => height * 0.78,
+        _ => height * 0.93,
       };
 
-  // X do centro da coluna c — mesmo passo em todos os níveis, pra coluna 2 do
-  // gancho ficar alinhada com a coluna 2 do cesto e da prateleira.
-  double colunaX(int c) {
-    final util = width - _molduraW * 2 - wCaixa - 0.04;
-    final xMin = -util / 2;
-    return colunas > 1 ? xMin + util * c / (colunas - 1) : 0;
+  // X do centro da coluna c no nível dado — o nº de colunas varia por nível
+  // (ganchos/prateleiras: 5, cestos/base: 4), todos na mesma largura útil.
+  double colunaX(int c, int nivel) {
+    final nCols = colunasNivelNellore(nivel);
+    final util  = width - _molduraW * 2 - 0.21;
+    final xMin  = -util / 2;
+    return nCols > 1 ? xMin + util * c / (nCols - 1) : 0;
   }
 
   List<ExpositorNelloreCell> get cells => [
         for (var niv = 0; niv < niveis; niv++)
-          for (var col = 0; col < colunas; col++)
+          for (var col = 0; col < colunasNivelNellore(niv); col++)
             ExpositorNelloreCell(
               coluna:   col,
               nivel:    niv,
               tipo:     tipoDoNivel(niv),
-              xCenter:  colunaX(col),
+              xCenter:  colunaX(col, niv),
               ySurface: nivelY(niv),
             ),
       ];
@@ -308,8 +310,8 @@ class ExpositorNelloreGeometry {
       y0: yBin - 0.02,      y1: yBin,
       z0: -_painelT / 2,    z1: _painelT / 2 + _binD + 0.02,
       color: _amarelo);
-    for (var col = 0; col < colunas; col++) {
-      final cx = colunaX(col);
+    for (var col = 0; col < colunasNivelNellore(3); col++) {
+      final cx = colunaX(col, 3);
       // Corpo preto (levemente mais baixo: o topo escuro sugere a abertura)
       _box(faces,
         x0: cx - 0.115, x1: cx + 0.115,
@@ -630,7 +632,7 @@ class ExpositorNelloreScene extends StatefulWidget {
   final bool                     autoRotate;
   final bool                     showLabels;
   // Reutiliza CaixaColocadaEstante: coluna = coluna, nivel = nível (0 = base,
-  // 6 = ganchos do topo), slot = 0 sempre (um produto por endereço).
+  // 5 = ganchos do topo), slot = 0 sempre (um produto por endereço).
   final List<CaixaColocadaEstante> caixas;
   final String?                    produtoSelecionadoId;
   final Map<String, Color>         corPorProduto;
@@ -772,10 +774,11 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
                  fwd).normalized;
     if (dir.z.abs() < 1e-6) return null;
 
-    const hwCelula = 0.13;   // meia-largura clicável da coluna
-
     ({int coluna, int nivel, double d2})? nearest;
     for (final c in widget.geometry.cells) {
+      // Meia-largura clicável da coluna — níveis de 5 colunas têm passo
+      // menor, então a área é mais estreita pra não sobrepor a vizinha.
+      final hwCelula = colunasNivelNellore(c.nivel) == 5 ? 0.095 : 0.125;
       final zPlano = widget.geometry.zFrenteNivel(c.nivel);
       final t = (zPlano - eye.z) / dir.z;
       if (t <= 0.1) continue;

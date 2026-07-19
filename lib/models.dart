@@ -40,13 +40,19 @@ const int linhasExpositorMagnojet  = 6;
 
 // O Expositor Nellore Isoflex/Avant (estrutura amarela com painel slatwall)
 // também reutiliza a infra de estantes: local_tipo 'estante', número próprio,
-// slot sempre 0. São 7 níveis × 4 colunas: nível 0 = base (deck), níveis
-// 1–2 = prateleiras, nível 3 = cestos bin, níveis 4–6 = ganchos. O nível 0
-// é rotulado com números 1–4; os níveis 1–6 usam letras contínuas de cima
-// pra baixo (A–D nos ganchos do topo até U–X na prateleira de baixo).
+// slot sempre 0. São 28 endereços em 6 níveis com colunas variando por nível
+// (conforme o expositor real da loja): nível 0 = base (4 espaços, rotulada
+// 1–4), níveis 1–2 = prateleiras (5 espaços cada), nível 3 = cestos bin
+// (4 cestos), níveis 4–5 = ganchos (5 por fileira). Os níveis 1–5 usam
+// letras contínuas de cima pra baixo: A–E e F–J nos ganchos, K–N nos
+// cestos, O–S e T–X nas prateleiras.
 const int expositorNelloreNum     = 19;
-const int colunasExpositorNellore = 4;
-const int niveisExpositorNellore  = 7;
+const int colunasExpositorNellore = 5;   // máximo (ganchos e prateleiras)
+const int niveisExpositorNellore  = 6;
+
+/// Colunas de cada nível do Expositor Nellore: base e cestos têm 4,
+/// ganchos e prateleiras têm 5.
+int colunasNivelNellore(int nivel) => (nivel == 0 || nivel == 3) ? 4 : 5;
 
 // A Estante Parede é uma peça física única (prateleiras verdes flutuantes
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
@@ -141,17 +147,20 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
         coluna * nNiveis + (nNiveis - 1 - nivel) + 1;
     return '$numero';
   }
-  // No Expositor Nellore a base (nível 0) usa números 1–4; as letras ficam
-  // só nos níveis 1–6, contadas de cima pra baixo (A–D no topo até U–X),
-  // que é exatamente o que a fórmula geral produz para os níveis 1..6.
-  if (estanteNum == expositorNelloreNum && nivel == 0) {
-    return '${coluna + 1}';
+  // No Expositor Nellore a base (nível 0) usa números 1–4; as letras dos
+  // níveis 1–5 são contínuas de cima pra baixo com o nº de colunas variando
+  // por nível: A–E e F–J (ganchos), K–N (cestos), O–S e T–X (prateleiras).
+  if (estanteNum == expositorNelloreNum) {
+    if (nivel == 0) return '${coluna + 1}';
+    var offset = 0;
+    for (var n = niveisExpositorNellore - 1; n > nivel; n--) {
+      offset += colunasNivelNellore(n);
+    }
+    return letraDoIndice(offset + coluna);
   }
   final nColunas = numColunasPara(estanteNum);
   final offset   =
-      (estanteNum == estanteEdr300Num ||
-              estanteNum == expositorMagnojetNum ||
-              estanteNum == expositorNelloreNum)
+      (estanteNum == estanteEdr300Num || estanteNum == expositorMagnojetNum)
           ? 0
           : letraOffsetPara(estanteNum);
   final row      = nNiveis - 1 - nivel;
