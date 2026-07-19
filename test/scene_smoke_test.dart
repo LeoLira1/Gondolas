@@ -118,34 +118,44 @@ void main() {
     );
   });
 
-  test('expositor Nellore: 28 endereços em 7 níveis × 4 colunas', () {
+  test('expositor Nellore: 28 endereços em 6 níveis com colunas variáveis', () {
     const geo = ExpositorNelloreGeometry();
-    expect(geo.cells.length,
-        colunasExpositorNellore * niveisExpositorNellore);
-    // Tipos por nível: base, 2 prateleiras, cestos, 3 linhas de ganchos.
+    // 4 (base) + 5+5 (prateleiras) + 4 (cestos) + 5+5 (ganchos) = 28.
+    expect(geo.cells.length, 28);
+    expect(colunasNivelNellore(0), 4);
+    expect(colunasNivelNellore(1), 5);
+    expect(colunasNivelNellore(2), 5);
+    expect(colunasNivelNellore(3), 4);
+    expect(colunasNivelNellore(4), 5);
+    expect(colunasNivelNellore(5), 5);
+    // Tipos por nível: base, 2 prateleiras, cestos, 2 fileiras de ganchos.
     expect(ExpositorNelloreGeometry.tipoDoNivel(0), NelloreTipoNivel.base);
     expect(ExpositorNelloreGeometry.tipoDoNivel(1), NelloreTipoNivel.prateleira);
     expect(ExpositorNelloreGeometry.tipoDoNivel(2), NelloreTipoNivel.prateleira);
     expect(ExpositorNelloreGeometry.tipoDoNivel(3), NelloreTipoNivel.cesto);
     expect(ExpositorNelloreGeometry.tipoDoNivel(4), NelloreTipoNivel.gancho);
-    expect(ExpositorNelloreGeometry.tipoDoNivel(6), NelloreTipoNivel.gancho);
-    // Linhas de gancho não colidem: passo maior que a altura do pacote.
+    expect(ExpositorNelloreGeometry.tipoDoNivel(5), NelloreTipoNivel.gancho);
+    // Fileiras de gancho não colidem: passo maior que a altura do pacote.
     expect(geo.nivelY(5) - geo.nivelY(4),
         greaterThan(ExpositorNelloreGeometry.hPacote));
   });
 
-  test('expositor Nellore: base numerada 1–4 e letras A–D a U–X nos demais', () {
+  test('expositor Nellore: base numerada 1–4 e letras A–E a T–X nos demais', () {
     // Nível 0 (base/deck) usa números por coluna, sem letra.
     expect(letraEstanteCelula(expositorNelloreNum, 0, 0), '1');
     expect(letraEstanteCelula(expositorNelloreNum, 3, 0), '4');
-    // Letras contínuas de cima pra baixo: nível 6 = A–D ... nível 1 = U–X.
-    expect(letraEstanteCelula(expositorNelloreNum, 0, 6), 'A');
-    expect(letraEstanteCelula(expositorNelloreNum, 3, 6), 'D');
-    expect(letraEstanteCelula(expositorNelloreNum, 0, 4), 'I');
-    expect(letraEstanteCelula(expositorNelloreNum, 0, 3), 'M');
-    expect(letraEstanteCelula(expositorNelloreNum, 3, 2), 'T');
-    expect(letraEstanteCelula(expositorNelloreNum, 0, 1), 'U');
-    expect(letraEstanteCelula(expositorNelloreNum, 3, 1), 'X');
+    // Letras contínuas de cima pra baixo: ganchos A–E e F–J, cestos K–N,
+    // prateleiras O–S e T–X.
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 5), 'A');
+    expect(letraEstanteCelula(expositorNelloreNum, 4, 5), 'E');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 4), 'F');
+    expect(letraEstanteCelula(expositorNelloreNum, 4, 4), 'J');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 3), 'K');
+    expect(letraEstanteCelula(expositorNelloreNum, 3, 3), 'N');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 2), 'O');
+    expect(letraEstanteCelula(expositorNelloreNum, 4, 2), 'S');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 1), 'T');
+    expect(letraEstanteCelula(expositorNelloreNum, 4, 1), 'X');
   });
 
   test('estante parede: grade 2×6 e números contínuos entre as 6 seções', () {
@@ -242,7 +252,7 @@ void main() {
         autoRotate: false,
         caixas: [
           // Um produto de cada tipo de nível: gancho, cesto, prateleira, base.
-          CaixaColocadaEstante(coluna: 0, nivel: 6, slot: 0, produtoId: 'N1'),
+          CaixaColocadaEstante(coluna: 4, nivel: 5, slot: 0, produtoId: 'N1'),
           CaixaColocadaEstante(coluna: 1, nivel: 3, slot: 0, produtoId: 'N2'),
           CaixaColocadaEstante(coluna: 2, nivel: 1, slot: 0, produtoId: 'N3'),
           CaixaColocadaEstante(coluna: 3, nivel: 0, slot: 0, produtoId: 'N4'),

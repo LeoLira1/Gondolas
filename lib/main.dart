@@ -4224,9 +4224,9 @@ class _ExpositorNellorePageState extends State<ExpositorNellorePage> {
                         TextSpan(text: 'Nellore Isoflex / Avant',
                             style: TextStyle(
                                 color: _txt, fontWeight: FontWeight.bold)),
-                        TextSpan(text: ' · 7 níveis × 4 colunas\n'),
-                        TextSpan(text: '3 linhas de ganchos · cestos bin\n'),
-                        TextSpan(text: '2 prateleiras · base com deck'),
+                        TextSpan(text: ' · 6 níveis · 28 endereços\n'),
+                        TextSpan(text: '2 fileiras de 5 ganchos · 4 cestos\n'),
+                        TextSpan(text: '2 prateleiras de 5 · base com deck'),
                       ],
                     )),
                   ],
