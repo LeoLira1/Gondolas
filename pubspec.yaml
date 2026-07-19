@@ -16,6 +16,15 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.3
 
 flutter:
   uses-material-design: true
+
+# Ícone do app (mapa.png na raiz). O projeto Android é gerado pelo CI
+# (flutter create no build.yml), então os mipmaps são gerados lá com
+# `dart run flutter_launcher_icons` logo após o scaffold.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "mapa.png"

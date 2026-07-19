@@ -62,6 +62,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Generate launcher icons
+        # Gera os mipmaps do ícone do app (mapa.png na raiz, config no
+        # pubspec.yaml) dentro do android/ recém-scaffoldado.
+        run: dart run flutter_launcher_icons
+
       - name: Build APK release
         # TODO: configure um keystore fixo via secrets para evitar o erro
         # "App não foi instalado" ao atualizar (assinatura muda a cada build).
