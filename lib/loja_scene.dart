@@ -3,10 +3,11 @@ import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
+import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
 import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
 import 'models.dart'
     show corConferenciaCiano, ehEstanteParede, estanteParedeMin,
-         expositorMagnojetNum;
+         expositorMagnojetNum, expositorNelloreNum;
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
 /// Parede (13–18) são um retângulo único no mapa, registrado como o número da
@@ -87,6 +88,9 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: 8, x: 2.10, z: 0.55, w: 1.4, d: 0.7),
   ItemLoja(tipo: 'estante', numero: 9, x: 5.0,  z: 0.55, w: 1.05, d: 0.55),
   ItemLoja(tipo: 'estante', numero: 6, x: 3.20, z:  1.0, w: 0.7, d: 1.6),
+  // Expositor Nellore Isoflex/Avant: entre a estante 6 e o MagnoJet (E9)
+  ItemLoja(tipo: 'estante', numero: expositorNelloreNum,
+      x: 4.0, z: 0.55, w: 0.85, d: 0.55),
   ItemLoja(tipo: 'estante', numero: 2, x: 9.45, z:  2.0, w: 0.7, d: 1.6),
   ItemLoja(tipo: 'estante', numero: 1, x: 9.45, z:  4.0, w: 0.7, d: 1.6),
   // Estante Parede (seções 13–18): peça única comprida e baixa na parede
@@ -177,6 +181,8 @@ class LojaGeometry {
         _estanteEdr300(faces, item, cor);
       } else if (item.numero == expositorMagnojetNum) {
         expositorMagnojetLoja(faces, item.x, item.z, item.w, item.d, cor);
+      } else if (item.numero == expositorNelloreNum) {
+        expositorNelloreLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else if (ehEstanteParede(item.numero)) {
         _estanteParede(faces, item, cor);
       } else {
@@ -574,10 +580,13 @@ class LojaPainter extends CustomPainter {
     }
 
     for (final item in itensLoja) {
-      // Sem badges A–E na EDR-300 nem na Estante Parede (as letras da parede
-      // são contínuas por seção e só fazem sentido na cena de detalhe).
+      // Sem badges A–E na EDR-300, nos expositores (MagnoJet/Nellore) nem na
+      // Estante Parede (os rótulos deles são próprios e só fazem sentido na
+      // cena de detalhe).
       if (item.tipo != 'estante' ||
           item.numero == 8 ||
+          item.numero == expositorMagnojetNum ||
+          item.numero == expositorNelloreNum ||
           ehEstanteParede(item.numero)) {
         continue;
       }

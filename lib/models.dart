@@ -38,6 +38,16 @@ const int expositorMagnojetNum     = 9;
 const int colunasExpositorMagnojet = 4;
 const int linhasExpositorMagnojet  = 6;
 
+// O Expositor Nellore Isoflex/Avant (estrutura amarela com painel slatwall)
+// também reutiliza a infra de estantes: local_tipo 'estante', número próprio,
+// slot sempre 0. São 7 níveis × 4 colunas: nível 0 = base (deck), níveis
+// 1–2 = prateleiras, nível 3 = cestos bin, níveis 4–6 = ganchos. O nível 0
+// é rotulado com números 1–4; os níveis 1–6 usam letras contínuas de cima
+// pra baixo (A–D nos ganchos do topo até U–X na prateleira de baixo).
+const int expositorNelloreNum     = 19;
+const int colunasExpositorNellore = 4;
+const int niveisExpositorNellore  = 7;
+
 // A Estante Parede é uma peça física única (prateleiras verdes flutuantes
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
 // como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
@@ -61,7 +71,7 @@ int posicaoGlobalParede(int estanteNum, int coluna) =>
 /// Ordem de navegação do carrossel de estantes. As seções da parede (13–18)
 /// ocupam o lugar onde ficavam as estantes 3 e 4.
 const List<int> ordemNavegacaoEstantes = [
-  1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12,
+  1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19,
 ];
 
 /// Estantes que saíram da loja (substituídas pela Estante Parede). As linhas
@@ -76,11 +86,13 @@ int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
         ? linhasExpositorMagnojet
-        : ehEstanteParede(estanteNum)
-            ? niveisProdutoParede
-            : temNivelTopoPara(estanteNum)
-                ? niveisProdutoEstendido
-                : niveisProdutoPadrao;
+        : estanteNum == expositorNelloreNum
+            ? niveisExpositorNellore
+            : ehEstanteParede(estanteNum)
+                ? niveisProdutoParede
+                : temNivelTopoPara(estanteNum)
+                    ? niveisProdutoEstendido
+                    : niveisProdutoPadrao;
 
 /// Número de colunas de uma estante — usado pra clampar/nomear a coluna
 /// encontrada numa busca sem estourar a grade real da estrutura.
@@ -88,9 +100,11 @@ int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == expositorMagnojetNum
         ? colunasExpositorMagnojet
-        : ehEstanteParede(estanteNum)
-            ? colunasParede
-            : numColunasEstante;
+        : estanteNum == expositorNelloreNum
+            ? colunasExpositorNellore
+            : ehEstanteParede(estanteNum)
+                ? colunasParede
+                : numColunasEstante;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
 /// de converter para letra. Só a Estante 4 precisa de offset, para continuar
@@ -127,9 +141,17 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
         coluna * nNiveis + (nNiveis - 1 - nivel) + 1;
     return '$numero';
   }
+  // No Expositor Nellore a base (nível 0) usa números 1–4; as letras ficam
+  // só nos níveis 1–6, contadas de cima pra baixo (A–D no topo até U–X),
+  // que é exatamente o que a fórmula geral produz para os níveis 1..6.
+  if (estanteNum == expositorNelloreNum && nivel == 0) {
+    return '${coluna + 1}';
+  }
   final nColunas = numColunasPara(estanteNum);
   final offset   =
-      (estanteNum == estanteEdr300Num || estanteNum == expositorMagnojetNum)
+      (estanteNum == estanteEdr300Num ||
+              estanteNum == expositorMagnojetNum ||
+              estanteNum == expositorNelloreNum)
           ? 0
           : letraOffsetPara(estanteNum);
   final row      = nNiveis - 1 - nivel;
