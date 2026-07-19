@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
+import 'package:gondola_camda/expositor_nellore_scene.dart';
 import 'package:gondola_camda/loja_scene.dart';
 import 'package:gondola_camda/models.dart';
 
@@ -117,6 +118,36 @@ void main() {
     );
   });
 
+  test('expositor Nellore: 28 endereços em 7 níveis × 4 colunas', () {
+    const geo = ExpositorNelloreGeometry();
+    expect(geo.cells.length,
+        colunasExpositorNellore * niveisExpositorNellore);
+    // Tipos por nível: base, 2 prateleiras, cestos, 3 linhas de ganchos.
+    expect(ExpositorNelloreGeometry.tipoDoNivel(0), NelloreTipoNivel.base);
+    expect(ExpositorNelloreGeometry.tipoDoNivel(1), NelloreTipoNivel.prateleira);
+    expect(ExpositorNelloreGeometry.tipoDoNivel(2), NelloreTipoNivel.prateleira);
+    expect(ExpositorNelloreGeometry.tipoDoNivel(3), NelloreTipoNivel.cesto);
+    expect(ExpositorNelloreGeometry.tipoDoNivel(4), NelloreTipoNivel.gancho);
+    expect(ExpositorNelloreGeometry.tipoDoNivel(6), NelloreTipoNivel.gancho);
+    // Linhas de gancho não colidem: passo maior que a altura do pacote.
+    expect(geo.nivelY(5) - geo.nivelY(4),
+        greaterThan(ExpositorNelloreGeometry.hPacote));
+  });
+
+  test('expositor Nellore: base numerada 1–4 e letras A–D a U–X nos demais', () {
+    // Nível 0 (base/deck) usa números por coluna, sem letra.
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 0), '1');
+    expect(letraEstanteCelula(expositorNelloreNum, 3, 0), '4');
+    // Letras contínuas de cima pra baixo: nível 6 = A–D ... nível 1 = U–X.
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 6), 'A');
+    expect(letraEstanteCelula(expositorNelloreNum, 3, 6), 'D');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 4), 'I');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 3), 'M');
+    expect(letraEstanteCelula(expositorNelloreNum, 3, 2), 'T');
+    expect(letraEstanteCelula(expositorNelloreNum, 0, 1), 'U');
+    expect(letraEstanteCelula(expositorNelloreNum, 3, 1), 'X');
+  });
+
   test('estante parede: grade 2×6 e números contínuos entre as 6 seções', () {
     expect(EstanteParedeGeometry.celulas().length,
         colunasParede * niveisProdutoParede);
@@ -197,6 +228,31 @@ void main() {
           CaixaColocadaEstante(coluna: 3, nivel: 0, slot: 0, produtoId: 'X2'),
         ],
         corPorProduto: {'X1': Colors.green, 'X2': Colors.amber},
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('ExpositorNelloreScene renderiza sem exceções', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: ExpositorNelloreScene(
+        geometry:   ExpositorNelloreGeometry(showFloor: false),
+        autoRotate: false,
+        caixas: [
+          // Um produto de cada tipo de nível: gancho, cesto, prateleira, base.
+          CaixaColocadaEstante(coluna: 0, nivel: 6, slot: 0, produtoId: 'N1'),
+          CaixaColocadaEstante(coluna: 1, nivel: 3, slot: 0, produtoId: 'N2'),
+          CaixaColocadaEstante(coluna: 2, nivel: 1, slot: 0, produtoId: 'N3'),
+          CaixaColocadaEstante(coluna: 3, nivel: 0, slot: 0, produtoId: 'N4'),
+        ],
+        corPorProduto: {
+          'N1': Colors.green,
+          'N2': Colors.amber,
+          'N3': Colors.blue,
+          'N4': Colors.red,
+        },
       ),
     ));
     await tester.pump();
