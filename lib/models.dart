@@ -54,6 +54,18 @@ const int niveisExpositorNellore  = 6;
 /// ganchos e prateleiras têm 5.
 int colunasNivelNellore(int nivel) => (nivel == 0 || nivel == 3) ? 4 : 5;
 
+// O Expositor Monitor Produtos Agropecuários (escalonado: laterais amarelas
+// com frente inclinada e prateleiras com profundidade crescente de cima pra
+// baixo) também reutiliza a infra de estantes: local_tipo 'estante', número
+// próprio, slot sempre 0. São 20 endereços em 4 níveis × 5 colunas — atenção:
+// 5 colunas, diferente dos outros expositores que usam 4. Nível 0 = base
+// (deck, o mais fundo, rotulada 1–5); níveis 1–3 = prateleiras com letras
+// contínuas de cima pra baixo: A–E (nível 3, superior), F–J (nível 2, média),
+// K–O (nível 1, inferior).
+const int expositorMonitorNum     = 20;
+const int colunasExpositorMonitor = 5;
+const int niveisExpositorMonitor  = 4;
+
 // A Estante Parede é uma peça física única (prateleiras verdes flutuantes
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
 // como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
@@ -77,7 +89,7 @@ int posicaoGlobalParede(int estanteNum, int coluna) =>
 /// Ordem de navegação do carrossel de estantes. As seções da parede (13–18)
 /// ocupam o lugar onde ficavam as estantes 3 e 4.
 const List<int> ordemNavegacaoEstantes = [
-  1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19,
+  1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20,
 ];
 
 /// Estantes que saíram da loja (substituídas pela Estante Parede). As linhas
@@ -94,11 +106,13 @@ int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
         ? linhasExpositorMagnojet
         : estanteNum == expositorNelloreNum
             ? niveisExpositorNellore
-            : ehEstanteParede(estanteNum)
-                ? niveisProdutoParede
-                : temNivelTopoPara(estanteNum)
-                    ? niveisProdutoEstendido
-                    : niveisProdutoPadrao;
+            : estanteNum == expositorMonitorNum
+                ? niveisExpositorMonitor
+                : ehEstanteParede(estanteNum)
+                    ? niveisProdutoParede
+                    : temNivelTopoPara(estanteNum)
+                        ? niveisProdutoEstendido
+                        : niveisProdutoPadrao;
 
 /// Número de colunas de uma estante — usado pra clampar/nomear a coluna
 /// encontrada numa busca sem estourar a grade real da estrutura.
@@ -108,9 +122,11 @@ int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
         ? colunasExpositorMagnojet
         : estanteNum == expositorNelloreNum
             ? colunasExpositorNellore
-            : ehEstanteParede(estanteNum)
-                ? colunasParede
-                : numColunasEstante;
+            : estanteNum == expositorMonitorNum
+                ? colunasExpositorMonitor
+                : ehEstanteParede(estanteNum)
+                    ? colunasParede
+                    : numColunasEstante;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
 /// de converter para letra. Só a Estante 4 precisa de offset, para continuar
@@ -157,6 +173,14 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
       offset += colunasNivelNellore(n);
     }
     return letraDoIndice(offset + coluna);
+  }
+  // No Expositor Monitor a base (nível 0) usa números 1–5; as prateleiras
+  // (níveis 1–3) usam letras contínuas de cima pra baixo: A–E (superior),
+  // F–J (média), K–O (inferior).
+  if (estanteNum == expositorMonitorNum) {
+    if (nivel == 0) return '${coluna + 1}';
+    final row = niveisExpositorMonitor - 1 - nivel;
+    return letraDoIndice(row * colunasExpositorMonitor + coluna);
   }
   final nColunas = numColunasPara(estanteNum);
   final offset   =
