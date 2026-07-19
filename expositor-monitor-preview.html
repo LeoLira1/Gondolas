@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Gôndolas · Expositor Monitor</title>
+<style>
+  :root{
+    --bg:#101014;
+    --panel:#17171d;
+    --line:#26262e;
+    --accent:#e87722;
+    --txt:#e8e6e1;
+    --dim:#8b8a93;
+    --amarelo:#f5b90a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--txt);
+    font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
+    display:flex;flex-direction:column;
+    overflow:hidden;
+  }
+  header{
+    padding:14px 16px 10px;
+    border-bottom:1px solid var(--line);
+    display:flex;align-items:center;justify-content:space-between;
+    background:var(--panel);
+  }
+  .eyebrow{
+    font-size:10px;letter-spacing:.18em;color:var(--accent);
+    font-weight:700;text-transform:uppercase;margin-bottom:3px;
+  }
+  h1{font-size:15px;font-weight:600}
+  h1 span{color:var(--dim);font-weight:400}
+  .chip{
+    font-size:10px;font-weight:700;letter-spacing:.08em;
+    color:var(--accent);border:1px solid var(--accent);
+    border-radius:999px;padding:4px 10px;white-space:nowrap;
+  }
+  #stage{flex:1;position:relative;touch-action:none}
+  canvas{display:block;width:100%;height:100%;cursor:grab}
+  canvas:active{cursor:grabbing}
+  .hint{
+    position:absolute;top:10px;left:50%;transform:translateX(-50%);
+    font-size:11px;color:var(--dim);background:rgba(16,16,20,.7);
+    padding:4px 12px;border-radius:999px;pointer-events:none;
+    transition:opacity .6s;
+  }
+  footer{
+    border-top:1px solid var(--line);
+    background:var(--panel);
+    padding:10px 14px 14px;
+    display:grid;grid-template-columns:repeat(4,1fr);gap:8px;
+  }
+  .leg{
+    background:var(--bg);border:1px solid var(--line);
+    border-radius:8px;padding:8px 6px;text-align:center;
+  }
+  .leg b{display:block;font-size:12px;color:var(--amarelo);letter-spacing:.04em}
+  .leg small{font-size:9.5px;color:var(--dim);letter-spacing:.02em}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="eyebrow">Gôndolas · Expositor</div>
+    <h1>Monitor <span>· Produtos Agropecuários</span></h1>
+  </div>
+  <div class="chip">PRÉVIA 3D</div>
+</header>
+
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div class="hint" id="hint">arraste para girar</div>
+</div>
+
+<footer>
+  <div class="leg"><b>A–E</b><small>Prateleira<br>superior</small></div>
+  <div class="leg"><b>F–J</b><small>Prateleira<br>média</small></div>
+  <div class="leg"><b>K–O</b><small>Prateleira<br>inferior</small></div>
+  <div class="leg"><b>1–5</b><small>Base<br>deck</small></div>
+</footer>
+
+<script>
+(function(){
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const hint = document.getElementById('hint');
+
+let W=0,H=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1,2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W*DPR; cv.height = H*DPR;
+}
+window.addEventListener('resize',resize);
+
+// ---------- cores ----------
+const AMARELO = [245,185,10];
+const BRANCO  = [242,240,236];
+const CINZA   = [205,202,196];
+
+function shade(c,k){
+  return 'rgb('+(c[0]*k|0)+','+(c[1]*k|0)+','+(c[2]*k|0)+')';
+}
+
+// ---------- geometria ----------
+// unidade: cm. y para cima, x direita, z frente (+z = frente)
+const quads = [];
+const labels = [];
+
+function hex(v,c){ // hexaedro com 8 vértices explícitos
+  const f=[[0,1,2,3],[5,4,7,6],[4,0,3,7],[1,5,6,2],[3,2,6,7],[4,5,1,0]];
+  for(const idx of f) quads.push({pts:idx.map(i=>v[i]),c});
+}
+function box(cx,cy,cz,w,h,d,c){
+  const x0=cx-w/2,x1=cx+w/2,y0=cy,y1=cy+h,z0=cz-d/2,z1=cz+d/2;
+  hex([[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1],
+       [x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]],c);
+}
+// lateral com frente inclinada (mais funda embaixo)
+function lateral(x0,x1,y0,y1,zFb,zFt,zB,c){
+  hex([[x0,y0,zFb],[x1,y0,zFb],[x1,y1,zFt],[x0,y1,zFt],
+       [x0,y0,zB ],[x1,y0,zB ],[x1,y1,zB ],[x0,y1,zB ]],c);
+}
+
+// base (rodapé amarelo + deck creme)
+box(0,0,8, 114,12,62, AMARELO);
+box(0,12,8, 106,2.2,56, BRANCO);
+
+// laterais amarelas escalonadas (frente inclinada: z=36 embaixo → z=-8 em cima)
+lateral(-52,-48, 12,152, 36,-8,-22, AMARELO);
+lateral( 48, 52, 12,152, 36,-8,-22, AMARELO);
+
+// painel slatwall branco (fundo vertical)
+box(0,14,-19, 96,138,2.5, BRANCO);
+for(let y=22;y<=144;y+=10){
+  box(0,y+12,-17.6, 96,0.9,0.6, CINZA);
+}
+
+// prateleiras (profundidade crescente de cima p/ baixo)
+function prateleira(y,zF){
+  const d = zF+18;
+  box(0,y,(zF-18)/2, 100,2,d, BRANCO);          // bandeja
+  box(0,y-2.5,zF-0.8, 100,4.5,1.6, AMARELO);    // borda frontal amarela
+}
+prateleira(126, 4);   // superior  A–D
+prateleira( 88,14);   // média     E–H
+prateleira( 50,24);   // inferior  I–L
+
+// testeira branca com trim amarelo
+box(0,152,-12, 106,28,16, BRANCO);
+box(0,180,-12, 110,3,18, AMARELO);
+box(-54,150,-12, 4,33,18, AMARELO);
+box( 54,150,-12, 4,33,18, AMARELO);
+
+// ---------- posições ----------
+const px=[-40,-20,0,20,40];
+const letras='ABCDEFGHIJKLMNO';
+let li=0;
+for(const [y,z] of [[131,0],[93,10],[55,20]]){
+  for(const x of px) labels.push({x:x,y:y,z:z,t:letras[li++]});
+}
+for(let i=0;i<5;i++) labels.push({x:px[i],y:16,z:30,t:String(i+1)});
+
+// ---------- câmera / render ----------
+let yaw=0.5, pitch=-0.14, dist=440, F=760;
+let auto=true;
+
+function project(p,cy,sy,cp,sp){
+  let x=p[0], y=p[1]-94, z=p[2];
+  let x1=x*cy+z*sy, z1=-x*sy+z*cy;
+  let y1=y*cp - z1*sp, z2=y*sp + z1*cp;
+  const zc = dist - z2;
+  const s = F/zc;
+  return [W/2 + x1*s, H*0.47 - y1*s, zc, s];
+}
+
+function draw(){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const cy=Math.cos(yaw), sy=Math.sin(yaw);
+  const cp=Math.cos(pitch), sp=Math.sin(pitch);
+
+  // sombra
+  const g0=project([0,0,4],cy,sy,cp,sp);
+  ctx.fillStyle='rgba(0,0,0,.45)';
+  ctx.beginPath();
+  ctx.ellipse(g0[0],g0[1]+8, 155*g0[3]*1.2, 30*g0[3]*1.2, 0,0,Math.PI*2);
+  ctx.fill();
+
+  const L=[0.35,0.55,0.76];
+  const list=[];
+  for(const q of quads){
+    const P=q.pts.map(p=>project(p,cy,sy,cp,sp));
+    const ax=P[1][0]-P[0][0], ay=P[1][1]-P[0][1];
+    const bx2=P[3][0]-P[0][0], by2=P[3][1]-P[0][1];
+    if(ax*by2-ay*bx2<=0) continue;
+    const az=P[1][2]-P[0][2], bz=P[3][2]-P[0][2];
+    let nx=ay*bz-az*by2, ny=az*bx2-ax*bz, nz=ax*by2-ay*bx2;
+    const nl=Math.hypot(nx,ny,nz)||1;
+    nx/=nl;ny/=nl;nz/=nl;
+    let k=0.55+0.45*Math.max(0,-(nx*L[0]+ny*L[1])+Math.abs(nz)*L[2]);
+    k=Math.min(k,1.08);
+    const depth=(P[0][2]+P[1][2]+P[2][2]+P[3][2])/4;
+    list.push({P,depth,fill:shade(q.c,k)});
+  }
+  list.sort((a,b)=>b.depth-a.depth);
+  for(const q of list){
+    ctx.fillStyle=q.fill;
+    ctx.strokeStyle=q.fill;
+    ctx.beginPath();
+    ctx.moveTo(q.P[0][0],q.P[0][1]);
+    for(let i=1;i<4;i++) ctx.lineTo(q.P[i][0],q.P[i][1]);
+    ctx.closePath();ctx.fill();ctx.stroke();
+  }
+
+  // logo Monitor na testeira
+  if(Math.cos(yaw)>0.25){
+    const hc=project([0,164,-3.5],cy,sy,cp,sp);
+    const s=hc[3];
+    ctx.save();
+    ctx.translate(hc[0],hc[1]);
+    // círculo azul com M
+    ctx.fillStyle='#1565c0';
+    ctx.beginPath();ctx.arc(-34*s,0,9*s,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.font='900 '+(11*s)+'px sans-serif';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('M',-34*s,0.5*s);
+    // texto
+    ctx.fillStyle='#111';
+    ctx.font='900 '+(13*s)+'px sans-serif';
+    ctx.textAlign='left';
+    ctx.fillText('MONITOR',-21*s,-3*s);
+    ctx.fillStyle='rgba(30,30,30,.9)';
+    ctx.font='700 '+(4.6*s)+'px sans-serif';
+    ctx.fillText('PRODUTOS AGROPECUÁRIOS',-21*s,6*s);
+    ctx.restore();
+  }
+
+  // etiquetas
+  for(const lb of labels){
+    const p=project([lb.x,lb.y,lb.z],cy,sy,cp,sp);
+    const r=7.2*p[3];
+    ctx.fillStyle='rgba(245,185,10,.97)';
+    ctx.beginPath();ctx.arc(p[0],p[1],r,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#15150f';
+    ctx.font='800 '+(r*1.15)+'px sans-serif';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(lb.t,p[0],p[1]+r*0.05);
+  }
+}
+
+// ---------- interação ----------
+let dragging=false,lx=0,ly=0;
+function down(x,y){dragging=true;auto=false;lx=x;ly=y;hint.style.opacity=0;}
+function move(x,y){
+  if(!dragging)return;
+  yaw += (x-lx)*0.008;
+  pitch = Math.max(-0.55,Math.min(0.15,pitch+(y-ly)*0.005));
+  lx=x;ly=y;
+}
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);down(e.clientX,e.clientY);});
+cv.addEventListener('pointermove',e=>move(e.clientX,e.clientY));
+cv.addEventListener('pointerup',()=>dragging=false);
+cv.addEventListener('pointercancel',()=>dragging=false);
+
+function loop(){
+  if(auto) yaw += 0.0035;
+  draw();
+  requestAnimationFrame(loop);
+}
+resize();
+loop();
+})();
+</script>
+</body>
+</html>
