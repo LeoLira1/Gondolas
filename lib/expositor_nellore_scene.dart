@@ -112,16 +112,17 @@ class ExpositorNelloreGeometry {
               ? NelloreTipoNivel.cesto
               : NelloreTipoNivel.gancho;
 
-  // Y do nível: superfície de apoio (base/prateleira/cesto) ou centro do pino
+  // Y do nível: superfície de apoio (prateleira/cesto) ou centro do pino
   // (gancho). Frações da altura calibradas pelas fotos da loja: 2 fileiras de
-  // ganchos em cima, cestos no meio, prateleiras e deck embaixo.
+  // ganchos em cima, cestos no meio e as 2 prateleiras embaixo — a T–X é a
+  // mais baixa, quase rente ao chão (a base/deck não existe na estante real).
   double nivelY(int nivel) => switch (nivel) {
-        0 => _baseH + _deckT,
-        1 => height * 0.29,
-        2 => height * 0.47,
-        3 => height * 0.60,
-        4 => height * 0.78,
-        _ => height * 0.93,
+        0 => _baseH + _deckT,   // base removida — não usado por células
+        1 => height * 0.10,     // prateleira T–X: a mais baixa, junto ao chão
+        2 => height * 0.36,     // prateleira O–S
+        3 => height * 0.60,     // cestos K–N
+        4 => height * 0.78,     // ganchos F–J
+        _ => height * 0.93,     // ganchos A–E (topo)
       };
 
   // X do centro da coluna c no nível dado — o nº de colunas varia por nível
@@ -235,17 +236,15 @@ class ExpositorNelloreGeometry {
 
     final hw = width / 2;
 
-    // ── Base: rodapé amarelo + deck creme (nível 0) ────────────────────────
+    // ── Rodapé amarelo (só o pé da estrutura) ──────────────────────────────
+    // A prateleira/deck da base (nível 0) NÃO existe na estante real — foi
+    // removida. Sobra um rodapé raso (na profundidade do painel) só pra a
+    // estrutura apoiar no chão; a prateleira T–X passa a ser a mais baixa.
     _box(faces,
       x0: -hw,          x1: hw,
       y0: 0,            y1: _baseH,
-      z0: -_painelT/2,  z1: _baseD,
+      z0: -_painelT/2,  z1: _painelT/2 + 0.10,
       color: _amarelo);
-    _box(faces,
-      x0: -hw + 0.01,   x1: hw - 0.01,
-      y0: _baseH,       y1: _baseH + _deckT,
-      z0: -_painelT/2,  z1: _baseD - 0.01,
-      color: _creme);
 
     // ── Painel slatwall creme ──────────────────────────────────────────────
     _box(faces,
@@ -266,7 +265,7 @@ class ExpositorNelloreGeometry {
 
     // Ranhuras horizontais do slatwall — tiras finas levemente à frente do
     // painel pra vencer o depth-sort.
-    var y = _baseH + _deckT + _ranhuraGap;
+    var y = _baseH + _ranhuraGap;
     while (y < height - 0.04) {
       faces.add(Face([
         Vec3(-hw + _molduraW, y,             _painelT / 2 + 0.002),
