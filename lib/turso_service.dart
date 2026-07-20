@@ -505,6 +505,16 @@ class TursoService {
   // constantes inteiras de models.dart, nunca entrada do usuário.
   static final String _sqlEstantesRemovidas = estantesRemovidas.join(', ');
 
+  // A base do Expositor Nellore (nível 0) saiu dos endereços — a estante
+  // real não tem essa prateleira. Linhas antigas dela são ignoradas na
+  // carga e nas buscas (só constantes de models.dart, nunca entrada do
+  // usuário); um "Salvar layout" na estante 19 as apaga de vez.
+  static final String _sqlSemBaseNellore =
+      'NOT (estante_num = $expositorNelloreNum AND nivel = 0)';
+
+  static bool _ehBaseNelloreRemovida(int estanteNum, int nivel) =>
+      estanteNum == expositorNelloreNum && nivel == 0;
+
   Future<bool> salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
     if (!await _garantirConexao()) return false;
     try {
@@ -556,18 +566,21 @@ class TursoService {
         'FROM estante_layout WHERE estante_num = ? ORDER BY id',
       );
       final rows = await stmt.query(positional: [estanteNum]);
-      return (rows as List<dynamic>).map((dynamic row) {
-        final r = row as Map<String, dynamic>;
-        return CaixaLayoutEstante(
-          estanteNum:    r['estante_num']    as int?    ?? estanteNum,
-          coluna:        r['coluna']         as int?    ?? 0,
-          nivel:         r['nivel']          as int?    ?? 0,
-          slot:          r['slot']           as int?    ?? 0,
-          produtoCodigo: r['produto_codigo'] as String? ?? '',
-          produtoNome:   r['produto_nome']   as String? ?? '',
-          corHex:        r['cor_hex']        as String? ?? '#888888',
-        );
-      }).toList();
+      return (rows as List<dynamic>)
+          .map((dynamic row) {
+            final r = row as Map<String, dynamic>;
+            return CaixaLayoutEstante(
+              estanteNum:    r['estante_num']    as int?    ?? estanteNum,
+              coluna:        r['coluna']         as int?    ?? 0,
+              nivel:         r['nivel']          as int?    ?? 0,
+              slot:          r['slot']           as int?    ?? 0,
+              produtoCodigo: r['produto_codigo'] as String? ?? '',
+              produtoNome:   r['produto_nome']   as String? ?? '',
+              corHex:        r['cor_hex']        as String? ?? '#888888',
+            );
+          })
+          .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
+          .toList();
     } catch (_) {
       return [];
     }
@@ -620,7 +633,8 @@ class TursoService {
       final stmt = await _client!.prepare(
         'SELECT estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex '
         'FROM estante_layout WHERE produto_codigo = ? '
-        'AND estante_num NOT IN ($_sqlEstantesRemovidas) LIMIT 1',
+        'AND estante_num NOT IN ($_sqlEstantesRemovidas) '
+        'AND $_sqlSemBaseNellore LIMIT 1',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
       final list = rows as List<dynamic>;
@@ -748,6 +762,7 @@ class TursoService {
         'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
         'FROM estante_layout WHERE (produto_nome LIKE ? OR produto_codigo LIKE ?) '
         'AND estante_num NOT IN ($_sqlEstantesRemovidas) '
+        'AND $_sqlSemBaseNellore '
         'ORDER BY produto_nome LIMIT 20',
       );
       final rows = await stmt.query(positional: [like, like]);

@@ -14,13 +14,16 @@ import 'models.dart'
 // borda amarela (5 espaços cada) e a base amarela com deck creme que também
 // recebe produtos.
 //
-// São 28 endereços em 6 níveis com colunas variando por nível, slot = 0
+// São 24 endereços nos níveis 1–5 com colunas variando por nível, slot = 0
 // sempre, reaproveitando o esquema (coluna, nivel, slot) do estante_layout
 // na Turso como "estante" nº expositorNelloreNum:
-//   nível 0    = base (deck), 4 espaços — rotulada com números 1–4
 //   níveis 1–2 = prateleiras, 5 espaços — letras T–X e O–S
 //   nível 3    = cestos bin, 4 cestos   — letras K–N
 //   níveis 4–5 = ganchos, 5 por fileira — letras F–J e A–E (topo)
+//
+// O nível 0 era a base (deck, rotulada 1–4), mas a estante real não tem essa
+// prateleira: a base continua desenhada (o pé da estrutura existe), só não
+// gera mais células — sem labels, sem toque e sem produtos ali.
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum NelloreTipoNivel { base, prateleira, cesto, gancho }
@@ -130,8 +133,9 @@ class ExpositorNelloreGeometry {
     return nCols > 1 ? xMin + util * c / (nCols - 1) : 0;
   }
 
+  // Nível 0 (base) fora: a estante real não tem essa prateleira de produtos.
   List<ExpositorNelloreCell> get cells => [
-        for (var niv = 0; niv < niveis; niv++)
+        for (var niv = 1; niv < niveis; niv++)
           for (var col = 0; col < colunasNivelNellore(niv); col++)
             ExpositorNelloreCell(
               coluna:   col,

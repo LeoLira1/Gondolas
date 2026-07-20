@@ -132,18 +132,18 @@ void main() {
     expect(numColunasPara(expositorMagnojetNum), colunasBaseMagnojet);
   });
 
-  test('expositor Nellore: 28 endereços em 6 níveis com colunas variáveis', () {
+  test('expositor Nellore: 24 endereços nos níveis 1–5, sem base', () {
     const geo = ExpositorNelloreGeometry();
-    // 4 (base) + 5+5 (prateleiras) + 4 (cestos) + 5+5 (ganchos) = 28.
-    expect(geo.cells.length, 28);
-    expect(colunasNivelNellore(0), 4);
+    // 5+5 (prateleiras) + 4 (cestos) + 5+5 (ganchos) = 24 — a base (nível 0)
+    // saiu dos endereços: a estante real não tem essa prateleira.
+    expect(geo.cells.length, 24);
+    expect(geo.cells.any((c) => c.nivel == 0), isFalse);
     expect(colunasNivelNellore(1), 5);
     expect(colunasNivelNellore(2), 5);
     expect(colunasNivelNellore(3), 4);
     expect(colunasNivelNellore(4), 5);
     expect(colunasNivelNellore(5), 5);
-    // Tipos por nível: base, 2 prateleiras, cestos, 2 fileiras de ganchos.
-    expect(ExpositorNelloreGeometry.tipoDoNivel(0), NelloreTipoNivel.base);
+    // Tipos por nível: 2 prateleiras, cestos, 2 fileiras de ganchos.
     expect(ExpositorNelloreGeometry.tipoDoNivel(1), NelloreTipoNivel.prateleira);
     expect(ExpositorNelloreGeometry.tipoDoNivel(2), NelloreTipoNivel.prateleira);
     expect(ExpositorNelloreGeometry.tipoDoNivel(3), NelloreTipoNivel.cesto);
@@ -154,12 +154,9 @@ void main() {
         greaterThan(ExpositorNelloreGeometry.hPacote));
   });
 
-  test('expositor Nellore: base numerada 1–4 e letras A–E a T–X nos demais', () {
-    // Nível 0 (base/deck) usa números por coluna, sem letra.
-    expect(letraEstanteCelula(expositorNelloreNum, 0, 0), '1');
-    expect(letraEstanteCelula(expositorNelloreNum, 3, 0), '4');
+  test('expositor Nellore: letras A–E a T–X inalteradas sem a base', () {
     // Letras contínuas de cima pra baixo: ganchos A–E e F–J, cestos K–N,
-    // prateleiras O–S e T–X.
+    // prateleiras O–S e T–X — mesmos endereços de antes da base sair.
     expect(letraEstanteCelula(expositorNelloreNum, 0, 5), 'A');
     expect(letraEstanteCelula(expositorNelloreNum, 4, 5), 'E');
     expect(letraEstanteCelula(expositorNelloreNum, 0, 4), 'F');

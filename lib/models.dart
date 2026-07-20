@@ -48,12 +48,16 @@ const int colunasBaseMagnojet = 5;
 
 // O Expositor Nellore Isoflex/Avant (estrutura amarela com painel slatwall)
 // também reutiliza a infra de estantes: local_tipo 'estante', número próprio,
-// slot sempre 0. São 28 endereços em 6 níveis com colunas variando por nível
-// (conforme o expositor real da loja): nível 0 = base (4 espaços, rotulada
-// 1–4), níveis 1–2 = prateleiras (5 espaços cada), nível 3 = cestos bin
-// (4 cestos), níveis 4–5 = ganchos (5 por fileira). Os níveis 1–5 usam
-// letras contínuas de cima pra baixo: A–E e F–J nos ganchos, K–N nos
-// cestos, O–S e T–X nas prateleiras.
+// slot sempre 0. São 24 endereços nos níveis 1–5 com colunas variando por
+// nível (conforme o expositor real da loja): níveis 1–2 = prateleiras
+// (5 espaços cada), nível 3 = cestos bin (4 cestos), níveis 4–5 = ganchos
+// (5 por fileira). Letras contínuas de cima pra baixo: A–E e F–J nos
+// ganchos, K–N nos cestos, O–S e T–X nas prateleiras.
+//
+// O nível 0 era a base (deck, rotulada 1–4), mas a estante real não tem
+// essa prateleira — a base SAIU dos endereços. O índice 0 não foi
+// reaproveitado (os níveis 1–5 mantêm o significado dos dados salvos) e
+// linhas antigas de nível 0 no Turso são ignoradas na carga e na busca.
 const int expositorNelloreNum     = 19;
 const int colunasExpositorNellore = 5;   // máximo (ganchos e prateleiras)
 const int niveisExpositorNellore  = 6;
@@ -171,9 +175,10 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
         coluna * nNiveis + (nNiveis - 1 - nivel) + 1;
     return '$numero';
   }
-  // No Expositor Nellore a base (nível 0) usa números 1–4; as letras dos
-  // níveis 1–5 são contínuas de cima pra baixo com o nº de colunas variando
-  // por nível: A–E e F–J (ganchos), K–N (cestos), O–S e T–X (prateleiras).
+  // No Expositor Nellore as letras dos níveis 1–5 são contínuas de cima pra
+  // baixo com o nº de colunas variando por nível: A–E e F–J (ganchos), K–N
+  // (cestos), O–S e T–X (prateleiras). O nível 0 (base, saiu dos endereços)
+  // segue numérico só pra dados antigos não ganharem letra de outro nível.
   if (estanteNum == expositorNelloreNum) {
     if (nivel == 0) return '${coluna + 1}';
     var offset = 0;
