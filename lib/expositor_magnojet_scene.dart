@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
 import 'models.dart'
-    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
-         expositorMagnojetNum, letraDoIndice;
+    show CaixaColocadaEstante, chaveEnderecoEstoque, colunasBaseMagnojet,
+         corConferenciaCiano, expositorMagnojetNum, letraDoIndice;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ExpositorCell — posição de gancho no painel canaletado
+// ExpositorCell — posição de gancho no painel canaletado (ou espaço da base)
 //
 // O expositor MagnoJet é um painel canaletado (slatwall) com ganchos de arame
 // em grade. Cada gancho é um endereço: (coluna, linha). Diferente das estantes,
@@ -16,17 +16,24 @@ import 'models.dart'
 // (estante_layout no Turso, busca, Modo Conferência), o expositor se apresenta
 // como "estante" nº expositorMagnojetNum, com coluna=coluna, nivel=linha e
 // slot=0 sempre.
+//
+// A base (o pé do expositor) também recebe produtos: 5 caixas apoiadas no
+// deck, rotuladas 1–5. Ela entra como linha extra APÓS os ganchos
+// (linha = linhas, ou seja, nivel 6 na grade padrão), pra não invalidar os
+// endereços A–X já salvos no banco.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ExpositorCell {
   final int    coluna;
-  final int    linha;      // 0 = linha de baixo (mesma convenção de nivel)
-  final double xCenter;    // centro do gancho em X
-  final double yCenter;    // altura do gancho em Y
+  final int    linha;      // 0 = linha de baixo; linha == linhas → base
+  final bool   ehBase;     // true = espaço de caixa na base (deck)
+  final double xCenter;    // centro do gancho/caixa em X
+  final double yCenter;    // altura do gancho (ou superfície da base) em Y
 
   const ExpositorCell({
     required this.coluna,
     required this.linha,
+    this.ehBase = false,
     required this.xCenter,
     required this.yCenter,
   });
@@ -61,6 +68,11 @@ class ExpositorMagnojetGeometry {
   static const double hPacote = 0.195;  // altura pendurada
   static const double dPacote = 0.035;  // espessura (pilha de sacolas no pino)
   static const double _hAba   = 0.045;  // aba/cabeçalho azul MagnoJet no topo
+
+  // ── Dimensões das caixas apoiadas na base (espaços 1–5) ────────────────────
+  static const double wCaixa = 0.16;
+  static const double hCaixa = 0.16;
+  static const double dCaixa = 0.16;
 
   // ── Painel / estrutura ─────────────────────────────────────────────────────
   static const double _painelT     = 0.035;  // espessura do painel
@@ -108,6 +120,18 @@ class ExpositorMagnojetGeometry {
         : 0;
   }
 
+  // Linha reservada pra base (deck): logo após a última fileira de ganchos.
+  int get linhaBase => linhas;
+
+  // X do centro do espaço c da base — 5 caixas distribuídas na largura toda.
+  double colunaXBase(int c) {
+    final util = width - 0.06 * 2 - wCaixa;
+    final xMin = -util / 2;
+    return colunasBaseMagnojet > 1
+        ? xMin + util * c / (colunasBaseMagnojet - 1)
+        : 0;
+  }
+
   List<ExpositorCell> get cells => [
         for (var lin = 0; lin < linhas; lin++)
           for (var col = 0; col < colunas; col++)
@@ -117,10 +141,22 @@ class ExpositorMagnojetGeometry {
               xCenter: colunaX(col),
               yCenter: linhaY(lin),
             ),
+        for (var col = 0; col < colunasBaseMagnojet; col++)
+          ExpositorCell(
+            coluna:  col,
+            linha:   linhaBase,
+            ehBase:  true,
+            xCenter: colunaXBase(col),
+            yCenter: _baseH,
+          ),
       ];
 
   // Plano frontal do painel — onde o hit-test cruza o raio do toque.
   static double get zFrente => _painelT / 2;
+
+  // Plano frontal da base — o deck avança bem mais que o painel; hit-test e
+  // labels dos espaços 1–5 usam este plano.
+  static double get zFrenteBase => _baseD * 0.75;
 
   // ── Sacolinha pendurada num gancho ─────────────────────────────────────────
   //
@@ -157,6 +193,28 @@ class ExpositorMagnojetGeometry {
     }
   }
 
+  // ── Caixa apoiada num espaço da base (como no Nellore/Monitor) ─────────────
+  static void addCaixaProduto(
+    List<Face> faces, {
+    required ExpositorCell celula,
+    required Color color,
+    bool desatualizado = false,
+  }) {
+    final xc = celula.xCenter;
+    final y0 = celula.yCenter;
+    final z1 = _baseD - 0.03;
+    final z0 = z1 - dCaixa;
+    _box(faces,
+      x0: xc - wCaixa / 2, x1: xc + wCaixa / 2,
+      y0: y0,               y1: y0 + hCaixa,
+      z0: z0,               z1: z1,
+      color: color);
+    if (desatualizado) {
+      addBadgeEnderecoDesatualizado(faces,
+          x1: xc + wCaixa / 2, y1: y0 + hCaixa, z1: z1, tamanho: wCaixa * 0.45);
+    }
+  }
+
   List<Face> buildFaces() {
     final faces = <Face>[];
 
@@ -171,11 +229,22 @@ class ExpositorMagnojetGeometry {
     final hw = width / 2;
 
     // ── Base / pé ──────────────────────────────────────────────────────────
-    _box(faces,
-      x0: -hw,          x1: hw,
-      y0: 0,            y1: _baseH,
-      z0: -_painelT/2,  z1: _baseD,
-      color: _painel);
+    // Segmentada numa grade de blocos: faces grandes empatam no depth-sort
+    // com as caixas de produto apoiadas no deck (espaços 1–5) e pintam por
+    // cima delas; faces pequenas ordenam direito.
+    const nxBase = 5, nzBase = 4;
+    for (var i = 0; i < nxBase; i++) {
+      for (var j = 0; j < nzBase; j++) {
+        _box(faces,
+          x0: -hw + 2 * hw * i / nxBase,
+          x1: -hw + 2 * hw * (i + 1) / nxBase,
+          y0: 0,
+          y1: _baseH,
+          z0: -_painelT / 2 + (_baseD + _painelT / 2) * j / nzBase,
+          z1: -_painelT / 2 + (_baseD + _painelT / 2) * (j + 1) / nzBase,
+          color: _painel);
+      }
+    }
 
     // ── Painel canaletado ──────────────────────────────────────────────────
     _box(faces,
@@ -246,6 +315,7 @@ class ExpositorMagnojetGeometry {
 
     // ── Ganchos de arame ───────────────────────────────────────────────────
     for (final c in cells) {
+      if (c.ehBase) continue;   // espaços da base não têm gancho
       // Haste horizontal saindo do painel
       _box(faces,
         x0: c.xCenter - _ganchoR, x1: c.xCenter + _ganchoR,
@@ -483,12 +553,17 @@ class ExpositorMagnojetPainter extends CustomPainter {
 
     // Letra por gancho: linhas de cima pra baixo, colunas da esquerda pra
     // direita — mesma convenção de leitura das estantes (A = topo-esquerda).
+    // Os espaços da base mostram números 1–5.
     for (final c in geometry.cells) {
       final hit = _projectPoint(
-          Vec3(c.xCenter,
-               c.yCenter + 0.045,
-               ExpositorMagnojetGeometry.zFrente +
-                   ExpositorMagnojetGeometry._ganchoLen + 0.01),
+          c.ehBase
+              ? Vec3(c.xCenter,
+                     c.yCenter + 0.06,
+                     ExpositorMagnojetGeometry.zFrenteBase + 0.02)
+              : Vec3(c.xCenter,
+                     c.yCenter + 0.045,
+                     ExpositorMagnojetGeometry.zFrente +
+                         ExpositorMagnojetGeometry._ganchoLen + 0.01),
           size);
       if (hit == null) continue;
 
@@ -500,7 +575,9 @@ class ExpositorMagnojetPainter extends CustomPainter {
       canvas.drawCircle(screen, radius, rimPaint);
 
       final row   = geometry.linhas - 1 - c.linha;
-      final letra = letraDoIndice(row * geometry.colunas + c.coluna);
+      final letra = c.ehBase
+          ? '${c.coluna + 1}'
+          : letraDoIndice(row * geometry.colunas + c.coluna);
       final tp = TextPainter(
         text: TextSpan(
           text: letra,
@@ -541,8 +618,9 @@ class ExpositorMagnojetScene extends StatefulWidget {
   final bool                      wireframe;
   final bool                      autoRotate;
   final bool                      showLabels;
-  // Reutiliza CaixaColocadaEstante: coluna = coluna do gancho,
-  // nivel = linha do gancho, slot = 0 (um produto por gancho).
+  // Reutiliza CaixaColocadaEstante: coluna = coluna do gancho (ou espaço
+  // 0–4 da base), nivel = linha do gancho (linhaBase = deck), slot = 0
+  // sempre (um produto por endereço).
   final List<CaixaColocadaEstante> caixas;
   final String?                    produtoSelecionadoId;
   final Map<String, Color>         corPorProduto;
@@ -663,8 +741,9 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
     }
   }
 
-  // Hit-test: intersecta o raio do toque com o plano frontal do painel
-  // (z = zFrente) e procura o gancho cuja área de pacote contém o ponto.
+  // Hit-test: os ganchos vivem no plano frontal do painel e a base avança
+  // bem mais, então o raio do toque é intersectado plano a plano — o do
+  // gancho pra área do pacote pendurado, o do deck pra área da caixa.
   ({int coluna, int linha})? _hitTest(Offset tap, Size size) {
     final eye    = _camera.position;
     final fwd    = (_camera.target - eye).normalized;
@@ -683,25 +762,38 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
 
     // Plano vertical z = const só é atingível se dir.z tem componente
     if (dir.z.abs() < 1e-6) return null;
-    final zPlano = ExpositorMagnojetGeometry.zFrente +
-        ExpositorMagnojetGeometry._ganchoLen / 2;
-    final t = (zPlano - eye.z) / dir.z;
-    if (t <= 0.1) return null;
 
-    final hx = eye.x + t * dir.x;
-    final hy = eye.y + t * dir.y;
-
-    const hw = ExpositorMagnojetGeometry.wPacote / 2 + 0.015;
     const hp = ExpositorMagnojetGeometry.hPacote;
 
     ({int coluna, int linha, double d2})? nearest;
     for (final c in widget.geometry.cells) {
-      // Área clicável: retângulo do pacote pendurado no gancho
+      final zPlano = c.ehBase
+          ? ExpositorMagnojetGeometry.zFrenteBase
+          : ExpositorMagnojetGeometry.zFrente +
+              ExpositorMagnojetGeometry._ganchoLen / 2;
+      final t = (zPlano - eye.z) / dir.z;
+      if (t <= 0.1) continue;
+
+      final hx = eye.x + t * dir.x;
+      final hy = eye.y + t * dir.y;
+
+      // Área clicável: retângulo do pacote pendurado (gancho) ou da caixa
+      // apoiada no deck (base).
+      final double hw, yMin, yMax;
+      if (c.ehBase) {
+        hw   = ExpositorMagnojetGeometry.wCaixa / 2 + 0.02;
+        yMin = c.yCenter - 0.05;
+        yMax = c.yCenter + ExpositorMagnojetGeometry.hCaixa + 0.05;
+      } else {
+        hw   = ExpositorMagnojetGeometry.wPacote / 2 + 0.015;
+        yMin = c.yCenter - hp - 0.02;
+        yMax = c.yCenter + 0.04;
+      }
       if ((hx - c.xCenter).abs() > hw) continue;
-      if (hy > c.yCenter + 0.04 || hy < c.yCenter - hp - 0.02) continue;
+      if (hy < yMin || hy > yMax) continue;
 
       final dx = hx - c.xCenter;
-      final dy = hy - (c.yCenter - hp / 2);
+      final dy = hy - (yMin + yMax) / 2;
       final d2 = dx * dx + dy * dy;
       if (nearest == null || d2 < nearest.d2) {
         nearest = (coluna: c.coluna, linha: c.linha, d2: d2);
@@ -728,6 +820,7 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
           .where((c) => c.coluna == caixa.coluna && c.linha == caixa.nivel)
           .toList();
       if (celulaList.isEmpty) continue;
+      final celula = celulaList.first;
       final chave = chaveEnderecoEstoque(
         produtoCodigo: caixa.produtoId,
         localTipo:     'estante',
@@ -735,9 +828,15 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
         faceOuColuna:  caixa.coluna,
         andarOuNivel:  caixa.nivel,
       );
-      ExpositorMagnojetGeometry.addPacoteProduto(extraFaces,
-          celula: celulaList.first, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
+      final desatualizado = widget.desatualizados.contains(chave);
+      // Ganchos penduram sacolinhas; a base apoia caixas no deck.
+      if (celula.ehBase) {
+        ExpositorMagnojetGeometry.addCaixaProduto(extraFaces,
+            celula: celula, color: cor, desatualizado: desatualizado);
+      } else {
+        ExpositorMagnojetGeometry.addPacoteProduto(extraFaces,
+            celula: celula, color: cor, desatualizado: desatualizado);
+      }
     }
 
     return GestureDetector(

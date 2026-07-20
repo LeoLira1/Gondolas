@@ -2607,11 +2607,14 @@ class _EstantePageState extends State<EstantePage> {
       const geo = ExpositorMagnojetGeometry();
       final celula = geo.cells
           .firstWhere((c) => c.coluna == coluna && c.linha == nivel);
-      // Um produto por gancho: slot sempre 0.
+      // Um produto por endereço (gancho ou espaço da base): slot sempre 0.
+      final w = celula.ehBase
+          ? ExpositorMagnojetGeometry.wCaixa
+          : ExpositorMagnojetGeometry.wPacote;
       return (
         maxSlots: 1,
-        xMin:     celula.xCenter - ExpositorMagnojetGeometry.wPacote / 2,
-        wCaixa:   ExpositorMagnojetGeometry.wPacote,
+        xMin:     celula.xCenter - w / 2,
+        wCaixa:   w,
         gap:      0.0,
       );
     }

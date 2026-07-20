@@ -96,12 +96,16 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  test('expositor MagnoJet: grade de ganchos tem colunas × linhas células', () {
+  test('expositor MagnoJet: grade de ganchos + espaços da base', () {
     const geo = ExpositorMagnojetGeometry();
-    expect(geo.cells.length, geo.colunas * geo.linhas);
+    expect(geo.cells.length, geo.colunas * geo.linhas + colunasBaseMagnojet);
     // Ganchos não colidem: passo vertical maior que a altura da sacolinha.
     final passoY = geo.linhaY(1) - geo.linhaY(0);
     expect(passoY, greaterThan(ExpositorMagnojetGeometry.hPacote));
+    // Espaços da base: linha extra após os ganchos, marcados como base.
+    final base = geo.cells.where((c) => c.ehBase).toList();
+    expect(base.length, colunasBaseMagnojet);
+    expect(base.every((c) => c.linha == geo.linhaBase), isTrue);
   });
 
   test('expositor MagnoJet: letras seguem a convenção (A = topo-esquerda)', () {
@@ -117,6 +121,15 @@ void main() {
       letraDoIndice(
           colunasExpositorMagnojet * linhasExpositorMagnojet - 1),
     );
+    // Base: números 1–5, sem deslocar as letras dos ganchos.
+    expect(letraEstanteCelula(expositorMagnojetNum, 0, nivelBaseMagnojet), '1');
+    expect(
+      letraEstanteCelula(
+          expositorMagnojetNum, colunasBaseMagnojet - 1, nivelBaseMagnojet),
+      '5',
+    );
+    expect(niveisProdutoPara(expositorMagnojetNum), linhasExpositorMagnojet + 1);
+    expect(numColunasPara(expositorMagnojetNum), colunasBaseMagnojet);
   });
 
   test('expositor Nellore: 28 endereços em 6 níveis com colunas variáveis', () {

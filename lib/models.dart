@@ -38,6 +38,14 @@ const int expositorMagnojetNum     = 9;
 const int colunasExpositorMagnojet = 4;
 const int linhasExpositorMagnojet  = 6;
 
+// A base do Expositor MagnoJet também recebe produtos: 5 caixas apoiadas no
+// pé do expositor, rotuladas com números 1–5 (como as bases do Nellore e do
+// Monitor). Para não invalidar os endereços dos ganchos já salvos no Turso
+// (níveis 0–5), a base entra como um nível NOVO acima da faixa existente:
+// nivel = linhasExpositorMagnojet (6), coluna 0–4, slot 0.
+const int nivelBaseMagnojet   = linhasExpositorMagnojet;
+const int colunasBaseMagnojet = 5;
+
 // O Expositor Nellore Isoflex/Avant (estrutura amarela com painel slatwall)
 // também reutiliza a infra de estantes: local_tipo 'estante', número próprio,
 // slot sempre 0. São 28 endereços em 6 níveis com colunas variando por nível
@@ -103,7 +111,7 @@ bool temNivelTopoPara(int estanteNum) =>
 int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
-        ? linhasExpositorMagnojet
+        ? linhasExpositorMagnojet + 1   // ganchos (0–5) + base (6)
         : estanteNum == expositorNelloreNum
             ? niveisExpositorNellore
             : estanteNum == expositorMonitorNum
@@ -119,7 +127,7 @@ int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
 int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == expositorMagnojetNum
-        ? colunasExpositorMagnojet
+        ? colunasBaseMagnojet   // máximo entre ganchos (4) e base (5)
         : estanteNum == expositorNelloreNum
             ? colunasExpositorNellore
             : estanteNum == expositorMonitorNum
@@ -182,11 +190,16 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
     final row = niveisExpositorMonitor - 1 - nivel;
     return letraDoIndice(row * colunasExpositorMonitor + coluna);
   }
+  // No Expositor MagnoJet a base (nível nivelBaseMagnojet) usa números 1–5;
+  // os ganchos (níveis 0–5) seguem com as letras A–X de cima pra baixo.
+  if (estanteNum == expositorMagnojetNum) {
+    if (nivel == nivelBaseMagnojet) return '${coluna + 1}';
+    final row = linhasExpositorMagnojet - 1 - nivel;
+    return letraDoIndice(row * colunasExpositorMagnojet + coluna);
+  }
   final nColunas = numColunasPara(estanteNum);
   final offset   =
-      (estanteNum == estanteEdr300Num || estanteNum == expositorMagnojetNum)
-          ? 0
-          : letraOffsetPara(estanteNum);
+      estanteNum == estanteEdr300Num ? 0 : letraOffsetPara(estanteNum);
   final row      = nNiveis - 1 - nivel;
   return letraDoIndice(offset + row * nColunas + coluna);
 }
