@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, addBadgeEnderecoDivergente;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, colunasBaseMagnojet,
          corConferenciaCiano, expositorMagnojetNum, letraDoIndice;
@@ -168,7 +168,6 @@ class ExpositorMagnojetGeometry {
     required ExpositorCell celula,
     required Color color,
     bool desatualizado = false,
-    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final yTopo = celula.yCenter + 0.008;
@@ -193,10 +192,6 @@ class ExpositorMagnojetGeometry {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wPacote / 2, y1: yTopo, z1: z1, tamanho: wPacote * 0.55);
     }
-    if (divergente) {
-      addBadgeEnderecoDivergente(faces,
-          x0: xc - wPacote / 2, y1: yTopo, z1: z1, tamanho: wPacote * 0.55);
-    }
   }
 
   // ── Caixa apoiada num espaço da base (como no Nellore/Monitor) ─────────────
@@ -205,7 +200,6 @@ class ExpositorMagnojetGeometry {
     required ExpositorCell celula,
     required Color color,
     bool desatualizado = false,
-    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final y0 = celula.yCenter;
@@ -219,10 +213,6 @@ class ExpositorMagnojetGeometry {
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wCaixa / 2, y1: y0 + hCaixa, z1: z1, tamanho: wCaixa * 0.45);
-    }
-    if (divergente) {
-      addBadgeEnderecoDivergente(faces,
-          x0: xc - wCaixa / 2, y1: y0 + hCaixa, z1: z1, tamanho: wCaixa * 0.45);
     }
   }
 
@@ -824,11 +814,6 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
     for (final caixa in widget.caixas) {
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final celulaList = widget.geometry.cells
           .where((c) => c.coluna == caixa.coluna && c.linha == caixa.nivel)
           .toList();
@@ -842,16 +827,23 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
         andarOuNivel:  caixa.nivel,
       );
       final desatualizado = widget.desatualizados.contains(chave);
+      // Divergência de contagem pinta a caixa inteira de vermelho; destaques
+      // de conferência e busca (momentâneos) têm prioridade sobre ela.
       final divergente = widget.divergentes.contains(chave);
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : divergente
+                  ? corEnderecoDivergente
+                  : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       // Ganchos penduram sacolinhas; a base apoia caixas no deck.
       if (celula.ehBase) {
         ExpositorMagnojetGeometry.addCaixaProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado,
-            divergente: divergente);
+            celula: celula, color: cor, desatualizado: desatualizado);
       } else {
         ExpositorMagnojetGeometry.addPacoteProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado,
-            divergente: divergente);
+            celula: celula, color: cor, desatualizado: desatualizado);
       }
     }
 

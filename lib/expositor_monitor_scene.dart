@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, addBadgeEnderecoDivergente;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
          expositorMonitorNum, letraEstanteCelula;
@@ -151,7 +151,6 @@ class ExpositorMonitorGeometry {
     required ExpositorMonitorCell celula,
     required Color color,
     bool desatualizado = false,
-    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final y0 = celula.ySurface;
@@ -168,10 +167,6 @@ class ExpositorMonitorGeometry {
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wCaixa / 2, y1: y0 + hCaixa, z1: zF, tamanho: wCaixa * 0.45);
-    }
-    if (divergente) {
-      addBadgeEnderecoDivergente(faces,
-          x0: xc - wCaixa / 2, y1: y0 + hCaixa, z1: zF, tamanho: wCaixa * 0.45);
     }
   }
 
@@ -750,11 +745,6 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
     for (final caixa in widget.caixas) {
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final celulaList = widget.geometry.cells
           .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
           .toList();
@@ -766,10 +756,19 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
         faceOuColuna:  caixa.coluna,
         andarOuNivel:  caixa.nivel,
       );
+      // Divergência de contagem pinta a caixa inteira de vermelho; destaques
+      // de conferência e busca (momentâneos) têm prioridade sobre ela.
+      final isDivergente = widget.divergentes.contains(chave);
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : isDivergente
+                  ? corEnderecoDivergente
+                  : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       widget.geometry.addCaixaProduto(extraFaces,
           celula: celulaList.first, color: cor,
-          desatualizado: widget.desatualizados.contains(chave),
-          divergente: widget.divergentes.contains(chave));
+          desatualizado: widget.desatualizados.contains(chave));
     }
 
     return GestureDetector(

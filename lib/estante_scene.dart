@@ -144,23 +144,18 @@ class EstanteGeometry {
     required int slot,
     required Color color,
     bool desatualizado = false,
-    bool divergente = false,
   }) {
     final xCenter = celula.xMin + wCaixa / 2 + slot * (wCaixa + gap);
-    final x0 = xCenter - wCaixa / 2;
     final x1 = xCenter + wCaixa / 2;
     final y1 = celula.yTop + hCaixa;
     final z1 = dCaixa / 2;
     _box(faces,
-        x0: x0,                   x1: x1,
+        x0: xCenter - wCaixa / 2, x1: x1,
         y0: celula.yTop,          y1: y1,
         z0: -dCaixa / 2,          z1: z1,
         color: color);
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: wCaixa * 0.4);
-    }
-    if (divergente) {
-      addBadgeEnderecoDivergente(faces, x0: x0, y1: y1, z1: z1, tamanho: wCaixa * 0.4);
     }
   }
 }
@@ -479,11 +474,6 @@ class _EstanteSceneState extends State<EstanteScene> {
     for (final caixa in widget.caixas) {
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final celula = EstanteGeometry.celulasPara(widget.estanteAtual).firstWhere(
         (c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel,
       );
@@ -494,10 +484,19 @@ class _EstanteSceneState extends State<EstanteScene> {
         faceOuColuna:  caixa.coluna,
         andarOuNivel:  caixa.nivel,
       );
+      // Divergência de contagem pinta a caixa inteira de vermelho; destaques
+      // de conferência e busca (momentâneos) têm prioridade sobre ela.
+      final isDivergente = widget.divergentes.contains(chave);
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : isDivergente
+                  ? corEnderecoDivergente
+                  : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       EstanteGeometry.addBoxProduto(extraFaces,
           celula: celula, slot: caixa.slot, color: cor,
-          desatualizado: widget.desatualizados.contains(chave),
-          divergente: widget.divergentes.contains(chave));
+          desatualizado: widget.desatualizados.contains(chave));
     }
 
     return GestureDetector(
