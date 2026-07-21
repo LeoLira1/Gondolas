@@ -114,28 +114,10 @@ void addBadgeEnderecoDesatualizado(
   ], corEnderecoDesatualizado));
 }
 
+// Endereço com divergência entre a quantidade contada e a do sistema: em vez
+// de um badge de canto (que some conforme o ângulo da câmera), a caixa inteira
+// é pintada de vermelho — visível de qualquer lado.
 const Color corEnderecoDivergente = Color(0xFFe53935);
-
-/// Pequeno triângulo vermelho achatado no canto superior-frontal-esquerdo de
-/// uma caixa, sinalizando divergência entre a quantidade contada e a do
-/// sistema. Espelho em X do badge de desatualizado: como o espelhamento
-/// inverte o sentido do polígono, os vértices são reordenados para a normal
-/// continuar apontando para cima (a mesma direção do badge âmbar) — senão a
-/// luz de _project enxergaria o triângulo de costas e ele ficaria escuro.
-void addBadgeEnderecoDivergente(
-  List<Face> faces, {
-  required double x0,
-  required double y1,
-  required double z1,
-  required double tamanho,
-}) {
-  const elevacao = 0.006;
-  faces.add(Face([
-    Vec3(x0,           y1 + elevacao, z1),
-    Vec3(x0,           y1 + elevacao, z1 - tamanho),
-    Vec3(x0 + tamanho, y1 + elevacao, z1),
-  ], corEnderecoDivergente));
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // CaixaColocada — a product box placed on a shelf
@@ -297,7 +279,6 @@ class GondolaGeometry {
     required double cx, required double cy, required double cz,
     required Color color,
     bool desatualizado = false,
-    bool divergente = false,
   }) {
     const w = 0.40, h = 0.52, d = 0.40;
     final x0 = cx - w / 2, x1 = cx + w / 2;
@@ -317,9 +298,6 @@ class GondolaGeometry {
 
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: w * 0.4);
-    }
-    if (divergente) {
-      addBadgeEnderecoDivergente(faces, x0: x0, y1: y1, z1: z1, tamanho: w * 0.4);
     }
   }
 }
@@ -745,11 +723,6 @@ class _GondolaSceneState extends State<GondolaScene> {
     for (final caixa in widget.caixas) {
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       final shelf = GondolaGeometry.andares[caixa.andar];
       final chave = chaveEnderecoEstoque(
         produtoCodigo: caixa.produtoId,
@@ -758,10 +731,19 @@ class _GondolaSceneState extends State<GondolaScene> {
         faceOuColuna:  faceFromPos(caixa.x, caixa.z),
         andarOuNivel:  caixa.andar,
       );
+      // Divergência de contagem pinta a caixa inteira de vermelho; destaques
+      // de conferência e busca (momentâneos) têm prioridade sobre ela.
+      final isDivergente = widget.divergentes.contains(chave);
+      final cor = isConferencia
+          ? corConferenciaCiano
+          : isHighlighted
+              ? const Color(0xFFe87722)
+              : isDivergente
+                  ? corEnderecoDivergente
+                  : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       GondolaGeometry.addBox(extraFaces,
           cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor,
-          desatualizado: widget.desatualizados.contains(chave),
-          divergente: widget.divergentes.contains(chave));
+          desatualizado: widget.desatualizados.contains(chave));
     }
 
     return GestureDetector(
