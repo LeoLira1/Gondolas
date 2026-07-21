@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
+import 'gondola_scene.dart'
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, addBadgeEnderecoDivergente;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, colunasBaseMagnojet,
          corConferenciaCiano, expositorMagnojetNum, letraDoIndice;
@@ -167,6 +168,7 @@ class ExpositorMagnojetGeometry {
     required ExpositorCell celula,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final yTopo = celula.yCenter + 0.008;
@@ -191,6 +193,10 @@ class ExpositorMagnojetGeometry {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wPacote / 2, y1: yTopo, z1: z1, tamanho: wPacote * 0.55);
     }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces,
+          x0: xc - wPacote / 2, y1: yTopo, z1: z1, tamanho: wPacote * 0.55);
+    }
   }
 
   // ── Caixa apoiada num espaço da base (como no Nellore/Monitor) ─────────────
@@ -199,6 +205,7 @@ class ExpositorMagnojetGeometry {
     required ExpositorCell celula,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final y0 = celula.yCenter;
@@ -212,6 +219,10 @@ class ExpositorMagnojetGeometry {
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wCaixa / 2, y1: y0 + hCaixa, z1: z1, tamanho: wCaixa * 0.45);
+    }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces,
+          x0: xc - wCaixa / 2, y1: y0 + hCaixa, z1: z1, tamanho: wCaixa * 0.45);
     }
   }
 
@@ -628,6 +639,7 @@ class ExpositorMagnojetScene extends StatefulWidget {
   final void Function(int coluna, int linha)? onTapGanchoVisualizar;
   final String?                    destacadoCodigo;
   final Set<String>                desatualizados;
+  final Set<String>                divergentes;
   final Set<String>                destacadosCodigos;
 
   const ExpositorMagnojetScene({
@@ -643,6 +655,7 @@ class ExpositorMagnojetScene extends StatefulWidget {
     this.onTapGanchoVisualizar,
     this.destacadoCodigo,
     this.desatualizados       = const {},
+    this.divergentes          = const {},
     this.destacadosCodigos    = const {},
   });
 
@@ -829,13 +842,16 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
         andarOuNivel:  caixa.nivel,
       );
       final desatualizado = widget.desatualizados.contains(chave);
+      final divergente = widget.divergentes.contains(chave);
       // Ganchos penduram sacolinhas; a base apoia caixas no deck.
       if (celula.ehBase) {
         ExpositorMagnojetGeometry.addCaixaProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
+            celula: celula, color: cor, desatualizado: desatualizado,
+            divergente: divergente);
       } else {
         ExpositorMagnojetGeometry.addPacoteProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
+            celula: celula, color: cor, desatualizado: desatualizado,
+            divergente: divergente);
       }
     }
 

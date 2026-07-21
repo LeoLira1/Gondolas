@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
+import 'gondola_scene.dart'
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, addBadgeEnderecoDivergente;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, colunasNivelNellore,
          corConferenciaCiano, expositorNelloreNum, letraEstanteCelula;
@@ -164,6 +165,7 @@ class ExpositorNelloreGeometry {
     required ExpositorNelloreCell celula,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final yTopo = celula.ySurface + 0.008;
@@ -188,6 +190,10 @@ class ExpositorNelloreGeometry {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wPacote / 2, y1: yTopo, z1: z1, tamanho: wPacote * 0.55);
     }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces,
+          x0: xc - wPacote / 2, y1: yTopo, z1: z1, tamanho: wPacote * 0.55);
+    }
   }
 
   // ── Caixa apoiada (prateleiras, base e cestos, como nas estantes) ──────────
@@ -196,6 +202,7 @@ class ExpositorNelloreGeometry {
     required ExpositorNelloreCell celula,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final double w, h, z0, z1;
@@ -220,6 +227,10 @@ class ExpositorNelloreGeometry {
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + w / 2, y1: y0 + h, z1: z1, tamanho: w * 0.45);
+    }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces,
+          x0: xc - w / 2, y1: y0 + h, z1: z1, tamanho: w * 0.45);
     }
   }
 
@@ -643,6 +654,7 @@ class ExpositorNelloreScene extends StatefulWidget {
   final void Function(int coluna, int nivel)? onTapCelulaVisualizar;
   final String?                    destacadoCodigo;
   final Set<String>                desatualizados;
+  final Set<String>                divergentes;
   final Set<String>                destacadosCodigos;
 
   const ExpositorNelloreScene({
@@ -658,6 +670,7 @@ class ExpositorNelloreScene extends StatefulWidget {
     this.onTapCelulaVisualizar,
     this.destacadoCodigo,
     this.desatualizados       = const {},
+    this.divergentes          = const {},
     this.destacadosCodigos    = const {},
   });
 
@@ -842,13 +855,16 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
         andarOuNivel:  caixa.nivel,
       );
       final desatualizado = widget.desatualizados.contains(chave);
+      final divergente = widget.divergentes.contains(chave);
       // Ganchos penduram pacotes; cestos, prateleiras e base empilham caixas.
       if (celula.tipo == NelloreTipoNivel.gancho) {
         ExpositorNelloreGeometry.addPacoteProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
+            celula: celula, color: cor, desatualizado: desatualizado,
+            divergente: divergente);
       } else {
         ExpositorNelloreGeometry.addCaixaProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
+            celula: celula, color: cor, desatualizado: desatualizado,
+            divergente: divergente);
       }
     }
 

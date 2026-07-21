@@ -114,6 +114,29 @@ void addBadgeEnderecoDesatualizado(
   ], corEnderecoDesatualizado));
 }
 
+const Color corEnderecoDivergente = Color(0xFFe53935);
+
+/// Pequeno triângulo vermelho achatado no canto superior-frontal-esquerdo de
+/// uma caixa, sinalizando divergência entre a quantidade contada e a do
+/// sistema. Espelho em X do badge de desatualizado: como o espelhamento
+/// inverte o sentido do polígono, os vértices são reordenados para a normal
+/// continuar apontando para cima (a mesma direção do badge âmbar) — senão a
+/// luz de _project enxergaria o triângulo de costas e ele ficaria escuro.
+void addBadgeEnderecoDivergente(
+  List<Face> faces, {
+  required double x0,
+  required double y1,
+  required double z1,
+  required double tamanho,
+}) {
+  const elevacao = 0.006;
+  faces.add(Face([
+    Vec3(x0,           y1 + elevacao, z1),
+    Vec3(x0,           y1 + elevacao, z1 - tamanho),
+    Vec3(x0 + tamanho, y1 + elevacao, z1),
+  ], corEnderecoDivergente));
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // CaixaColocada — a product box placed on a shelf
 // ──────────────────────────────────────────────────────────────────────────────
@@ -274,6 +297,7 @@ class GondolaGeometry {
     required double cx, required double cy, required double cz,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     const w = 0.40, h = 0.52, d = 0.40;
     final x0 = cx - w / 2, x1 = cx + w / 2;
@@ -293,6 +317,9 @@ class GondolaGeometry {
 
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: w * 0.4);
+    }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces, x0: x0, y1: y1, z1: z1, tamanho: w * 0.4);
     }
   }
 }
@@ -508,6 +535,9 @@ class GondolaScene extends StatefulWidget {
   // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
   // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
   final Set<String> desatualizados;
+  // Chaves (chaveEnderecoEstoque) dos endereços com divergência entre a
+  // quantidade contada e a do sistema — badge vermelho, espelhado do âmbar.
+  final Set<String> divergentes;
   // Códigos destacados pelo Modo Conferência (Fase 3) — generalização de
   // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
   // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
@@ -525,6 +555,7 @@ class GondolaScene extends StatefulWidget {
     this.onFaceTap,
     this.faceParaCamera,
     this.desatualizados = const {},
+    this.divergentes = const {},
     this.destacadosCodigos = const {},
   });
 
@@ -729,7 +760,8 @@ class _GondolaSceneState extends State<GondolaScene> {
       );
       GondolaGeometry.addBox(extraFaces,
           cx: caixa.x, cy: shelf.yTop, cz: caixa.z, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
+          desatualizado: widget.desatualizados.contains(chave),
+          divergente: widget.divergentes.contains(chave));
     }
 
     return GestureDetector(

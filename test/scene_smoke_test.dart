@@ -336,4 +336,40 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+
+  test('addBox: cada badge acrescenta 1 face e os dois coexistem na caixa', () {
+    List<Face> caixa({bool desatualizado = false, bool divergente = false}) {
+      final faces = <Face>[];
+      GondolaGeometry.addBox(faces,
+          cx: 0, cy: 1, cz: 0, color: const Color(0xFF888888),
+          desatualizado: desatualizado, divergente: divergente);
+      return faces;
+    }
+
+    final base = caixa().length; // 5 faces visíveis, sem badge
+    expect(caixa(desatualizado: true).length, base + 1);
+    expect(caixa(divergente: true).length, base + 1);
+    // Os dois badges (âmbar à direita, vermelho à esquerda) aparecem juntos.
+    expect(caixa(desatualizado: true, divergente: true).length, base + 2);
+  });
+
+  test('badge de divergência mantém o brilho do âmbar (normal não invertida)',
+      () {
+    // Mesma caixa: canto direito (desatualizado) e esquerdo (divergente).
+    final desat = <Face>[];
+    addBadgeEnderecoDesatualizado(desat,
+        x1: 0.2, y1: 1.5, z1: 0.2, tamanho: 0.16);
+    final diver = <Face>[];
+    addBadgeEnderecoDivergente(diver,
+        x0: -0.2, y1: 1.5, z1: 0.2, tamanho: 0.16);
+    expect(desat.length, 1);
+    expect(diver.length, 1);
+
+    Vec3 normal(Face f) =>
+        (f.verts[1] - f.verts[0]).cross(f.verts[2] - f.verts[0]).normalized;
+    // Reordenar os vértices mantém a normal do novo badge apontando na mesma
+    // direção da do âmbar — sem isso o espelhamento em X inverteria a normal
+    // e o triângulo teria brilho diferente (ou apareceria escuro).
+    expect(normal(diver.single).dot(normal(desat.single)), closeTo(1.0, 1e-9));
+  });
 }

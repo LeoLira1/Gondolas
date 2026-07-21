@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'gondola_scene.dart' show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
+import 'gondola_scene.dart'
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, addBadgeEnderecoDivergente;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
          expositorMonitorNum, letraEstanteCelula;
@@ -150,6 +151,7 @@ class ExpositorMonitorGeometry {
     required ExpositorMonitorCell celula,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     final xc = celula.xCenter;
     final y0 = celula.ySurface;
@@ -166,6 +168,10 @@ class ExpositorMonitorGeometry {
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces,
           x1: xc + wCaixa / 2, y1: y0 + hCaixa, z1: zF, tamanho: wCaixa * 0.45);
+    }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces,
+          x0: xc - wCaixa / 2, y1: y0 + hCaixa, z1: zF, tamanho: wCaixa * 0.45);
     }
   }
 
@@ -570,6 +576,7 @@ class ExpositorMonitorScene extends StatefulWidget {
   final void Function(int coluna, int nivel)? onTapCelulaVisualizar;
   final String?                    destacadoCodigo;
   final Set<String>                desatualizados;
+  final Set<String>                divergentes;
   final Set<String>                destacadosCodigos;
 
   const ExpositorMonitorScene({
@@ -585,6 +592,7 @@ class ExpositorMonitorScene extends StatefulWidget {
     this.onTapCelulaVisualizar,
     this.destacadoCodigo,
     this.desatualizados       = const {},
+    this.divergentes          = const {},
     this.destacadosCodigos    = const {},
   });
 
@@ -760,7 +768,8 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
       );
       widget.geometry.addCaixaProduto(extraFaces,
           celula: celulaList.first, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
+          desatualizado: widget.desatualizados.contains(chave),
+          divergente: widget.divergentes.contains(chave));
     }
 
     return GestureDetector(
