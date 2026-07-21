@@ -144,18 +144,23 @@ class EstanteGeometry {
     required int slot,
     required Color color,
     bool desatualizado = false,
+    bool divergente = false,
   }) {
     final xCenter = celula.xMin + wCaixa / 2 + slot * (wCaixa + gap);
+    final x0 = xCenter - wCaixa / 2;
     final x1 = xCenter + wCaixa / 2;
     final y1 = celula.yTop + hCaixa;
     final z1 = dCaixa / 2;
     _box(faces,
-        x0: xCenter - wCaixa / 2, x1: x1,
+        x0: x0,                   x1: x1,
         y0: celula.yTop,          y1: y1,
         z0: -dCaixa / 2,          z1: z1,
         color: color);
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces, x1: x1, y1: y1, z1: z1, tamanho: wCaixa * 0.4);
+    }
+    if (divergente) {
+      addBadgeEnderecoDivergente(faces, x0: x0, y1: y1, z1: z1, tamanho: wCaixa * 0.4);
     }
   }
 }
@@ -339,6 +344,9 @@ class EstanteScene extends StatefulWidget {
   // Chaves (chaveEnderecoEstoque) dos endereços desatualizados — carregado
   // uma vez ao abrir a cena; o painter só desenha, sem consultar o service.
   final Set<String> desatualizados;
+  // Chaves (chaveEnderecoEstoque) dos endereços com divergência entre a
+  // quantidade contada e a do sistema — badge vermelho, espelhado do âmbar.
+  final Set<String> divergentes;
   // Códigos destacados pelo Modo Conferência (Fase 3) — generalização de
   // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
   // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
@@ -355,6 +363,7 @@ class EstanteScene extends StatefulWidget {
     this.destacadoCodigo,
     this.showLabels           = true,
     this.desatualizados       = const {},
+    this.divergentes          = const {},
     this.destacadosCodigos    = const {},
   });
 
@@ -487,7 +496,8 @@ class _EstanteSceneState extends State<EstanteScene> {
       );
       EstanteGeometry.addBoxProduto(extraFaces,
           celula: celula, slot: caixa.slot, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
+          desatualizado: widget.desatualizados.contains(chave),
+          divergente: widget.divergentes.contains(chave));
     }
 
     return GestureDetector(

@@ -115,6 +115,11 @@ class EstoqueLocalizadoService {
   // consultado durante o paint.
   Map<String, EnderecoDesatualizado> _desatualizadosCache = {};
 
+  // Cache em memória dos endereços com divergência de contagem, no mesmo
+  // esquema de chave dos desatualizados. Carregado junto e nunca consultado
+  // durante o paint.
+  Set<String> _divergentesCache = {};
+
   /// Busca, numa única query (JOIN com subquery de MAX das duas fontes de
   /// contagem confirmada), todos os endereços cujo atualizado_em é anterior
   /// à última contagem confirmada do produto. Atualiza o cache em memória e
@@ -185,6 +190,44 @@ class EstoqueLocalizadoService {
       ) uc ON uc.produto_codigo = el.produto_codigo
     ''');
     return (await stmt.query()) as List<dynamic>;
+  }
+
+  /// Busca os endereços cujo produto está marcado com divergência de contagem
+  /// no ciclo — estoque_mestre.status_ciclo = 'divergencia', gravado por
+  /// [concluirContagem] quando o total contado difere de qtd_sistema. Como a
+  /// divergência é do produto (qtd_sistema não existe por endereço), todos os
+  /// endereços do produto divergente entram no conjunto, no mesmo formato de
+  /// chave ([chaveEnderecoEstoque]) usado pelos desatualizados. Atualiza o
+  /// cache em memória e devolve o conjunto de chaves.
+  Future<Set<String>> fetchEnderecosDivergentes() async {
+    final client = await _conexao();
+    if (client == null) return _divergentesCache;
+
+    try {
+      final stmt = await client.prepare('''
+        SELECT el.produto_codigo, el.local_tipo, el.local_num,
+               el.face_ou_coluna, el.andar_ou_nivel
+        FROM estoque_localizado el
+        JOIN estoque_mestre em ON em.codigo = el.produto_codigo
+        WHERE em.status_ciclo = 'divergencia'
+      ''');
+      final rows = (await stmt.query()) as List<dynamic>;
+      final novo = <String>{};
+      for (final dynamic row in rows) {
+        final r = row as Map<String, dynamic>;
+        novo.add(chaveEnderecoEstoque(
+          produtoCodigo: r['produto_codigo'] as String? ?? '',
+          localTipo:     r['local_tipo']     as String? ?? 'gondola',
+          localNum:      r['local_num']      as int?    ?? 0,
+          faceOuColuna:  r['face_ou_coluna'] as int?    ?? 0,
+          andarOuNivel:  r['andar_ou_nivel'] as int?    ?? 0,
+        ));
+      }
+      _divergentesCache = novo;
+      return novo;
+    } catch (_) {
+      return _divergentesCache;
+    }
   }
 
   /// Consulta o cache em memória (sem ida ao banco) — usado pelo painter das

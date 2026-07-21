@@ -1143,6 +1143,10 @@ class _GondolaPageState extends State<GondolaPage> {
   // e recarregado após salvar no dialog de quantidade.
   Set<String> _desatualizados = {};
 
+  // Endereços com divergência de contagem — carregado junto com os
+  // desatualizados; badge vermelho (espelhado do âmbar).
+  Set<String> _divergentes = {};
+
   // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
   late Set<String> _destacadosCodigos;
 
@@ -1241,10 +1245,16 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   Future<void> _carregarDesatualizados() async {
-    final desatualizados =
-        await EstoqueLocalizadoService().fetchEnderecosDesatualizados();
+    final servico = EstoqueLocalizadoService();
+    final resultados = await Future.wait([
+      servico.fetchEnderecosDesatualizados(),
+      servico.fetchEnderecosDivergentes(),
+    ]);
     if (!mounted) return;
-    setState(() => _desatualizados = desatualizados);
+    setState(() {
+      _desatualizados = resultados[0];
+      _divergentes    = resultados[1];
+    });
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -1830,6 +1840,7 @@ class _GondolaPageState extends State<GondolaPage> {
               onFaceTap:            _onFaceTap,
               faceParaCamera:       _faceParaCamera,
               desatualizados:       _desatualizados,
+              divergentes:          _divergentes,
               destacadosCodigos:    _destacadosCodigos,
             ),
             if (_faceSelecionada != null)
@@ -2452,6 +2463,10 @@ class _EstantePageState extends State<EstantePage> {
   // e recarregado após salvar no dialog de quantidade.
   Set<String> _desatualizados = {};
 
+  // Endereços com divergência de contagem — carregado junto com os
+  // desatualizados; badge vermelho (espelhado do âmbar).
+  Set<String> _divergentes = {};
+
   // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
   late Set<String> _destacadosCodigos;
 
@@ -2543,10 +2558,16 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   Future<void> _carregarDesatualizados() async {
-    final desatualizados =
-        await EstoqueLocalizadoService().fetchEnderecosDesatualizados();
+    final servico = EstoqueLocalizadoService();
+    final resultados = await Future.wait([
+      servico.fetchEnderecosDesatualizados(),
+      servico.fetchEnderecosDivergentes(),
+    ]);
     if (!mounted) return;
-    setState(() => _desatualizados = desatualizados);
+    setState(() {
+      _desatualizados = resultados[0];
+      _divergentes    = resultados[1];
+    });
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -3282,6 +3303,7 @@ class _EstantePageState extends State<EstantePage> {
                     onTapCelulaVisualizar: _onTapCelulaVisualizar,
                     destacadoCodigo:     _destacadoCodigo,
                     desatualizados:      _desatualizados,
+                    divergentes:         _divergentes,
                     destacadosCodigos:   _destacadosCodigos,
                   )
                 : _estanteAtual == expositorMagnojetNum
@@ -3295,6 +3317,7 @@ class _EstantePageState extends State<EstantePage> {
                         onTapGanchoVisualizar: (c, l) => _onTapCelulaVisualizar(c, l, 0),
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
+                        divergentes:         _divergentes,
                         destacadosCodigos:   _destacadosCodigos,
                       )
                 : _estanteAtual == expositorNelloreNum
@@ -3308,6 +3331,7 @@ class _EstantePageState extends State<EstantePage> {
                         onTapCelulaVisualizar: (c, n) => _onTapCelulaVisualizar(c, n, 0),
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
+                        divergentes:         _divergentes,
                         destacadosCodigos:   _destacadosCodigos,
                       )
                 : _estanteAtual == expositorMonitorNum
@@ -3321,6 +3345,7 @@ class _EstantePageState extends State<EstantePage> {
                         onTapCelulaVisualizar: (c, n) => _onTapCelulaVisualizar(c, n, 0),
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
+                        divergentes:         _divergentes,
                         destacadosCodigos:   _destacadosCodigos,
                       )
                 : ehEstanteParede(_estanteAtual)
@@ -3333,6 +3358,7 @@ class _EstantePageState extends State<EstantePage> {
                         onTapCelulaVisualizar: _onTapCelulaVisualizar,
                         destacadoCodigo:      _destacadoCodigo,
                         desatualizados:       _desatualizados,
+                        divergentes:          _divergentes,
                         destacadosCodigos:    _destacadosCodigos,
                       )
                 : EstanteScene(
@@ -3344,6 +3370,7 @@ class _EstantePageState extends State<EstantePage> {
                     onTapCelulaVisualizar: _onTapCelulaVisualizar,
                     destacadoCodigo:      _destacadoCodigo,
                     desatualizados:       _desatualizados,
+                    divergentes:          _divergentes,
                     destacadosCodigos:    _destacadosCodigos,
                   ),
             if (_colunaSelecionada != null && _nivelSelecionado != null)
