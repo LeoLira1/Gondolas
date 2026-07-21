@@ -1202,10 +1202,12 @@ class _GondolaPageState extends State<GondolaPage> {
     _faceParaCamera     = widget.produtoDestacado?.face;
     _destacadosCodigos  = widget.codigosConferencia ?? {};
     _inicializar();
+    TursoService().dataRevision.addListener(_aoAtualizarDados);
   }
 
   @override
   void dispose() {
+    TursoService().dataRevision.removeListener(_aoAtualizarDados);
     _highlightTimer?.cancel();
     _ctrl1.dispose();
     _ctrl2.dispose();
@@ -1244,11 +1246,19 @@ class _GondolaPageState extends State<GondolaPage> {
     }
   }
 
-  Future<void> _carregarDesatualizados() async {
+  // Recarrega a cena quando uma sincronização (carga inicial em segundo plano
+  // ou botão Sincronizar) traz dados novos, sem travar a abertura.
+  void _aoAtualizarDados() {
+    if (!mounted) return;
+    _carregarLayout(_gondolaAtual);
+    _carregarDesatualizados(forceRefresh: true);
+  }
+
+  Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
     final servico = EstoqueLocalizadoService();
     final resultados = await Future.wait([
-      servico.fetchEnderecosDesatualizados(),
-      servico.fetchEnderecosDivergentes(),
+      servico.fetchEnderecosDesatualizados(forceRefresh: forceRefresh),
+      servico.fetchEnderecosDivergentes(forceRefresh: forceRefresh),
     ]);
     if (!mounted) return;
     setState(() {
@@ -2517,10 +2527,12 @@ class _EstantePageState extends State<EstantePage> {
     _destacadoCodigo   = widget.produtoDestacado?.produtoCodigo;
     _destacadosCodigos = widget.codigosConferencia ?? {};
     _inicializar();
+    TursoService().dataRevision.addListener(_aoAtualizarDados);
   }
 
   @override
   void dispose() {
+    TursoService().dataRevision.removeListener(_aoAtualizarDados);
     _highlightTimer?.cancel();
     _ctrl1.dispose();
     _ctrl2.dispose();
@@ -2557,11 +2569,19 @@ class _EstantePageState extends State<EstantePage> {
     }
   }
 
-  Future<void> _carregarDesatualizados() async {
+  // Recarrega a cena quando uma sincronização (carga inicial em segundo plano
+  // ou botão Sincronizar) traz dados novos, sem travar a abertura.
+  void _aoAtualizarDados() {
+    if (!mounted) return;
+    _carregarLayout(_estanteAtual);
+    _carregarDesatualizados(forceRefresh: true);
+  }
+
+  Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
     final servico = EstoqueLocalizadoService();
     final resultados = await Future.wait([
-      servico.fetchEnderecosDesatualizados(),
-      servico.fetchEnderecosDivergentes(),
+      servico.fetchEnderecosDesatualizados(forceRefresh: forceRefresh),
+      servico.fetchEnderecosDivergentes(forceRefresh: forceRefresh),
     ]);
     if (!mounted) return;
     setState(() {

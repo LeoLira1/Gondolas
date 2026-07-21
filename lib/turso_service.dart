@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, ValueNotifier;
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -56,6 +56,11 @@ class TursoService {
   static const Duration _produtosCacheTtl = Duration(minutes: 5);
 
   bool get isConnected => _connected;
+
+  /// Incrementa a cada sincronização bem-sucedida (carga inicial em segundo
+  /// plano ou botão Sincronizar). As páginas ouvem para recarregar a cena
+  /// assim que dados novos chegam, sem travar a abertura.
+  final ValueNotifier<int> dataRevision = ValueNotifier<int>(0);
 
   /// True quando a conexão ativa usa o cache local (arquivo no dispositivo).
   bool get modoLocal => _modoLocal;
@@ -136,14 +141,39 @@ class TursoService {
     if (client == null) return;
 
     try {
-      await _criarEsquema(client);
-      await _migrarEsquemaLabelsEstante3(client);
-      _client          = client;
-      _connected       = true;
-      _modoLocal       = conectouLocal;
-      _urlAtiva        = url;
-      _tokenAtivo      = token;
-      _cacheLocalAtivo = cacheLocal;
+      if (conectouLocal) {
+        // Replica local recém-criada (arquivo ainda vazio): NÃO cria o esquema
+        // localmente antes do primeiro sync — escrever numa replica nova antes
+        // de estabelecer a base do remoto gera conflito de frame
+        // (InvalidPushFrameConflict). Marca conectado já (leitura local
+        // instantânea, sem depender da rede) e baixa a base em segundo plano;
+        // quando chega, dataRevision recarrega a cena. Se o arquivo já tem
+        // dados, aplica o esquema idempotente (inclui os índices) e a migração
+        // normalmente.
+        final vazio = await _bancoLocalVazio(client);
+        if (!vazio) {
+          await _criarEsquema(client);
+          await _migrarEsquemaLabelsEstante3(client);
+        }
+        _client          = client;
+        _connected       = true;
+        _modoLocal       = true;
+        _urlAtiva        = url;
+        _tokenAtivo      = token;
+        _cacheLocalAtivo = cacheLocal;
+        if (vazio) unawaited(_bootstrapEmBackground());
+      } else {
+        // Modo remoto (Web ou falha ao abrir o arquivo local): cria o esquema
+        // e conecta direto ao remoto, como antes.
+        await _criarEsquema(client);
+        await _migrarEsquemaLabelsEstante3(client);
+        _client          = client;
+        _connected       = true;
+        _modoLocal       = false;
+        _urlAtiva        = url;
+        _tokenAtivo      = token;
+        _cacheLocalAtivo = cacheLocal;
+      }
     } catch (_) {
       _connected = false;
       _client    = null;
@@ -168,24 +198,41 @@ class TursoService {
       final path = await _caminhoCacheLocal();
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       await client.connect().timeout(_timeoutConexao);
-
-      // Fora da primeiríssima execução, NUNCA sincroniza sozinho: abrir o
-      // app usa só o arquivo local (instantâneo) e a rede entra apenas
-      // quando o usuário toca em Sincronizar.
-      if (!await _bancoLocalVazio(client)) return client;
-
-      // Arquivo local novo (sem tabela nenhuma): precisa da carga inicial —
-      // baixa o esquema e os dados do remoto, e os CREATE TABLE IF NOT
-      // EXISTS viram no-op. Se falhar (sem internet/estourou o tempo), cai
-      // pro modo remoto e tenta o bootstrap de novo na próxima abertura.
-      await client.sync().timeout(_timeoutBootstrap);
-      await _registrarSincronizacao();
+      // Local-first: nunca bloqueia na rede aqui. Abrir o app usa só o arquivo
+      // local (instantâneo). A carga inicial — quando o arquivo ainda está
+      // vazio — é disparada em segundo plano por _init (via _bootstrapEm-
+      // Background), e a rede volta a entrar só quando o usuário toca em
+      // Sincronizar. Assim o app não trava esperando o sync e as leituras
+      // funcionam mesmo com internet ruim, sem cair pro modo remoto.
       return client;
     } catch (_) {
       if (client != null) {
         unawaited(client.dispose().catchError((_) {}));
       }
       return null;
+    }
+  }
+
+  // Carga inicial da replica local (primeira execução): estabelece a base a
+  // partir do remoto SEM travar a abertura do app. Só depois que a base chega é
+  // que o esquema idempotente (com os índices) e a migração são aplicados —
+  // escrever antes do primeiro sync geraria conflito de frame. Ao concluir,
+  // avisa a UI por dataRevision. Se falhar (sem internet), não cai pro modo
+  // remoto nem trava: tenta de novo na próxima abertura.
+  Future<void> _bootstrapEmBackground() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      await client.sync().timeout(_timeoutBootstrap);
+      await _criarEsquema(client);
+      await _migrarEsquemaLabelsEstante3(client);
+      _produtosCache   = null;
+      _produtosCacheEm = null;
+      await _registrarSincronizacao();
+      _ultimoErroSync  = null;
+      dataRevision.value++;
+    } catch (e) {
+      _ultimoErroSync = _descreverErroSync(e);
     }
   }
 
@@ -275,6 +322,22 @@ class TursoService {
         registrado_em TEXT NOT NULL
       )
     ''');
+    // Índices das buscas mais quentes (só tabelas do próprio app): evitam full
+    // scan em fetchLayout / fetchLayoutEstante / buscarProdutoEstante e na
+    // busca global. IF NOT EXISTS torna idempotente; estoque_localizado já tem
+    // o índice implícito do seu UNIQUE(produto_codigo, ...).
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_gondola_layout_num '
+      'ON gondola_layout (gondola_num)',
+    );
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_estante_layout_num '
+      'ON estante_layout (estante_num)',
+    );
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_estante_layout_produto '
+      'ON estante_layout (produto_codigo)',
+    );
   }
 
   Future<void> _registrarSincronizacao() async {
@@ -311,6 +374,7 @@ class TursoService {
       _produtosCacheEm = null;
       await _registrarSincronizacao();
       _ultimoErroSync = null;
+      dataRevision.value++;
       return true;
     } catch (e) {
       _ultimoErroSync = _descreverErroSync(e);

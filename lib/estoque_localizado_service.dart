@@ -120,6 +120,23 @@ class EstoqueLocalizadoService {
   // durante o paint.
   Set<String> _divergentesCache = {};
 
+  // Validade dos dois caches acima entre aberturas de cena. As queries que os
+  // preenchem têm JOIN/GROUP BY caros (varrem inventario_cicli, contagem_itens
+  // e estoque_mestre inteiras) e antes rodavam a CADA abertura. Com um TTL
+  // curto, reabrir uma cena reaproveita o resultado em memória; uma gravação
+  // (upsert/delete/contagem) ou uma sincronização (forceRefresh) invalidam na
+  // hora.
+  DateTime? _desatualizadosCacheEm;
+  DateTime? _divergentesCacheEm;
+  static const Duration _cacheTtl = Duration(minutes: 2);
+
+  // Invalida os caches de badges após uma gravação, para a próxima leitura
+  // refletir o novo atualizado_em / status_ciclo sem esperar o TTL.
+  void _invalidarCachesBadges() {
+    _desatualizadosCacheEm = null;
+    _divergentesCacheEm    = null;
+  }
+
   /// Busca, numa única query (JOIN com subquery de MAX das duas fontes de
   /// contagem confirmada), todos os endereços cujo atualizado_em é anterior
   /// à última contagem confirmada do produto. Atualiza o cache em memória e
@@ -128,7 +145,15 @@ class EstoqueLocalizadoService {
   /// contagem_itens.confirmado_em é uma coluna adicionada por migração no
   /// dashboard e pode não existir em todos os ambientes: se a query falhar
   /// por isso, refaz usando registrado_em como fallback.
-  Future<Set<String>> fetchEnderecosDesatualizados() async {
+  Future<Set<String>> fetchEnderecosDesatualizados(
+      {bool forceRefresh = false}) async {
+    final em = _desatualizadosCacheEm;
+    if (!forceRefresh &&
+        em != null &&
+        DateTime.now().difference(em) < _cacheTtl) {
+      return _desatualizadosCache.keys.toSet();
+    }
+
     final client = await _conexao();
     if (client == null) return _desatualizadosCache.keys.toSet();
 
@@ -166,7 +191,8 @@ class EstoqueLocalizadoService {
       );
       novoCache[item.chave] = item;
     }
-    _desatualizadosCache = novoCache;
+    _desatualizadosCache   = novoCache;
+    _desatualizadosCacheEm = DateTime.now();
     return novoCache.keys.toSet();
   }
 
@@ -199,7 +225,15 @@ class EstoqueLocalizadoService {
   /// endereços do produto divergente entram no conjunto, no mesmo formato de
   /// chave ([chaveEnderecoEstoque]) usado pelos desatualizados. Atualiza o
   /// cache em memória e devolve o conjunto de chaves.
-  Future<Set<String>> fetchEnderecosDivergentes() async {
+  Future<Set<String>> fetchEnderecosDivergentes(
+      {bool forceRefresh = false}) async {
+    final em = _divergentesCacheEm;
+    if (!forceRefresh &&
+        em != null &&
+        DateTime.now().difference(em) < _cacheTtl) {
+      return _divergentesCache;
+    }
+
     final client = await _conexao();
     if (client == null) return _divergentesCache;
 
@@ -223,7 +257,8 @@ class EstoqueLocalizadoService {
           andarOuNivel:  r['andar_ou_nivel'] as int?    ?? 0,
         ));
       }
-      _divergentesCache = novo;
+      _divergentesCache   = novo;
+      _divergentesCacheEm = DateTime.now();
       return novo;
     } catch (_) {
       return _divergentesCache;
@@ -380,6 +415,7 @@ class EstoqueLocalizadoService {
         'gondolas_app',
         agora,
       ]);
+      _invalidarCachesBadges();
       return true;
     } catch (_) {
       return false;
@@ -446,6 +482,7 @@ class EstoqueLocalizadoService {
         'gondolas_app_exclusao',
         DateTime.now().toIso8601String(),
       ]);
+      _invalidarCachesBadges();
       return true;
     } catch (_) {
       return false;
@@ -468,6 +505,7 @@ class EstoqueLocalizadoService {
         'local_tipo = ? AND local_num = ? AND quantidade = 0',
       );
       await stmt.query(positional: [produtoCodigo, localTipo, localNum]);
+      _invalidarCachesBadges();
       return true;
     } catch (_) {
       return false;
@@ -556,6 +594,7 @@ class EstoqueLocalizadoService {
         produtoCodigo,
       ]);
 
+      _invalidarCachesBadges();
       return ResultadoContagem(
         total:       total,
         qtdSistema:  info.qtdSistema,
