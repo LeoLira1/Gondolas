@@ -2,7 +2,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
+        corEnderecoDivergentePositiva;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, colunasBaseMagnojet,
          corConferenciaCiano, expositorMagnojetNum, letraDoIndice;
@@ -630,6 +631,7 @@ class ExpositorMagnojetScene extends StatefulWidget {
   final String?                    destacadoCodigo;
   final Set<String>                desatualizados;
   final Set<String>                divergentes;
+  final Set<String>                divergentesPositivas;
   final Set<String>                destacadosCodigos;
 
   const ExpositorMagnojetScene({
@@ -646,6 +648,7 @@ class ExpositorMagnojetScene extends StatefulWidget {
     this.destacadoCodigo,
     this.desatualizados       = const {},
     this.divergentes          = const {},
+    this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
   });
 
@@ -827,16 +830,20 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
         andarOuNivel:  caixa.nivel,
       );
       final desatualizado = widget.desatualizados.contains(chave);
-      // Divergência de contagem pinta a caixa inteira de vermelho; destaques
-      // de conferência e busca (momentâneos) têm prioridade sobre ela.
+      // Divergência de contagem pinta a caixa inteira: azul escuro quando é
+      // positiva (contado > sistema), vermelho nas demais. Destaques de
+      // conferência e busca (momentâneos) têm prioridade sobre ela.
       final divergente = widget.divergentes.contains(chave);
+      final divergentePositiva = widget.divergentesPositivas.contains(chave);
       final cor = isConferencia
           ? corConferenciaCiano
           : isHighlighted
               ? const Color(0xFFe87722)
-              : divergente
-                  ? corEnderecoDivergente
-                  : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
+              : divergentePositiva
+                  ? corEnderecoDivergentePositiva
+                  : divergente
+                      ? corEnderecoDivergente
+                      : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       // Ganchos penduram sacolinhas; a base apoia caixas no deck.
       if (celula.ehBase) {
         ExpositorMagnojetGeometry.addCaixaProduto(extraFaces,
