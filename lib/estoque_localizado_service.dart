@@ -120,6 +120,11 @@ class EstoqueLocalizadoService {
   // durante o paint.
   Set<String> _divergentesCache = {};
 
+  // Subconjunto de _divergentesCache cuja divergência é POSITIVA (quantidade
+  // contada maior que a do sistema). Preenchido pela mesma query, para as
+  // cenas pintarem essas caixas de azul escuro em vez de vermelho.
+  Set<String> _divergentesPositivasCache = {};
+
   // Validade dos dois caches acima entre aberturas de cena. As queries que os
   // preenchem têm JOIN/GROUP BY caros (varrem inventario_cicli, contagem_itens
   // e estoque_mestre inteiras) e antes rodavam a CADA abertura. Com um TTL
@@ -225,6 +230,12 @@ class EstoqueLocalizadoService {
   /// endereços do produto divergente entram no conjunto, no mesmo formato de
   /// chave ([chaveEnderecoEstoque]) usado pelos desatualizados. Atualiza o
   /// cache em memória e devolve o conjunto de chaves.
+  /// Subconjunto das divergências (ver [fetchEnderecosDivergentes]) cuja
+  /// diferença é positiva — contou-se mais do que o sistema tinha. Lido do
+  /// cache preenchido pela última chamada de fetchEnderecosDivergentes, sem
+  /// ida ao banco; deve ser consultado depois dela.
+  Set<String> get divergentesPositivas => _divergentesPositivasCache;
+
   Future<Set<String>> fetchEnderecosDivergentes(
       {bool forceRefresh = false}) async {
     final em = _divergentesCacheEm;
@@ -240,25 +251,35 @@ class EstoqueLocalizadoService {
     try {
       final stmt = await client.prepare('''
         SELECT el.produto_codigo, el.local_tipo, el.local_num,
-               el.face_ou_coluna, el.andar_ou_nivel
+               el.face_ou_coluna, el.andar_ou_nivel,
+               em.qtd_contada_ciclo, em.qtd_sistema_na_contagem
         FROM estoque_localizado el
         JOIN estoque_mestre em ON em.codigo = el.produto_codigo
         WHERE em.status_ciclo = 'divergencia'
       ''');
       final rows = (await stmt.query()) as List<dynamic>;
       final novo = <String>{};
+      final novoPositivas = <String>{};
       for (final dynamic row in rows) {
         final r = row as Map<String, dynamic>;
-        novo.add(chaveEnderecoEstoque(
+        final chave = chaveEnderecoEstoque(
           produtoCodigo: r['produto_codigo'] as String? ?? '',
           localTipo:     r['local_tipo']     as String? ?? 'gondola',
           localNum:      r['local_num']      as int?    ?? 0,
           faceOuColuna:  r['face_ou_coluna'] as int?    ?? 0,
           andarOuNivel:  r['andar_ou_nivel'] as int?    ?? 0,
-        ));
+        );
+        novo.add(chave);
+        // Divergência positiva: contou-se mais do que o sistema registrava.
+        final contada = (r['qtd_contada_ciclo']       as num?)?.toDouble();
+        final sistema = (r['qtd_sistema_na_contagem'] as num?)?.toDouble();
+        if (contada != null && sistema != null && contada > sistema) {
+          novoPositivas.add(chave);
+        }
       }
-      _divergentesCache   = novo;
-      _divergentesCacheEm = DateTime.now();
+      _divergentesCache          = novo;
+      _divergentesPositivasCache = novoPositivas;
+      _divergentesCacheEm        = DateTime.now();
       return novo;
     } catch (_) {
       return _divergentesCache;

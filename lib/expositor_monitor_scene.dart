@@ -2,7 +2,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
+        corEnderecoDivergentePositiva;
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
          expositorMonitorNum, letraEstanteCelula;
@@ -572,6 +573,7 @@ class ExpositorMonitorScene extends StatefulWidget {
   final String?                    destacadoCodigo;
   final Set<String>                desatualizados;
   final Set<String>                divergentes;
+  final Set<String>                divergentesPositivas;
   final Set<String>                destacadosCodigos;
 
   const ExpositorMonitorScene({
@@ -588,6 +590,7 @@ class ExpositorMonitorScene extends StatefulWidget {
     this.destacadoCodigo,
     this.desatualizados       = const {},
     this.divergentes          = const {},
+    this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
   });
 
@@ -756,16 +759,20 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
         faceOuColuna:  caixa.coluna,
         andarOuNivel:  caixa.nivel,
       );
-      // Divergência de contagem pinta a caixa inteira de vermelho; destaques
-      // de conferência e busca (momentâneos) têm prioridade sobre ela.
+      // Divergência de contagem pinta a caixa inteira: azul escuro quando é
+      // positiva (contado > sistema), vermelho nas demais. Destaques de
+      // conferência e busca (momentâneos) têm prioridade sobre ela.
       final isDivergente = widget.divergentes.contains(chave);
+      final isDivergentePositiva = widget.divergentesPositivas.contains(chave);
       final cor = isConferencia
           ? corConferenciaCiano
           : isHighlighted
               ? const Color(0xFFe87722)
-              : isDivergente
-                  ? corEnderecoDivergente
-                  : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
+              : isDivergentePositiva
+                  ? corEnderecoDivergentePositiva
+                  : isDivergente
+                      ? corEnderecoDivergente
+                      : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
       widget.geometry.addCaixaProduto(extraFaces,
           celula: celulaList.first, color: cor,
           desatualizado: widget.desatualizados.contains(chave));

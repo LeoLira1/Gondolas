@@ -1147,6 +1147,10 @@ class _GondolaPageState extends State<GondolaPage> {
   // desatualizados; badge vermelho (espelhado do âmbar).
   Set<String> _divergentes = {};
 
+  // Subconjunto de _divergentes cuja divergência é positiva (contado maior
+  // que o sistema) — pintado de azul escuro em vez de vermelho.
+  Set<String> _divergentesPositivas = {};
+
   // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
   late Set<String> _destacadosCodigos;
 
@@ -1262,8 +1266,10 @@ class _GondolaPageState extends State<GondolaPage> {
     ]);
     if (!mounted) return;
     setState(() {
-      _desatualizados = resultados[0];
-      _divergentes    = resultados[1];
+      _desatualizados       = resultados[0];
+      _divergentes          = resultados[1];
+      // Lido do cache preenchido pela fetchEnderecosDivergentes acima.
+      _divergentesPositivas = servico.divergentesPositivas;
     });
   }
 
@@ -1851,6 +1857,7 @@ class _GondolaPageState extends State<GondolaPage> {
               faceParaCamera:       _faceParaCamera,
               desatualizados:       _desatualizados,
               divergentes:          _divergentes,
+              divergentesPositivas: _divergentesPositivas,
               destacadosCodigos:    _destacadosCodigos,
             ),
             if (_faceSelecionada != null)
@@ -2477,6 +2484,10 @@ class _EstantePageState extends State<EstantePage> {
   // desatualizados; badge vermelho (espelhado do âmbar).
   Set<String> _divergentes = {};
 
+  // Subconjunto de _divergentes cuja divergência é positiva (contado maior
+  // que o sistema) — pintado de azul escuro em vez de vermelho.
+  Set<String> _divergentesPositivas = {};
+
   // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
   late Set<String> _destacadosCodigos;
 
@@ -2585,8 +2596,10 @@ class _EstantePageState extends State<EstantePage> {
     ]);
     if (!mounted) return;
     setState(() {
-      _desatualizados = resultados[0];
-      _divergentes    = resultados[1];
+      _desatualizados       = resultados[0];
+      _divergentes          = resultados[1];
+      // Lido do cache preenchido pela fetchEnderecosDivergentes acima.
+      _divergentesPositivas = servico.divergentesPositivas;
     });
   }
 
@@ -3324,6 +3337,7 @@ class _EstantePageState extends State<EstantePage> {
                     destacadoCodigo:     _destacadoCodigo,
                     desatualizados:      _desatualizados,
                     divergentes:         _divergentes,
+                    divergentesPositivas: _divergentesPositivas,
                     destacadosCodigos:   _destacadosCodigos,
                   )
                 : _estanteAtual == expositorMagnojetNum
@@ -3338,6 +3352,7 @@ class _EstantePageState extends State<EstantePage> {
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
                         divergentes:         _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
                       )
                 : _estanteAtual == expositorNelloreNum
@@ -3352,6 +3367,7 @@ class _EstantePageState extends State<EstantePage> {
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
                         divergentes:         _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
                       )
                 : _estanteAtual == expositorMonitorNum
@@ -3366,6 +3382,7 @@ class _EstantePageState extends State<EstantePage> {
                         destacadoCodigo:     _destacadoCodigo,
                         desatualizados:      _desatualizados,
                         divergentes:         _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
                       )
                 : ehEstanteParede(_estanteAtual)
@@ -3379,6 +3396,7 @@ class _EstantePageState extends State<EstantePage> {
                         destacadoCodigo:      _destacadoCodigo,
                         desatualizados:       _desatualizados,
                         divergentes:          _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:    _destacadosCodigos,
                       )
                 : EstanteScene(
@@ -3391,6 +3409,7 @@ class _EstantePageState extends State<EstantePage> {
                     destacadoCodigo:      _destacadoCodigo,
                     desatualizados:       _desatualizados,
                     divergentes:          _divergentes,
+                    divergentesPositivas: _divergentesPositivas,
                     destacadosCodigos:    _destacadosCodigos,
                   ),
             if (_colunaSelecionada != null && _nivelSelecionado != null)

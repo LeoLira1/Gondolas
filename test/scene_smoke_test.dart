@@ -374,4 +374,46 @@ void main() {
       isTrue,
     );
   });
+
+  testWidgets('GondolaScene pinta de azul escuro a divergência positiva',
+      (tester) async {
+    // Endereço com divergência positiva (contado maior que o sistema): a
+    // caixa fica azul escuro em vez de vermelho.
+    final chave = chaveEnderecoEstoque(
+      produtoCodigo: 'p1',
+      localTipo:     'gondola',
+      localNum:      9,
+      faceOuColuna:  faceFromPos(2.9, 1.6),
+      andarOuNivel:  0,
+    );
+    await tester.pumpWidget(MaterialApp(
+      home: GondolaScene(
+        gondolaAtual: 9,
+        caixas: const [
+          CaixaColocada(andar: 0, produtoId: 'p1', x: 2.9, z: 1.6),
+        ],
+        corPorProduto: const {'p1': Color(0xFF3366cc)},
+        divergentes: {chave},
+        divergentesPositivas: {chave},
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    final painter = tester.widget<CustomPaint>(
+      find.descendant(
+        of: find.byType(GondolaScene),
+        matching: find.byType(CustomPaint),
+      ),
+    ).painter as GondolaPainter;
+    // A caixa azul escuro aparece; nenhuma face vermelha de divergência.
+    expect(
+      painter.extraFaces.any((f) => f.color == corEnderecoDivergentePositiva),
+      isTrue,
+    );
+    expect(
+      painter.extraFaces.any((f) => f.color == corEnderecoDivergente),
+      isFalse,
+    );
+  });
 }
