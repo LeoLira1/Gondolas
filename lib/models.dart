@@ -244,6 +244,30 @@ class Produto {
   }
 }
 
+/// Produtos com caixa num local (gôndola ou estante) para o dialog
+/// "Limpar produto". Mantém a ordem do catálogo para os cadastrados e
+/// acrescenta, ao final e ordenados por código, os que não estão no catálogo
+/// carregado (produto sem cadastro, zerado no sistema ou catálogo ainda não
+/// sincronizado) sintetizados só com o código. Sem isso, uma caixa cujo
+/// produto não está no catálogo fica presa na prateleira sem opção de
+/// exclusão, mesmo continuando visível no local.
+List<Produto> produtosComCaixa({
+  required Iterable<String> idsComCaixa,
+  required List<Produto> catalogo,
+}) {
+  final ids = idsComCaixa.toSet();
+  final produtos = catalogo.where((p) => ids.contains(p.codigo)).toList();
+  final noCatalogo = produtos.map((p) => p.codigo).toSet();
+  final avulsos = ids.difference(noCatalogo).toList()..sort();
+  produtos.addAll(avulsos.map((id) => Produto(
+        codigo:    id,
+        nome:      id,
+        categoria: '',
+        corHex:    '#888888',
+      )));
+  return produtos;
+}
+
 class CaixaLayout {
   final int gondolaNum;
   final int andar;

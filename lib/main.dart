@@ -1432,8 +1432,10 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   void _mostrarDialogLimpar() {
-    final idsNaGondola = _caixasAtuais.map((c) => c.produtoId).toSet();
-    final produtos = _catalogoAtual.where((p) => idsNaGondola.contains(p.codigo)).toList();
+    final produtos = produtosComCaixa(
+      idsComCaixa: _caixasAtuais.map((c) => c.produtoId),
+      catalogo:    _catalogoAtual,
+    );
 
     showDialog<void>(
       context: context,
@@ -2880,8 +2882,10 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   void _mostrarDialogLimparEstante() {
-    final idsNaEstante = _caixasAtuais.map((c) => c.produtoId).toSet();
-    final produtos = _catalogoAtual.where((p) => idsNaEstante.contains(p.codigo)).toList();
+    final produtos = produtosComCaixa(
+      idsComCaixa: _caixasAtuais.map((c) => c.produtoId),
+      catalogo:    _catalogoAtual,
+    );
 
     showDialog<void>(
       context: context,
