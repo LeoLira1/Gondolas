@@ -38,6 +38,20 @@ const int expositorMagnojetNum     = 9;
 const int colunasExpositorMagnojet = 4;
 const int linhasExpositorMagnojet  = 6;
 
+// Chegaram mais produtos e o painel ganhou ganchos NOVOS intercalados entre
+// os primários (A–X): em cada vão entre duas colunas primárias entra um
+// gancho, então são colunasExpositorMagnojet - 1 ganchos extras por linha.
+// Pra NÃO invalidar os endereços A–X já salvos no Turso, os intercalados
+// entram como colunas NOVAS, após as primárias — colunas
+// colunasExpositorMagnojet .. colunasTotalMagnojet-1. Cada intercalado k
+// mora no vão à direita da coluna primária k, e é rotulado com a letra dessa
+// primária + "1" (A1 à direita de A, B1 à direita de B, …). A base (1–5)
+// segue intocada no nível nivelBaseMagnojet.
+const int colunasIntercaladasMagnojet =
+    colunasExpositorMagnojet - 1;                              // 3
+const int colunasTotalMagnojet =
+    colunasExpositorMagnojet + colunasIntercaladasMagnojet;    // 7
+
 // A base do Expositor MagnoJet também recebe produtos: 5 caixas apoiadas no
 // pé do expositor, rotuladas com números 1–5 (como as bases do Nellore e do
 // Monitor). Para não invalidar os endereços dos ganchos já salvos no Turso
@@ -131,7 +145,7 @@ int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
 int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == expositorMagnojetNum
-        ? colunasBaseMagnojet   // máximo entre ganchos (4) e base (5)
+        ? colunasTotalMagnojet  // máx: ganchos primários+intercalados (7) > base (5)
         : estanteNum == expositorNelloreNum
             ? colunasExpositorNellore
             : estanteNum == expositorMonitorNum
@@ -196,11 +210,17 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
     return letraDoIndice(row * colunasExpositorMonitor + coluna);
   }
   // No Expositor MagnoJet a base (nível nivelBaseMagnojet) usa números 1–5;
-  // os ganchos (níveis 0–5) seguem com as letras A–X de cima pra baixo.
+  // os ganchos primários (colunas 0–3, níveis 0–5) seguem com as letras A–X de
+  // cima pra baixo. Os ganchos intercalados (colunas 4–6) herdam a letra da
+  // primária à esquerda + "1": A1 à direita de A, E1 à direita de E, …
   if (estanteNum == expositorMagnojetNum) {
     if (nivel == nivelBaseMagnojet) return '${coluna + 1}';
     final row = linhasExpositorMagnojet - 1 - nivel;
-    return letraDoIndice(row * colunasExpositorMagnojet + coluna);
+    if (coluna < colunasExpositorMagnojet) {
+      return letraDoIndice(row * colunasExpositorMagnojet + coluna);
+    }
+    final primariaVizinha = coluna - colunasExpositorMagnojet;
+    return '${letraDoIndice(row * colunasExpositorMagnojet + primariaVizinha)}1';
   }
   final nColunas = numColunasPara(estanteNum);
   final offset   =

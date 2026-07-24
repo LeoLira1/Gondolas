@@ -46,21 +46,30 @@ class ExpositorCell {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ExpositorMagnojetGeometry {
-  final int    colunas;      // ganchos por linha
-  final int    linhas;       // linhas de ganchos
-  final double width;        // largura total do painel (m)
-  final double height;       // altura do painel canaletado (sem testeira)
+  final int    colunas;         // ganchos primários por linha (A–X)
+  final int    linhas;          // linhas de ganchos
+  final bool   intercalados;    // ganchos NOVOS entre os primários (A1, B1, …)
+  final double width;           // largura total do painel (m)
+  final double height;          // altura do painel canaletado (sem testeira)
   final bool   showFloor;
-  final bool   showCesto;    // cestinho aramado na base
+  final bool   showCesto;       // cestinho aramado na base
 
   const ExpositorMagnojetGeometry({
-    this.colunas   = 4,
-    this.linhas    = 6,
-    this.width     = 1.05,
-    this.height    = 1.70,
-    this.showFloor = true,
-    this.showCesto = true,
+    this.colunas      = 4,
+    this.linhas       = 6,
+    this.intercalados = true,
+    this.width        = 1.05,
+    this.height       = 1.70,
+    this.showFloor    = true,
+    this.showCesto    = true,
   });
+
+  // Ganchos intercalados por linha: um em cada vão entre colunas primárias.
+  int get colunasIntercaladas => intercalados ? math.max(0, colunas - 1) : 0;
+
+  // Total de ganchos por linha (primários + intercalados). Também é o número
+  // de posições físicas na régua horizontal (2·colunas-1 quando cheio).
+  int get colunasPorLinha => colunas + colunasIntercaladas;
 
   // Altura total incluindo a testeira inclinada (usada pra centrar a câmera).
   double get alturaTotal => height + _testeiraH * math.cos(_testeiraAng) + 0.02;
@@ -113,13 +122,21 @@ class ExpositorMagnojetGeometry {
         : (yMin + yMax) / 2;
   }
 
-  // X do centro do gancho na coluna c.
+  // X do centro do gancho na coluna lógica c.
+  //
+  // A régua tem colunasPorLinha posições físicas. As primárias (c < colunas)
+  // ocupam as posições PARES (0,2,4,…) e as intercaladas (c ≥ colunas) as
+  // ÍMPARES (1,3,5,…) — assim cada intercalado cai no ponto médio entre duas
+  // primárias. Como 2·colunas-1 posições com as primárias nos índices pares
+  // dá o MESMO X das colunas primárias sem intercalados, os endereços A–X não
+  // se deslocam: os novos ganchos só preenchem os vãos.
   double colunaX(int c) {
     final util = width - _molduraW * 2 - wPacote;
     final xMin = -util / 2;
-    return colunas > 1
-        ? xMin + util * c / (colunas - 1)
-        : 0;
+    final n = colunasPorLinha;
+    if (n <= 1) return 0;
+    final fisica = c < colunas ? c * 2 : (c - colunas) * 2 + 1;
+    return xMin + util * fisica / (n - 1);
   }
 
   // Linha reservada pra base (deck): logo após a última fileira de ganchos.
@@ -136,7 +153,7 @@ class ExpositorMagnojetGeometry {
 
   List<ExpositorCell> get cells => [
         for (var lin = 0; lin < linhas; lin++)
-          for (var col = 0; col < colunas; col++)
+          for (var col = 0; col < colunasPorLinha; col++)
             ExpositorCell(
               coluna:  col,
               linha:   lin,
@@ -577,9 +594,13 @@ class ExpositorMagnojetPainter extends CustomPainter {
       canvas.drawCircle(screen, radius, rimPaint);
 
       final row   = geometry.linhas - 1 - c.linha;
+      // Base → número; gancho primário → letra A–X; gancho intercalado →
+      // letra da primária à esquerda + "1" (A1, B1, …).
       final letra = c.ehBase
           ? '${c.coluna + 1}'
-          : letraDoIndice(row * geometry.colunas + c.coluna);
+          : c.coluna < geometry.colunas
+              ? letraDoIndice(row * geometry.colunas + c.coluna)
+              : '${letraDoIndice(row * geometry.colunas + (c.coluna - geometry.colunas))}1';
       final tp = TextPainter(
         text: TextSpan(
           text: letra,
@@ -603,8 +624,9 @@ class ExpositorMagnojetPainter extends CustomPainter {
       old.wireframe           != wireframe           ||
       old.showLabels          != showLabels          ||
       old.extraFaces          != extraFaces          ||
-      old.geometry.colunas    != geometry.colunas    ||
-      old.geometry.linhas     != geometry.linhas     ||
+      old.geometry.colunas      != geometry.colunas      ||
+      old.geometry.intercalados != geometry.intercalados ||
+      old.geometry.linhas       != geometry.linhas       ||
       old.geometry.width      != geometry.width      ||
       old.geometry.height     != geometry.height     ||
       old.geometry.showCesto  != geometry.showCesto  ||
