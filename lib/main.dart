@@ -3947,12 +3947,13 @@ class ExpositorMagnojetPage extends StatefulWidget {
 }
 
 class _ExpositorMagnojetPageState extends State<ExpositorMagnojetPage> {
-  int    _colunas    = 4;
-  int    _linhas     = 6;
-  double _height     = 1.70;
-  double _width      = 1.05;
-  bool   _autoRot    = true;
-  bool   _showCesto  = true;
+  int    _colunas      = 4;
+  int    _linhas       = 6;
+  bool   _intercalados = true;
+  double _height       = 1.70;
+  double _width        = 1.05;
+  bool   _autoRot      = true;
+  bool   _showCesto    = true;
   bool   _showFloor  = true;
   bool   _wireframe  = false;
   bool   _panelOpen  = false;
@@ -3966,12 +3967,13 @@ class _ExpositorMagnojetPageState extends State<ExpositorMagnojetPage> {
   static const _accentS = Color(0xFFf0a868);
 
   ExpositorMagnojetGeometry get _geo => ExpositorMagnojetGeometry(
-    colunas:   _colunas,
-    linhas:    _linhas,
-    height:    _height,
-    width:     _width,
-    showCesto: _showCesto,
-    showFloor: _showFloor,
+    colunas:      _colunas,
+    linhas:       _linhas,
+    intercalados: _intercalados,
+    height:       _height,
+    width:        _width,
+    showCesto:    _showCesto,
+    showFloor:    _showFloor,
   );
 
   @override
@@ -4072,6 +4074,11 @@ class _ExpositorMagnojetPageState extends State<ExpositorMagnojetPage> {
                       _toggle('Aramado', _wireframe,
                         () => setState(() => _wireframe = !_wireframe)),
                     ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      _toggle('Ganchos +', _intercalados,
+                        () => setState(() => _intercalados = !_intercalados)),
+                    ]),
                     const SizedBox(height: 14),
                     const Divider(color: _line),
                     const SizedBox(height: 10),
@@ -4082,7 +4089,9 @@ class _ExpositorMagnojetPageState extends State<ExpositorMagnojetPage> {
                         const TextSpan(text: 'MagnoJet',
                             style: TextStyle(
                                 color: _txt, fontWeight: FontWeight.bold)),
-                        TextSpan(text: ' · $_colunas × $_linhas ganchos\n'),
+                        TextSpan(
+                            text: ' · ${_geo.colunasPorLinha} × $_linhas ganchos'
+                                '${_intercalados ? " (com intercalados)" : ""}\n'),
                         const TextSpan(text: 'Painel canaletado · '),
                         const TextSpan(text: '1 produto/gancho',
                             style: TextStyle(

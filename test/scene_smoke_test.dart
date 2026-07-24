@@ -98,7 +98,11 @@ void main() {
 
   test('expositor MagnoJet: grade de ganchos + espaços da base', () {
     const geo = ExpositorMagnojetGeometry();
-    expect(geo.cells.length, geo.colunas * geo.linhas + colunasBaseMagnojet);
+    // Ganchos primários (A–X) + intercalados (A1, B1, …) por linha + base.
+    expect(geo.colunasIntercaladas, geo.colunas - 1);
+    expect(geo.colunasPorLinha, colunasTotalMagnojet);
+    expect(geo.cells.length,
+        geo.colunasPorLinha * geo.linhas + colunasBaseMagnojet);
     // Ganchos não colidem: passo vertical maior que a altura da sacolinha.
     final passoY = geo.linhaY(1) - geo.linhaY(0);
     expect(passoY, greaterThan(ExpositorMagnojetGeometry.hPacote));
@@ -106,6 +110,25 @@ void main() {
     final base = geo.cells.where((c) => c.ehBase).toList();
     expect(base.length, colunasBaseMagnojet);
     expect(base.every((c) => c.linha == geo.linhaBase), isTrue);
+  });
+
+  test('expositor MagnoJet: intercalados caem no ponto médio dos primários', () {
+    const geo = ExpositorMagnojetGeometry();
+    // Os primários mantêm o MESMO X de quando não havia intercalados: uma
+    // régua com 2·colunas-1 posições e os primários nos índices pares.
+    const semExtra = ExpositorMagnojetGeometry(intercalados: false);
+    for (var c = 0; c < geo.colunas; c++) {
+      expect(geo.colunaX(c), closeTo(semExtra.colunaX(c), 1e-9));
+    }
+    // Cada intercalado k fica no meio entre a primária k e a k+1.
+    for (var k = 0; k < geo.colunasIntercaladas; k++) {
+      final xInter = geo.colunaX(geo.colunas + k);
+      final meio   = (geo.colunaX(k) + geo.colunaX(k + 1)) / 2;
+      expect(xInter, closeTo(meio, 1e-9));
+    }
+    // Sem intercalados a grade volta a ser só as primárias.
+    expect(semExtra.colunasIntercaladas, 0);
+    expect(semExtra.colunasPorLinha, semExtra.colunas);
   });
 
   test('expositor MagnoJet: letras seguem a convenção (A = topo-esquerda)', () {
@@ -129,7 +152,43 @@ void main() {
       '5',
     );
     expect(niveisProdutoPara(expositorMagnojetNum), linhasExpositorMagnojet + 1);
-    expect(numColunasPara(expositorMagnojetNum), colunasBaseMagnojet);
+    expect(numColunasPara(expositorMagnojetNum), colunasTotalMagnojet);
+  });
+
+  test('expositor MagnoJet: ganchos intercalados herdam a letra + "1"', () {
+    // A1 fica à direita de A (topo, coluna primária 0 → intercalado 0).
+    expect(
+      letraEstanteCelula(expositorMagnojetNum,
+          colunasExpositorMagnojet, linhasExpositorMagnojet - 1),
+      'A1',
+    );
+    // B1 e C1 na mesma linha do topo.
+    expect(
+      letraEstanteCelula(expositorMagnojetNum,
+          colunasExpositorMagnojet + 1, linhasExpositorMagnojet - 1),
+      'B1',
+    );
+    expect(
+      letraEstanteCelula(expositorMagnojetNum,
+          colunasExpositorMagnojet + 2, linhasExpositorMagnojet - 1),
+      'C1',
+    );
+    // Segunda linha (nível linhas-2) começa em E → intercalado 0 = E1.
+    expect(
+      letraEstanteCelula(expositorMagnojetNum,
+          colunasExpositorMagnojet, linhasExpositorMagnojet - 2),
+      'E1',
+    );
+    // Linha de baixo (nível 0) → U,V,W → intercalados U1,V1,W1.
+    expect(letraEstanteCelula(expositorMagnojetNum, colunasExpositorMagnojet, 0),
+        'U1');
+    expect(
+        letraEstanteCelula(
+            expositorMagnojetNum, colunasExpositorMagnojet + 2, 0),
+        'W1');
+    // Os primários seguem intactos: coluna 1 do topo continua 'B'.
+    expect(letraEstanteCelula(expositorMagnojetNum, 1, linhasExpositorMagnojet - 1),
+        'B');
   });
 
   test('expositor Nellore: 24 endereços nos níveis 1–5, sem base', () {
