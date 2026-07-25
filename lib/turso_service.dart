@@ -6,6 +6,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
+import 'palete_registry.dart';
 
 class TursoService {
   static final TursoService _instance = TursoService._internal();
@@ -154,6 +155,7 @@ class TursoService {
         if (!vazio) {
           await _criarEsquema(client);
           await _migrarEsquemaLabelsEstante3(client);
+          await _migrarPaletesCadastroDinamico(client);
         }
         _client          = client;
         _connected       = true;
@@ -167,6 +169,7 @@ class TursoService {
         // e conecta direto ao remoto, como antes.
         await _criarEsquema(client);
         await _migrarEsquemaLabelsEstante3(client);
+        await _migrarPaletesCadastroDinamico(client);
         _client          = client;
         _connected       = true;
         _modoLocal       = false;
@@ -174,6 +177,12 @@ class TursoService {
         _tokenAtivo      = token;
         _cacheLocalAtivo = cacheLocal;
       }
+      // Fim do init: os paletes precisam estar em memória antes do primeiro
+      // build do mapa e do carrossel (ordemNavegacaoEstantes consulta
+      // PaleteRegistry().ativos). Numa replica recém-criada a tabela ainda
+      // não existe — carregar() engole a falha e o _bootstrapEmBackground
+      // recarrega quando a base chegar.
+      await PaleteRegistry().carregar();
     } catch (_) {
       _connected = false;
       _client    = null;
@@ -226,6 +235,8 @@ class TursoService {
       await client.sync().timeout(_timeoutBootstrap);
       await _criarEsquema(client);
       await _migrarEsquemaLabelsEstante3(client);
+      await _migrarPaletesCadastroDinamico(client);
+      await PaleteRegistry().carregar();
       _produtosCache   = null;
       _produtosCacheEm = null;
       await _registrarSincronizacao();
@@ -322,6 +333,25 @@ class TursoService {
         registrado_em TEXT NOT NULL
       )
     ''');
+    // Catálogo dos paletes de madeira do piso, cadastrados em RUNTIME (o
+    // número de paletes na loja é variável — ver PaleteRegistry). `num` é
+    // alocado por MAX(num) + 1 varrendo inclusive os inativos, então NUNCA
+    // execute DELETE FROM paletes: apagar linha desativada libera o número
+    // para reciclagem e o palete novo herdaria os endereços velhos em
+    // estoque_localizado. Palete que sai da loja vira ativo = 0.
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS paletes (
+        num        INTEGER PRIMARY KEY,
+        apelido    TEXT    NOT NULL DEFAULT '',
+        pos_x      REAL    NOT NULL,
+        pos_z      REAL    NOT NULL,
+        rotacao    REAL    NOT NULL DEFAULT 0,
+        colunas    INTEGER NOT NULL DEFAULT 5,
+        fileiras   INTEGER NOT NULL DEFAULT 3,
+        ativo      INTEGER NOT NULL DEFAULT 1,
+        criado_em  TEXT    NOT NULL
+      )
+    ''');
     // Índices das buscas mais quentes (só tabelas do próprio app): evitam full
     // scan em fetchLayout / fetchLayoutEstante / buscarProdutoEstante e na
     // busca global. IF NOT EXISTS torna idempotente; estoque_localizado já tem
@@ -337,6 +367,9 @@ class TursoService {
     await client.execute(
       'CREATE INDEX IF NOT EXISTS idx_estante_layout_produto '
       'ON estante_layout (produto_codigo)',
+    );
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_paletes_ativo ON paletes (ativo)',
     );
   }
 
@@ -370,6 +403,8 @@ class TursoService {
     _sincronizando = true;
     try {
       if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
+      // O sync pode ter trazido paletes cadastrados em outro dispositivo.
+      await PaleteRegistry().carregar();
       _produtosCache   = null;
       _produtosCacheEm = null;
       await _registrarSincronizacao();
@@ -489,6 +524,35 @@ class TursoService {
       );
       await stmtInsert.query(positional: [
         _migracaoEstante3,
+        DateTime.now().toIso8601String(),
+      ]);
+    } catch (_) {
+      // Se a migração falhar, não derruba a conexão — só tenta de novo no
+      // próximo init().
+    }
+  }
+
+  // Chegada dos paletes cadastráveis dinamicamente (tabela `paletes`). A
+  // criação da tabela em si é idempotente e mora em _criarEsquema; este
+  // marcador registra em app_migrations QUANDO o esquema de paletes entrou
+  // no banco, seguindo o padrão da migração da Estante 3.
+  static const String _migracaoPaletes = 'paletes_cadastro_dinamico_v1';
+
+  Future<void> _migrarPaletesCadastroDinamico(LibsqlClient client) async {
+    try {
+      final stmtCheck = await client.prepare(
+        'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
+      );
+      final jaAplicada =
+          (await stmtCheck.query(positional: [_migracaoPaletes]))
+              as List<dynamic>;
+      if (jaAplicada.isNotEmpty) return;
+
+      final stmtInsert = await client.prepare(
+        'INSERT INTO app_migrations (nome, aplicada_em) VALUES (?, ?)',
+      );
+      await stmtInsert.query(positional: [
+        _migracaoPaletes,
         DateTime.now().toIso8601String(),
       ]);
     } catch (_) {

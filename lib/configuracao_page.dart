@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'palete_registry.dart';
 import 'turso_service.dart';
 
 class ConfiguracaoPage extends StatefulWidget {
@@ -22,10 +23,14 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   bool    _sincronizando = false;
   bool    _limpandoCache = false;
 
+  List<Palete> _paletes = const [];
+  bool _salvandoPalete  = false;
+
   @override
   void initState() {
     super.initState();
     _carregarCredenciais();
+    _carregarPaletes();
   }
 
   @override
@@ -43,6 +48,224 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
       _tokenCtrl.text = prefs.getString(TursoService.keyDbToken) ?? '';
       _cacheLocal     = prefs.getBool(TursoService.keyCacheLocal) ?? true;
     });
+  }
+
+  // ── Paletes ────────────────────────────────────────────────────────────────
+  // O catálogo dos paletes vem do PaleteRegistry (tabela `paletes`), que já foi
+  // carregado no init() do TursoService. Aqui só recarregamos para refletir o
+  // que outro dispositivo tenha cadastrado desde a última sincronização.
+
+  Future<void> _carregarPaletes() async {
+    await TursoService().init();
+    await PaleteRegistry().carregar();
+    if (!mounted) return;
+    setState(() => _paletes = PaleteRegistry().ativos);
+  }
+
+  Future<void> _adicionarPalete() async {
+    final dados = await _dialogPalete();
+    if (dados == null) return;
+    setState(() => _salvandoPalete = true);
+    final num = await PaleteRegistry().criar(
+      apelido: dados.apelido,
+      posX:    dados.posX,
+      posZ:    dados.posZ,
+      rotacao: dados.rotacao,
+    );
+    if (!mounted) return;
+    setState(() {
+      _salvandoPalete = false;
+      _paletes        = PaleteRegistry().ativos;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(num != null
+          ? 'Palete $num cadastrado ✓'
+          : 'Não foi possível cadastrar o palete — verifique a conexão'),
+      backgroundColor:
+          num != null ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: Duration(seconds: num != null ? 3 : 5),
+    ));
+  }
+
+  Future<void> _editarPalete(Palete p) async {
+    final dados = await _dialogPalete(inicial: p);
+    if (dados == null) return;
+    setState(() => _salvandoPalete = true);
+    final ok = await PaleteRegistry().atualizar(p.copyWith(
+      apelido: dados.apelido,
+      posX:    dados.posX,
+      posZ:    dados.posZ,
+      rotacao: dados.rotacao,
+    ));
+    if (!mounted) return;
+    setState(() {
+      _salvandoPalete = false;
+      _paletes        = PaleteRegistry().ativos;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Palete ${p.num} atualizado ✓'
+          : 'Não foi possível salvar o palete ${p.num}'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  Future<void> _confirmarDesativarPalete(Palete p) async {
+    final nome = p.apelido.isEmpty ? 'Palete ${p.num}' : p.apelido;
+    final confirmou = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Text(
+          'Desativar o palete ${p.num}?',
+          style: const TextStyle(
+              color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          '$nome sai do mapa e do carrossel.\n\n'
+          'O número ${p.num} NÃO volta a ser usado: um palete novo sempre '
+          'recebe um número maior. Isso é de propósito — reciclar o número '
+          'faria o palete novo herdar os endereços antigos deste no estoque.\n\n'
+          'Antes de desativar, recadastre em outro endereço os produtos que '
+          'estão neste palete: as contagens deles continuam gravadas no '
+          'número ${p.num} e deixarão de aparecer nas buscas.',
+          style: const TextStyle(
+              color: Color(0xFF8a9aa8), fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Desativar',
+                style: TextStyle(color: Color(0xFFe57373))),
+          ),
+        ],
+      ),
+    );
+    if (confirmou != true) return;
+
+    setState(() => _salvandoPalete = true);
+    final ok = await PaleteRegistry().desativar(p.num);
+    if (!mounted) return;
+    setState(() {
+      _salvandoPalete = false;
+      _paletes        = PaleteRegistry().ativos;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Palete ${p.num} desativado — o número não será reutilizado'
+          : 'Não foi possível desativar o palete ${p.num}'),
+      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: const Duration(seconds: 4),
+    ));
+  }
+
+  /// Dialog de cadastro/edição. Devolve null se o usuário cancelou.
+  Future<_DadosPalete?> _dialogPalete({Palete? inicial}) {
+    final apelidoCtrl = TextEditingController(text: inicial?.apelido ?? '');
+    final xCtrl       = TextEditingController(
+        text: inicial != null ? inicial.posX.toString() : '');
+    final zCtrl       = TextEditingController(
+        text: inicial != null ? inicial.posZ.toString() : '');
+    final rotCtrl     = TextEditingController(
+        text: inicial != null ? inicial.rotacao.toString() : '0');
+
+    return showDialog<_DadosPalete>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Text(
+          inicial == null ? 'Novo palete' : 'Palete ${inicial.num}',
+          style: const TextStyle(
+              color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (inicial == null)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 14),
+                  child: Text(
+                    'O número do palete é alocado automaticamente e mostrado '
+                    'ao salvar.',
+                    style: TextStyle(
+                        color: Color(0xFF8a9aa8), fontSize: 12, height: 1.4),
+                  ),
+                ),
+              _Campo(
+                label: 'Apelido',
+                controller: apelidoCtrl,
+                hint: 'Palete óleo — corredor 3',
+                obscure: false,
+              ),
+              const SizedBox(height: 14),
+              // A loja tem 10,0 m de largura (X) por 14,0 m de fundo (Z) —
+              // mesma escala do mapa, então x/z são metros medidos do canto.
+              _Campo(
+                label: 'Posição X (m, 0–10)',
+                controller: xCtrl,
+                hint: '5.0',
+                obscure: false,
+                numerico: true,
+              ),
+              const SizedBox(height: 14),
+              _Campo(
+                label: 'Posição Z (m, 0–14)',
+                controller: zCtrl,
+                hint: '7.0',
+                obscure: false,
+                numerico: true,
+              ),
+              const SizedBox(height: 14),
+              _Campo(
+                label: 'Rotação (graus)',
+                controller: rotCtrl,
+                hint: '0',
+                obscure: false,
+                numerico: true,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF8a9aa8))),
+          ),
+          TextButton(
+            onPressed: () {
+              final x = double.tryParse(xCtrl.text.trim().replaceAll(',', '.'));
+              final z = double.tryParse(zCtrl.text.trim().replaceAll(',', '.'));
+              if (x == null || z == null) return;   // posição é obrigatória
+              final rot =
+                  double.tryParse(rotCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+              Navigator.pop(
+                ctx,
+                _DadosPalete(
+                  apelido: apelidoCtrl.text.trim(),
+                  posX:    x,
+                  posZ:    z,
+                  rotacao: rot,
+                ),
+              );
+            },
+            child: const Text('Salvar',
+                style: TextStyle(color: Color(0xFF4a9d6a))),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _alterarCacheLocal(bool valor) async {
@@ -374,6 +597,160 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               ),
             ],
 
+            // ── Paletes ───────────────────────────────────────────────────
+            // Os paletes de madeira do piso são os únicos móveis cadastrados
+            // em runtime (os demais são const no código), então precisam de
+            // CRUD aqui: entram e saem da loja conforme a necessidade, sem
+            // depender de uma nova versão do app.
+            const SizedBox(height: 28),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF0d1117),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF232f3a)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 12, 6),
+                    child: Row(children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Paletes',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Paletes de madeira do piso (15 posições, 5 × 3). '
+                              'Aparecem no fim do carrossel e no mapa da loja.',
+                              style: TextStyle(
+                                  color: Color(0xFF8a9aa8),
+                                  fontSize: 11,
+                                  height: 1.4),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_salvandoPalete)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 8),
+                          child: SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFe87722),
+                            ),
+                          ),
+                        ),
+                    ]),
+                  ),
+                  if (_paletes.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: Text(
+                        'Nenhum palete cadastrado.',
+                        style:
+                            TextStyle(color: Color(0xFF5a6a78), fontSize: 12),
+                      ),
+                    )
+                  else
+                    ..._paletes.map((p) => Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+                          child: Row(children: [
+                            Container(
+                              width: 34,
+                              height: 26,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2a1a0e),
+                                borderRadius: BorderRadius.circular(5),
+                                border: Border.all(
+                                    color: const Color(0xFFb7783f)),
+                              ),
+                              child: Text(
+                                '${p.num}',
+                                style: const TextStyle(
+                                    color: Color(0xFFd9a26a),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    p.apelido.isEmpty
+                                        ? 'Palete ${p.num}'
+                                        : p.apelido,
+                                    style: const TextStyle(
+                                        color: Colors.white, fontSize: 12.5),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'x ${p.posX.toStringAsFixed(2)} · '
+                                    'z ${p.posZ.toStringAsFixed(2)}'
+                                    '${p.rotacao == 0 ? '' : ' · ${p.rotacao.toStringAsFixed(0)}°'}',
+                                    style: const TextStyle(
+                                        color: Color(0xFF8a9aa8),
+                                        fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: _salvandoPalete
+                                  ? null
+                                  : () => _editarPalete(p),
+                              icon: const Icon(Icons.edit_outlined, size: 17),
+                              color: const Color(0xFF8a9aa8),
+                              tooltip: 'Editar',
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            IconButton(
+                              onPressed: _salvandoPalete
+                                  ? null
+                                  : () => _confirmarDesativarPalete(p),
+                              icon: const Icon(
+                                  Icons.remove_circle_outline, size: 17),
+                              color: const Color(0xFFe57373),
+                              tooltip: 'Desativar',
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ]),
+                        )),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: _salvandoPalete ? null : _adicionarPalete,
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Adicionar palete'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFe87722),
+                          side: const BorderSide(color: Color(0xFF5a3a1e)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 9),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
             if (_statusTeste != null) ...[
               const SizedBox(height: 20),
               Container(
@@ -407,17 +784,33 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   }
 }
 
+/// Valores digitados no dialog de palete. O número não entra aqui: na criação
+/// ele é alocado pelo PaleteRegistry e, na edição, é imutável.
+class _DadosPalete {
+  final String apelido;
+  final double posX, posZ, rotacao;
+
+  const _DadosPalete({
+    required this.apelido,
+    required this.posX,
+    required this.posZ,
+    required this.rotacao,
+  });
+}
+
 class _Campo extends StatelessWidget {
   final String label;
   final TextEditingController controller;
   final String hint;
   final bool obscure;
+  final bool numerico;
 
   const _Campo({
     required this.label,
     required this.controller,
     required this.hint,
     required this.obscure,
+    this.numerico = false,
   });
 
   @override
@@ -438,6 +831,9 @@ class _Campo extends StatelessWidget {
         TextField(
           controller: controller,
           obscureText: obscure,
+          keyboardType:
+              numerico ? const TextInputType.numberWithOptions(
+                  decimal: true, signed: true) : null,
           style: const TextStyle(color: Colors.white, fontSize: 13),
           decoration: InputDecoration(
             hintText: hint,
