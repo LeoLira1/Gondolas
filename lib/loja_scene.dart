@@ -7,7 +7,8 @@ import 'expositor_monitor_scene.dart' show expositorMonitorLoja;
 import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
 import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
 import 'models.dart'
-    show corConferenciaCiano, ehEstanteParede, estanteParedeMin,
+    show colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
+         ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
          expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum;
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
@@ -181,6 +182,8 @@ class LojaGeometry {
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
+      } else if (item.numero == estanteEdr300TriplaNum) {
+        _estanteEdr300Tripla(faces, item, cor);
       } else if (item.numero == 8) {
         _estanteEdr300(faces, item, cor);
       } else if (item.numero == expositorMagnojetNum) {
@@ -317,7 +320,28 @@ class LojaGeometry {
     }
   }
 
-  // Renderiza estante 8 como EDR-300: 4 montantes + 6 prateleiras horizontais
+  // Renderiza a Estante 6 como 3 EDR-300 encostadas, repartindo o retângulo
+  // dela no mapa ao longo do lado maior (1 módulo do mapa = 1 coluna da cena
+  // de detalhe, contado do canto de menor coordenada).
+  static void _estanteEdr300Tripla(List<Face> faces, ItemLoja item, Color cor) {
+    const n = colunasEdr300Tripla;
+    for (var k = 0; k < n; k++) {
+      final aoLongoDeZ = item.d >= item.w;
+      final modulo = aoLongoDeZ
+          ? ItemLoja(
+              tipo: item.tipo, numero: item.numero,
+              x: item.x, z: item.z - item.d / 2 + item.d * (k + 0.5) / n,
+              w: item.w, d: item.d / n)
+          : ItemLoja(
+              tipo: item.tipo, numero: item.numero,
+              x: item.x - item.w / 2 + item.w * (k + 0.5) / n, z: item.z,
+              w: item.w / n, d: item.d);
+      _estanteEdr300(faces, modulo, cor);
+    }
+  }
+
+  // Renderiza uma EDR-300 (estante 8 ou um módulo da 6): 4 montantes +
+  // 6 prateleiras horizontais
   static void _estanteEdr300(List<Face> faces, ItemLoja item, Color cor) {
     final cx = item.x, cz = item.z;
     final hw = item.w / 2, hd = item.d / 2;
@@ -586,11 +610,11 @@ class LojaPainter extends CustomPainter {
     }
 
     for (final item in itensLoja) {
-      // Sem badges A–E na EDR-300, nos expositores (MagnoJet/Nellore/Monitor)
-      // nem na Estante Parede (os rótulos deles são próprios e só fazem
-      // sentido na cena de detalhe).
+      // Sem badges A–E nas EDR-300 (a 8 e a tripla da 6), nos expositores
+      // (MagnoJet/Nellore/Monitor) nem na Estante Parede (os rótulos deles
+      // são próprios e só fazem sentido na cena de detalhe).
       if (item.tipo != 'estante' ||
-          item.numero == 8 ||
+          ehEstanteEdr300(item.numero) ||
           item.numero == expositorMagnojetNum ||
           item.numero == expositorNelloreNum ||
           item.numero == expositorMonitorNum ||

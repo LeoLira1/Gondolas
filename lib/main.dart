@@ -2648,8 +2648,9 @@ class _EstantePageState extends State<EstantePage> {
 
   ({int maxSlots, double xMin, double wCaixa, double gap}) _geometriaCelula(
       int coluna, int nivel) {
-    if (_estanteAtual == 8) {
-      const geo = Edr300Geometry(showFloor: false);
+    if (ehEstanteEdr300(_estanteAtual)) {
+      final geo = Edr300Geometry(
+          showFloor: false, colunas: numColunasPara(_estanteAtual));
       final celula = geo.cells
           .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
       return (
@@ -3234,7 +3235,7 @@ class _EstantePageState extends State<EstantePage> {
               tooltip: 'Sincronizar com o banco online',
               onPressed: _sincronizando ? null : _sincronizar,
             ),
-          if (_estanteAtual == 8)
+          if (ehEstanteEdr300(_estanteAtual))
             IconButton(
               icon: const Icon(Icons.view_in_ar_outlined,
                   color: Color(0xFFe0772b), size: 22),
@@ -3329,9 +3330,12 @@ class _EstantePageState extends State<EstantePage> {
 
         Expanded(
           child: Stack(children: [
-            _estanteAtual == 8
+            ehEstanteEdr300(_estanteAtual)
                 ? Edr300Scene(
-                    geometry:            const Edr300Geometry(showFloor: false),
+                    geometry:            Edr300Geometry(
+                        showFloor: false,
+                        colunas:   numColunasPara(_estanteAtual)),
+                    estanteNum:          _estanteAtual,
                     autoRotate:          false,
                     caixas:              _caixasAtuais,
                     produtoSelecionadoId: _produtoSelecionadoId,
@@ -3654,7 +3658,9 @@ class _EstanteSelector extends StatelessWidget {
                   ? 'de ${ordemNavegacaoEstantes.length} · PAREDE '
                       'P${posicaoGlobalParede(estanteAtual, 0)}–'
                       'P${posicaoGlobalParede(estanteAtual, colunasParede - 1)}'
-                  : 'de ${ordemNavegacaoEstantes.length}',
+                  : estanteAtual == estanteEdr300TriplaNum
+                      ? 'de ${ordemNavegacaoEstantes.length} · 3× EDR-300'
+                      : 'de ${ordemNavegacaoEstantes.length}',
               style: const TextStyle(
                 color: Color(0xFF5a6a78),
                 fontSize: 10,
@@ -3718,6 +3724,7 @@ class _EstanteEdr300PageState extends State<EstanteEdr300Page> {
           Positioned.fill(
             child: Edr300Scene(
               geometry:   _geo,
+              estanteNum: estanteEdr300Num,
               wireframe:  _wireframe,
               autoRotate: _autoRot,
             ),

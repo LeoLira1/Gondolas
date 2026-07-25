@@ -31,6 +31,21 @@ const Set<int>     estantesComLabelEstendido = {3, 4};
 const int estanteEdr300Num    = 8;
 const int niveisProdutoEdr300 = 6;
 
+// A Estante 6 é, no espaço físico, a junção de 3 EDR-300 encostadas lado a
+// lado (era desenhada como estante de madeira 3×4). No app ela segue sendo
+// UMA estante — número 6, uma parada do carrossel — desenhada como 3 módulos
+// de aço: coluna = módulo físico (0 = esquerdo), 6 níveis por módulo como na
+// Estante 8. As letras são contínuas por módulo, de cima pra baixo — A–F no
+// módulo esquerdo, G–L no do meio, M–R no direito — pra etiqueta de cada
+// módulo ler igual à da 8 (ver letraEstanteCelula). Endereços antigos da
+// grade de madeira (níveis 0–3) continuam válidos no banco, mas apontam para
+// letras novas: o recadastro é feito estante a estante, como na parede.
+const int estanteEdr300TriplaNum = 6;
+const int colunasEdr300Tripla    = 3;
+
+bool ehEstanteEdr300(int estanteNum) =>
+    estanteNum == estanteEdr300Num || estanteNum == estanteEdr300TriplaNum;
+
 // O Expositor MagnoJet (painel canaletado com ganchos) reutiliza a infra de
 // estantes: local_tipo 'estante', número próprio, coluna = coluna do gancho,
 // nivel = linha do gancho, slot sempre 0 (um produto por gancho).
@@ -126,7 +141,7 @@ const Set<int> estantesRemovidas = {3, 4};
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 
-int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
+int niveisProdutoPara(int estanteNum) => ehEstanteEdr300(estanteNum)
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
         ? linhasExpositorMagnojet + 1   // ganchos (0–5) + base (6)
@@ -144,15 +159,17 @@ int niveisProdutoPara(int estanteNum) => estanteNum == estanteEdr300Num
 /// encontrada numa busca sem estourar a grade real da estrutura.
 int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
     ? 1
-    : estanteNum == expositorMagnojetNum
-        ? colunasTotalMagnojet  // máx: ganchos primários+intercalados (7) > base (5)
-        : estanteNum == expositorNelloreNum
-            ? colunasExpositorNellore
-            : estanteNum == expositorMonitorNum
-                ? colunasExpositorMonitor
-                : ehEstanteParede(estanteNum)
-                    ? colunasParede
-                    : numColunasEstante;
+    : estanteNum == estanteEdr300TriplaNum
+        ? colunasEdr300Tripla
+        : estanteNum == expositorMagnojetNum
+            ? colunasTotalMagnojet  // máx: ganchos primários+intercalados (7) > base (5)
+            : estanteNum == expositorNelloreNum
+                ? colunasExpositorNellore
+                : estanteNum == expositorMonitorNum
+                    ? colunasExpositorMonitor
+                    : ehEstanteParede(estanteNum)
+                        ? colunasParede
+                        : numColunasEstante;
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
 /// de converter para letra. Só a Estante 4 precisa de offset, para continuar
@@ -178,6 +195,8 @@ String letraDoIndice(int index) {
 /// Letra da posição de uma célula (coluna, nível) de uma estante — mesma
 /// convenção usada no desenho da estante (linhas contadas de cima pra baixo).
 /// A Estante 8 (EDR-300) é coluna única, então usa nColunas=1 e offset 0.
+/// A Estante 6 (3 EDR-300 lado a lado) usa letras contínuas POR MÓDULO,
+/// de cima pra baixo dentro de cada coluna: A–F, G–L, M–R.
 /// A Estante Parede usa NÚMEROS contínuos (1..72) em vez de letras, contados
 /// de cima pra baixo dentro de cada coluna, coluna esquerda antes da direita,
 /// seção 13 antes da 14... — igual à numeração física etiquetada na loja
@@ -188,6 +207,12 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
     final numero = (estanteNum - estanteParedeMin) * nNiveis * colunasParede +
         coluna * nNiveis + (nNiveis - 1 - nivel) + 1;
     return '$numero';
+  }
+  // Na Estante 6 cada coluna é um módulo EDR-300 físico, então as letras
+  // correm de cima pra baixo dentro do módulo (como a etiqueta da Estante 8)
+  // e continuam no módulo seguinte: esquerdo A–F, meio G–L, direito M–R.
+  if (estanteNum == estanteEdr300TriplaNum) {
+    return letraDoIndice(coluna * nNiveis + (nNiveis - 1 - nivel));
   }
   // No Expositor Nellore as letras dos níveis 1–5 são contínuas de cima pra
   // baixo com o nº de colunas variando por nível: A–E e F–J (ganchos), K–N
