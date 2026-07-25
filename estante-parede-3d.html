@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>CAMDA · Estante Parede</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#14171c; --panel2:#1a1e24;
+    --orange:#e87722; --text:#e6e8ec; --muted:#8b919c;
+    --green:#4a9d6a; --green2:#6fcf97; --greenbg:#162416; --greenbtn:#2e6b46;
+    --red:#e57373;
+    --mono:'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+    --sans:'Segoe UI', Roboto, system-ui, sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans)}
+  #app{display:flex;flex-direction:column;height:100%}
+
+  header{display:flex;align-items:center;gap:12px;padding:10px 16px 2px}
+  .back{color:var(--text);font-size:22px;line-height:1;opacity:.85}
+  .brand{background:linear-gradient(180deg,#7a4416,#5c3210);color:#fff;font-weight:700;font-size:13px;
+    letter-spacing:.5px;padding:5px 12px;border-radius:8px;border:1px solid rgba(232,119,34,.35)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green2);box-shadow:0 0 8px rgba(111,207,151,.7)}
+  header .spacer{flex:1}
+  .icon{color:var(--orange);font-size:18px;opacity:.9}
+
+  .secnav{display:flex;align-items:center;justify-content:center;gap:20px;padding:0}
+  .arrow{width:46px;height:46px;border:1px solid rgba(74,157,106,.5);border-radius:13px;
+    display:flex;align-items:center;justify-content:center;color:var(--orange);
+    font-size:20px;background:rgba(20,23,28,.7);user-select:none;cursor:pointer}
+  .arrow:active{background:rgba(232,119,34,.15)}
+  .secmid{text-align:center;min-width:86px}
+  .eyebrow{font-size:10px;letter-spacing:4px;color:var(--muted);font-weight:600}
+  .big{font-family:var(--mono);font-size:40px;font-weight:700;color:var(--orange);line-height:1;
+    text-shadow:0 0 24px rgba(232,119,34,.25)}
+  .sub{font-size:11px;color:var(--muted);font-family:var(--mono)}
+
+  .minimap{display:flex;justify-content:center;gap:6px;padding:6px 0 2px}
+  .mseg{width:34px;height:19px;border-radius:6px;border:1px solid #2a2f37;background:var(--panel2);
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+    font-size:10px;color:var(--muted);cursor:pointer;position:relative}
+  .mseg.on{border-color:var(--orange);color:var(--orange);box-shadow:0 0 10px rgba(232,119,34,.35)}
+  .mseg .cnt{position:absolute;top:-6px;right:-5px;background:var(--orange);color:#0b0d10;
+    font-size:8px;font-weight:700;border-radius:8px;padding:1px 4px;display:none}
+  .mseg .cnt.show{display:block}
+
+  #stage{flex:1;position:relative;min-height:120px}
+  canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+  canvas.dragging{cursor:grabbing}
+  .views{position:absolute;top:8px;right:10px;display:flex;gap:6px}
+  .chip{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid #2a2f37;
+    background:rgba(20,23,28,.85);padding:6px 10px;border-radius:20px;user-select:none;cursor:pointer}
+  .chip.on{color:var(--orange);border-color:rgba(232,119,34,.5)}
+
+  /* chip de endereço selecionado */
+  #addrChip{position:absolute;top:8px;left:10px;display:none;align-items:center;gap:8px;
+    background:rgba(20,23,28,.92);border:1px solid rgba(232,119,34,.45);border-radius:10px;
+    padding:6px 10px;font-family:var(--mono);font-size:12px}
+  #addrChip.show{display:flex}
+  #addrChip .addr{color:var(--orange);font-weight:700}
+  #addrChip .pname{color:var(--text);font-size:11px;max-width:38vw;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+
+  /* toast */
+  #toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%) translateY(20px);
+    background:#5a1a1a;color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;
+    opacity:0;transition:all .25s;pointer-events:none;white-space:nowrap}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.ok{background:var(--greenbtn)}
+
+  /* ───── painel inferior estilo app: expanders ───── */
+  #bottomPanel{background:var(--panel);border-top:1px solid #22272e;flex:0 0 auto;
+    display:flex;flex-direction:column;max-height:46vh}
+  .catCount{text-align:center;font-size:12px;color:var(--muted);padding:8px 0 0}
+
+  .armedChip{display:none;margin:8px 12px 0;padding:7px 10px;background:var(--greenbg);
+    border:1px solid var(--greenbtn);border-radius:6px;align-items:center;gap:8px}
+  .armedChip.show{display:flex}
+  .armedChip .sw{width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+  .armedChip .tx{color:var(--green2);font-size:11px;font-weight:500;flex:1;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .armedChip .x{color:var(--muted);font-size:15px;padding:0 4px;cursor:pointer}
+
+  .resultChip{display:none;margin:8px 12px 0;background:#1e2a20;border:1px solid var(--green);
+    border-radius:8px;align-items:center;gap:8px;padding:8px 12px}
+  .resultChip.show{display:flex}
+  .resultChip .pin{color:var(--green)}
+  .resultChip .tx{color:#fff;font-size:13px;line-height:1.4;flex:1}
+  .resultChip .x{color:var(--muted);cursor:pointer;padding:0 4px}
+
+  .expander{margin:6px 12px 0;border:1px solid #262c34;border-radius:10px;overflow:hidden;background:var(--panel2)}
+  .expHead{display:flex;align-items:center;gap:8px;padding:11px 12px;font-size:14px;
+    font-weight:600;cursor:pointer;user-select:none}
+  .expHead .car{margin-left:auto;color:var(--muted);transition:transform .2s}
+  .expander.open .expHead .car{transform:rotate(180deg)}
+  .expBody{display:none;padding:0 12px 10px}
+  .expander.open .expBody{display:block}
+
+  .search{width:100%;background:#0e1114;border:1px solid #2a2f37;border-radius:9px;
+    color:var(--text);padding:10px 12px;font-size:14px}
+  .sug{margin-top:6px;border:1px solid #262c34;border-radius:9px;overflow:hidden;max-height:150px;overflow-y:auto}
+  .sugItem{display:flex;align-items:center;gap:9px;padding:9px 11px;font-size:13px;cursor:pointer;
+    border-bottom:1px solid #1d222a;background:#12161b}
+  .sugItem:last-child{border-bottom:none}
+  .sugItem:active{background:#1a222b}
+  .sugItem .sw{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+  .sugItem .cat{margin-left:auto;color:var(--muted);font-size:10px;font-family:var(--mono)}
+
+  .footRow{display:flex;align-items:center;padding:8px 12px 12px;gap:10px}
+  .btnGhost{display:flex;align-items:center;gap:6px;color:var(--red);border:1px solid #3a2020;
+    padding:9px 14px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;user-select:none}
+  .btnGhost.dis{opacity:.4;pointer-events:none}
+  .footRow .spacer{flex:1}
+  .btnSave{display:flex;align-items:center;gap:7px;background:var(--greenbtn);color:#fff;
+    padding:10px 18px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;user-select:none}
+
+  /* modais */
+  .modalWrap{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+    align-items:center;justify-content:center;z-index:50;padding:16px}
+  .modalWrap.open{display:flex}
+  .modalBox{width:min(92vw,420px);background:var(--panel);border:1px solid rgba(232,119,34,.35);
+    border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+  .modalBox h3{font-family:var(--mono);color:var(--orange);font-size:15px}
+  .modalBox .addr{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .qtyRow{display:flex;align-items:center;gap:10px;justify-content:center}
+  .qtyBtn{width:52px;height:52px;border-radius:12px;background:var(--panel2);border:1px solid #2a2f37;
+    color:var(--orange);font-size:26px;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;user-select:none}
+  .qtyVal{font-family:var(--mono);font-size:34px;font-weight:700;color:var(--text);
+    min-width:80px;text-align:center;background:#0e1114;border:1px solid #2a2f37;
+    border-radius:12px;padding:6px 8px}
+  .modalRow{display:flex;gap:8px}
+  .mbtn{flex:1;display:flex;align-items:center;justify-content:center;padding:11px 0;
+    border-radius:11px;font-size:14px;font-weight:600;cursor:pointer;user-select:none}
+  .mbtn.g{color:var(--muted);border:1px solid #2a2f37}
+  .mbtn.r{color:var(--red);border:1px solid #3a2020}
+  .mbtn.p{background:var(--greenbtn);color:#fff}
+  .modalBox textarea{width:100%;height:200px;background:#0b0d10;color:#c9d0da;border:1px solid #2a2f37;
+    border-radius:10px;padding:10px;font-family:var(--mono);font-size:11px;resize:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="back">&#8592;</div>
+    <div class="brand">CAMDA</div>
+    <div class="dot"></div>
+    <div class="spacer"></div>
+    <div class="icon">&#9881;</div>
+  </header>
+
+  <div class="secnav">
+    <div class="arrow" id="prevSec">&#8249;</div>
+    <div class="secmid">
+      <div class="eyebrow">SE&Ccedil;&Atilde;O</div>
+      <div class="big" id="secNum">1</div>
+      <div class="sub">de 6 &middot; <span id="secPos">P1&ndash;P2</span></div>
+    </div>
+    <div class="arrow" id="nextSec">&#8250;</div>
+  </div>
+
+  <div class="minimap" id="minimap"></div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="addrChip"><span class="addr" id="addrTxt"></span><span class="pname" id="addrProd"></span></div>
+    <div class="views">
+      <div class="chip on" data-v="frente">Frente</div>
+      <div class="chip" data-v="3d">3D</div>
+      <div class="chip" data-v="topo">Topo</div>
+    </div>
+    <div id="toast"></div>
+  </div>
+
+  <div id="bottomPanel">
+    <div class="catCount" id="catCount"></div>
+    <div class="armedChip" id="armedChip">
+      <div class="sw" id="armedSw"></div>
+      <div class="tx" id="armedTx"></div>
+      <div class="x" id="armedX">&times;</div>
+    </div>
+
+    <div class="resultChip" id="resultChip">
+      <span class="pin">&#128205;</span>
+      <div class="tx" id="resultTx"></div>
+      <div class="x" id="resultX">&times;</div>
+    </div>
+
+    <div class="expander" id="exp1">
+      <div class="expHead" data-e="1">&#10133; Adicionar produto <span class="car">&#9662;</span></div>
+      <div class="expBody">
+        <input class="search" id="inp1" type="text" placeholder="Buscar produto..." autocomplete="off">
+        <div class="sug" id="sug1" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="expander" id="exp2">
+      <div class="expHead" data-e="2">&#128269; Buscar produto <span class="car">&#9662;</span></div>
+      <div class="expBody">
+        <input class="search" id="inp2" type="text" placeholder="Onde est&aacute;...?" autocomplete="off">
+        <div class="sug" id="sug2" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="footRow">
+      <div class="btnGhost dis" id="btnLimpar">&#128465; Limpar</div>
+      <div class="spacer"></div>
+      <div class="btnSave" id="btnSalvar">&#128190; Salvar layout</div>
+    </div>
+  </div>
+</div>
+
+<!-- dialog de quantidade -->
+<div class="modalWrap" id="qtyModal">
+  <div class="modalBox">
+    <h3 id="qtyProd">Produto</h3>
+    <div class="addr" id="qtyAddr">N1 · P1 · Slot 1</div>
+    <div class="qtyRow">
+      <div class="qtyBtn" id="qtyMinus">&minus;</div>
+      <div class="qtyVal" id="qtyVal">0</div>
+      <div class="qtyBtn" id="qtyPlus">+</div>
+    </div>
+    <div class="modalRow">
+      <div class="mbtn r" id="qtyRemove">Remover caixa</div>
+    </div>
+    <div class="modalRow">
+      <div class="mbtn g" id="qtyCancel">Cancelar</div>
+      <div class="mbtn p" id="qtySave">Salvar</div>
+    </div>
+  </div>
+</div>
+
+<!-- modal salvar layout -->
+<div class="modalWrap" id="saveModal">
+  <div class="modalBox" style="width:min(92vw,560px)">
+    <h3>Layout (JSON)</h3>
+    <textarea id="jsonOut" readonly></textarea>
+    <div class="modalRow">
+      <div class="mbtn g" id="btnFechar">Fechar</div>
+      <div class="mbtn p" id="btnCopiar">Copiar</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ================= CATÁLOGO (mock — no app vem do Turso) =================
+  const CATALOGO = [
+    {codigo:'80101', nome:'VANTACOR 5L',              cat:'INSETICIDA',  cor:'#7b2d8b'},
+    {codigo:'80102', nome:'BORAL FULL 5L',            cat:'HERBICIDA',   cor:'#b03a2e'},
+    {codigo:'80103', nome:'GLIFOSATO NORTOX 5L',      cat:'HERBICIDA',   cor:'#2874a6'},
+    {codigo:'80104', nome:'DUAL GOLD 5L',             cat:'HERBICIDA',   cor:'#b7950b'},
+    {codigo:'80105', nome:'ENGEO PLENO S 1L',         cat:'INSETICIDA',  cor:'#1e8449'},
+    {codigo:'80106', nome:'KARATE ZEON 1L',           cat:'INSETICIDA',  cor:'#c0392b'},
+    {codigo:'80201', nome:'THION C 1L',               cat:'VETERINÁRIA', cor:'#196f3d'},
+    {codigo:'80202', nome:'TIGUVON SPOTON',           cat:'VETERINÁRIA', cor:'#117864'},
+    {codigo:'80203', nome:'BOLFO 1KG',                cat:'VETERINÁRIA', cor:'#d68910'},
+    {codigo:'80204', nome:'CÁLCIO REFORÇADO 500ML',   cat:'VETERINÁRIA', cor:'#cb4335'},
+    {codigo:'80205', nome:'TURBO CÁLCIO 500ML',       cat:'VETERINÁRIA', cor:'#e67e22'},
+    {codigo:'80206', nome:'FORTEMIL 500ML',           cat:'VETERINÁRIA', cor:'#2e86c1'},
+    {codigo:'80207', nome:'ORGANOVIT 500ML',          cat:'VETERINÁRIA', cor:'#884ea0'},
+    {codigo:'80208', nome:'MODPLUS REVIGORANTE',      cat:'VETERINÁRIA', cor:'#dc7633'},
+    {codigo:'80301', nome:'SAL MINERAL CAMDA 30KG',   cat:'NUTRIÇÃO',    cor:'#a04000'},
+    {codigo:'80302', nome:'LUVA MALHA PIGMENTADA',    cat:'EPI',         cor:'#7f8c8d'},
+    {codigo:'80303', nome:'BOTA PVC BRANCA',          cat:'EPI',         cor:'#d5d8dc'},
+    {codigo:'80304', nome:'CORDA NYLON 6MM',          cat:'FERRAGENS',   cor:'#f4d03f'},
+  ];
+  const prodById = c => CATALOGO.find(p=>p.codigo===c);
+  document.getElementById('catCount').textContent =
+    CATALOGO.length+' produto(s) dispon\u00edveis';
+  const hexRgb = h => [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
+
+  // ================= ESTADO =================
+  // caixa: {s: nível 0..6 (0=base), p: posição global 0..11, slot: 0..(maxSlots-1), codigo}
+  let caixas = [];
+  // quantidades por endereço: chave "s_p_slot" → int
+  const qtds = {};
+  let armado = null;   // produto armado (objeto do catálogo)
+  let sel = null;      // {s,p,slot?} endereço selecionado
+  let secao = 0;
+
+  // ================= GEOMETRIA =================
+  const ys = [0, 0.46, 0.94, 1.42, 1.90, 2.38, 2.86];
+  const TH = 0.08, DEPTH = 0.58;
+  const Z0 = -DEPTH/2, Z1 = DEPTH/2;
+  const SLOT = 1.3, SEC_SLOTS = 2, NSEC = 6;
+  const SEC_W = SEC_SLOTS*SLOT;
+  // Orientação física da loja: Z1 = parede (fundo), Z0 = frente (corredor)
+  const MAX_SLOTS = 3;                 // caixas por célula
+  const W_CX = 0.34, GAP_CX = 0.055;   // largura/espaço das caixas
+
+  const COL_SHELF_TOP=[64,108,84], COL_SHELF_SIDE=[40,72,56];
+  const COL_IRON=[24,34,29], COL_BRACKET=[28,40,34];
+
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  let W=0,H=0;
+  function resize(){
+    const DPR=Math.min(window.devicePixelRatio||1,2);
+    const r=cv.getBoundingClientRect();
+    W=r.width;H=r.height;
+    cv.width=W*DPR;cv.height=H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    render();
+  }
+  window.addEventListener('resize',resize);
+
+  const staticQuads=[];
+  function box(arr,x0,y0,z0,x1,y1,z1,col){
+    const p=[[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],
+             [x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+    const f=[[0,1,2,3],[5,4,7,6],[4,0,3,7],[1,5,6,2],[3,2,6,7],[4,5,1,0]];
+    for(const q of f) arr.push({pts:q.map(i=>p[i]),col});
+  }
+  (function buildStatic(){
+    for(let k=0;k<ys.length;k++){
+      box(staticQuads,0,ys[k],Z0,SEC_W,ys[k]+TH,Z1,COL_SHELF_SIDE);
+      box(staticQuads,0,ys[k]+TH,Z0,SEC_W,ys[k]+TH+0.001,Z1,COL_SHELF_TOP);
+    }
+    for(const px of [0,SEC_W]){
+      box(staticQuads,px-0.05,0,Z1-0.05,px+0.05,ys[6]+TH+0.12,Z1+0.03,COL_IRON);
+      for(let k=1;k<ys.length;k++){
+        const drop=Math.min(0.34,(ys[k]-ys[k-1])*0.75);
+        const pts=[[px-0.028,ys[k]-drop,Z1-0.05],[px+0.028,ys[k]-drop,Z1-0.05],
+                   [px+0.028,ys[k]-0.005,Z0+0.10],[px-0.028,ys[k]-0.005,Z0+0.10]];
+        staticQuads.push({pts,col:COL_BRACKET});
+        staticQuads.push({pts:[...pts].reverse(),col:COL_BRACKET});
+      }
+    }
+  })();
+
+  // caixas desta seção → quads dinâmicos (guarda ref da caixa p/ hit)
+  const prodQuads=[];
+  function slotX(local, slot){ // x0 da caixa no slot
+    const inner = SLOT - (MAX_SLOTS*W_CX + (MAX_SLOTS-1)*GAP_CX);
+    return local*SLOT + inner/2 + slot*(W_CX+GAP_CX);
+  }
+  function rebuildProducts(){
+    prodQuads.length=0;
+    for(const cx of caixas){
+      if(Math.floor(cx.p/SEC_SLOTS)!==secao) continue;
+      const local = cx.p - secao*SEC_SLOTS;
+      const s = cx.s;
+      const gap = s<6 ? (ys[s+1]-ys[s]-TH) : 0.42;
+      const h = gap*0.74;
+      const x0 = slotX(local, cx.slot);
+      const col = hexRgb(prodById(cx.codigo)?.cor || '#888888');
+      const n0 = prodQuads.length;
+      box(prodQuads, x0, ys[s]+TH, Z0+0.08, x0+W_CX, ys[s]+TH+h, Z1-0.10, col);
+      for(let i=n0;i<prodQuads.length;i++) prodQuads[i].cx = cx;
+    }
+    updateCounts();
+    document.getElementById('btnLimpar').classList.toggle('dis', caixas.length===0);
+  }
+  function updateCounts(){
+    for(let i=0;i<NSEC;i++){
+      const n=caixas.filter(c=>Math.floor(c.p/SEC_SLOTS)===i).length;
+      const el=document.querySelector('#minimap .mseg[data-i="'+i+'"] .cnt');
+      if(el){el.textContent=n;el.classList.toggle('show',n>0);}
+    }
+  }
+
+  // ================= CÂMERA =================
+  const target={x:SEC_W/2,y:ys[6]/2+0.18,z:0};
+  let pan={x:0,y:0};
+  const VIEWS={
+    'frente':{yaw:0.0001,pitch:-0.03,dist:6.4},
+    '3d':{yaw:-0.45,pitch:-0.30,dist:7.0},
+    'topo':{yaw:-0.08,pitch:-1.15,dist:6.6},
+  };
+  let cam={...VIEWS['frente']},camT={...VIEWS['frente']};
+  const YAW_LIM=1.35,PITCH_MIN=-1.25,PITCH_MAX=0.55;
+
+  function project(pt){
+    let dx=pt[0]-target.x-pan.x,dy=pt[1]-target.y-pan.y,dz=pt[2]-target.z;
+    const cy=Math.cos(cam.yaw),sy=Math.sin(cam.yaw);
+    const cp=Math.cos(cam.pitch),sp=Math.sin(cam.pitch);
+    const x1=dx*cy-dz*sy,z1=dx*sy+dz*cy;
+    const y2=dy*cp-z1*sp,z2=dy*sp+z1*cp;
+    const vz=z2+cam.dist;
+    const f=Math.min(W,H)*1.15;
+    return {sx:W/2+f*x1/vz,sy:H/2-f*y2/vz,vz,f};
+  }
+  function shade(q){
+    const [a,b,c]=[q.pts[0],q.pts[1],q.pts[3]];
+    const u=[b[0]-a[0],b[1]-a[1],b[2]-a[2]],v=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+    let nx=u[1]*v[2]-u[2]*v[1],ny=u[2]*v[0]-u[0]*v[2],nz=u[0]*v[1]-u[1]*v[0];
+    const L=Math.hypot(nx,ny,nz)||1;
+    const d=Math.abs((nx*-0.35+ny*0.82+nz*0.45)/L);
+    return 0.45+0.55*d;
+  }
+
+  // ================= PICKING =================
+  function cellFrontCorners(s,local){
+    const x0=local*SLOT,x1=(local+1)*SLOT;
+    const yb=ys[s]+TH,yt=s<6?ys[s+1]:ys[6]+0.5;
+    return [[x0,yb,Z0],[x1,yb,Z0],[x1,yt,Z0],[x0,yt,Z0]];
+  }
+  function pointInPoly(poly,mx,my){
+    let inside=false;
+    for(let i=0,j=3;i<4;j=i++){
+      const xi=poly[i].sx,yi=poly[i].sy,xj=poly[j].sx,yj=poly[j].sy;
+      if(((yi>my)!==(yj>my))&&(mx<(xj-xi)*(my-yi)/(yj-yi)+xi)) inside=!inside;
+    }
+    return inside;
+  }
+  // retorna {s, local, hx} — hx = coordenada x local do toque dentro da célula
+  function pickCell(mx,my){
+    let best=null,bestZ=Infinity;
+    for(let s=0;s<=6;s++)for(let l=0;l<SEC_SLOTS;l++){
+      const corners=cellFrontCorners(s,l);
+      const poly=corners.map(project);
+      if(poly.some(q=>q.vz<0.5)) continue;
+      if(pointInPoly(poly,mx,my)){
+        const z=(poly[0].vz+poly[2].vz)/2;
+        if(z<bestZ){
+          // fração horizontal aproximada dentro da célula
+          const tTop=(mx-poly[3].sx)/((poly[2].sx-poly[3].sx)||1);
+          const tBot=(mx-poly[0].sx)/((poly[1].sx-poly[0].sx)||1);
+          const t=Math.max(0,Math.min(1,(tTop+tBot)/2));
+          bestZ=z;best={s,local:l,hx:l*SLOT+t*SLOT};
+        }
+      }
+    }
+    return best;
+  }
+
+  // ================= AÇÕES (fluxo do app) =================
+  function slotFromHx(local,hx){
+    const off=hx-local*SLOT;
+    const inner=SLOT-(MAX_SLOTS*W_CX+(MAX_SLOTS-1)*GAP_CX);
+    return Math.max(0,Math.min(MAX_SLOTS-1,Math.floor((off-inner/2)/(W_CX+GAP_CX))));
+  }
+  function caixasEm(s,p){return caixas.filter(c=>c.s===s&&c.p===p);}
+
+  function onTapCelula(hit){
+    const p=secao*SEC_SLOTS+hit.local;
+    if(armado){
+      // colocar caixa: slot pelo toque, senão o livre mais próximo
+      let slot=slotFromHx(hit.local,hit.hx);
+      const ocupados=new Set(caixasEm(hit.s,p).map(c=>c.slot));
+      if(ocupados.has(slot)){
+        let livre=null;
+        for(let d=1;d<MAX_SLOTS;d++){
+          if(slot+d<MAX_SLOTS&&!ocupados.has(slot+d)){livre=slot+d;break;}
+          if(slot-d>=0&&!ocupados.has(slot-d)){livre=slot-d;break;}
+        }
+        if(livre===null){
+          toast('Célula cheia ('+addrTexto({s:hit.s,p})+')');
+          return;
+        }
+        slot=livre;
+      }
+      const nova={s:hit.s,p,slot,codigo:armado.codigo};
+      caixas.push(nova);
+      sel={s:hit.s,p,slot};
+      rebuildProducts();updateAddrChip();kick();
+    }else{
+      // visualizar: caixa mais próxima do toque → dialog de quantidade
+      const ocupantes=caixasEm(hit.s,p);
+      if(ocupantes.length===0){
+        sel={s:hit.s,p,slot:null};
+        updateAddrChip();kick();
+        return;
+      }
+      const slotEst=slotFromHx(hit.local,hit.hx);
+      ocupantes.sort((a,b)=>Math.abs(a.slot-slotEst)-Math.abs(b.slot-slotEst));
+      const cx=ocupantes[0];
+      sel={s:hit.s,p,slot:cx.slot};
+      updateAddrChip();kick();
+      abrirQuantidade(cx);
+    }
+  }
+
+  function addrTexto(a){
+    return (a.s===0?'Base':'N'+a.s)+' · P'+(a.p+1)+
+      (a.slot!=null?' · Slot '+(a.slot+1):'');
+  }
+  function updateAddrChip(){
+    const chip=document.getElementById('addrChip');
+    if(!sel){chip.classList.remove('show');return;}
+    document.getElementById('addrTxt').textContent=addrTexto(sel);
+    let nome='';
+    if(sel.slot!=null){
+      const cx=caixas.find(c=>c.s===sel.s&&c.p===sel.p&&c.slot===sel.slot);
+      if(cx) nome=prodById(cx.codigo)?.nome||cx.codigo;
+    }
+    document.getElementById('addrProd').textContent=nome;
+    chip.classList.add('show');
+  }
+
+  // ================= RENDER =================
+  const mono=(fs,w)=>(w||600)+" "+fs+"px 'JetBrains Mono', ui-monospace, monospace";
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    const g=ctx.createRadialGradient(W/2,H*0.7,10,W/2,H*0.7,Math.max(W,H)*0.6);
+    g.addColorStop(0,'rgba(232,119,34,0.05)');g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+
+    const drawn=[];
+    for(const q of staticQuads.concat(prodQuads)){
+      const pp=q.pts.map(project);
+      if(pp.some(p=>p.vz<0.5)) continue;
+      drawn.push({pp,z:(pp[0].vz+pp[1].vz+pp[2].vz+pp[3].vz)/4,q});
+    }
+    drawn.sort((A,B)=>B.z-A.z);
+    for(const d of drawn){
+      const s=shade(d.q),[r,g2,b]=d.q.col;
+      // caixa selecionada brilha
+      const isSel=d.q.cx&&sel&&sel.slot!=null&&
+        d.q.cx.s===sel.s&&d.q.cx.p===sel.p&&d.q.cx.slot===sel.slot;
+      const m=isSel?1.25:1;
+      ctx.fillStyle=`rgb(${Math.min(255,r*s*m)|0},${Math.min(255,g2*s*m)|0},${Math.min(255,b*s*m)|0})`;
+      ctx.strokeStyle=isSel?'#e87722':'rgba(11,13,16,0.35)';
+      ctx.lineWidth=isSel?1.6:0.6;
+      ctx.beginPath();
+      ctx.moveTo(d.pp[0].sx,d.pp[0].sy);
+      for(let i=1;i<4;i++)ctx.lineTo(d.pp[i].sx,d.pp[i].sy);
+      ctx.closePath();ctx.fill();ctx.stroke();
+    }
+
+    // destaque da célula selecionada
+    if(sel&&Math.floor(sel.p/SEC_SLOTS)===secao){
+      const poly=cellFrontCorners(sel.s,sel.p-secao*SEC_SLOTS).map(project);
+      if(!poly.some(q=>q.vz<0.5)){
+        ctx.beginPath();
+        ctx.moveTo(poly[0].sx,poly[0].sy);
+        for(let i=1;i<4;i++)ctx.lineTo(poly[i].sx,poly[i].sy);
+        ctx.closePath();
+        ctx.fillStyle='rgba(232,119,34,0.16)';ctx.fill();
+        ctx.lineWidth=2.2;ctx.strokeStyle='#e87722';
+        ctx.shadowColor='rgba(232,119,34,0.8)';ctx.shadowBlur=10;
+        ctx.stroke();ctx.shadowBlur=0;
+      }
+    }
+
+    // badges níveis
+    for(let k=1;k<=6;k++){
+      const p=project([SEC_W+0.42,ys[k]+TH/2,0]);
+      if(p.vz<0.5)continue;
+      const R=Math.max(10,p.f*0.11/p.vz);
+      ctx.beginPath();ctx.arc(p.sx,p.sy,R,0,Math.PI*2);
+      ctx.fillStyle='rgba(20,23,28,0.92)';ctx.fill();
+      ctx.lineWidth=Math.max(1.5,R*0.16);ctx.strokeStyle='#e87722';ctx.stroke();
+      ctx.fillStyle='#e87722';ctx.font=mono(R*1.1,700);
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(String(k),p.sx,p.sy+R*0.05);
+    }
+    // posições globais
+    for(let l=0;l<SEC_SLOTS;l++){
+      const p=project([(l+0.5)*SLOT,(TH+ys[1])/2,Z0-0.02]);
+      if(p.vz<0.5)continue;
+      const fs=Math.max(9,p.f*0.085/p.vz);
+      ctx.fillStyle='rgba(11,13,16,0.7)';
+      ctx.beginPath();ctx.roundRect(p.sx-fs*0.9,p.sy-fs*0.65,fs*1.8,fs*1.3,fs*0.3);ctx.fill();
+      ctx.fillStyle='#f0a35e';ctx.font=mono(fs);
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('P'+(secao*SEC_SLOTS+l+1),p.sx,p.sy+fs*0.05);
+    }
+  }
+
+  let animating=false;
+  function tick(){
+    let need=false;
+    for(const k of ['yaw','pitch','dist']){
+      const d=camT[k]-cam[k];
+      if(Math.abs(d)>0.0008){cam[k]+=d*0.22;need=true;}
+      else cam[k]=camT[k];
+    }
+    render();
+    if(need)requestAnimationFrame(tick);else animating=false;
+  }
+  function kick(){if(!animating){animating=true;requestAnimationFrame(tick);}}
+
+  // ================= INPUT 3D =================
+  const pointers=new Map();
+  let moved=0,lastX=0,lastY=0,pinchD=0,panLast=null;
+  cv.addEventListener('pointerdown',e=>{
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    moved=0;lastX=e.clientX;lastY=e.clientY;
+    if(pointers.size===2){
+      const [a,b]=[...pointers.values()];
+      pinchD=Math.hypot(a.x-b.x,a.y-b.y);
+      panLast={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    }
+    cv.setPointerCapture(e.pointerId);cv.classList.add('dragging');
+  });
+  cv.addEventListener('pointermove',e=>{
+    if(!pointers.has(e.pointerId))return;
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size===1){
+      const dx=e.clientX-lastX,dy=e.clientY-lastY;
+      moved+=Math.abs(dx)+Math.abs(dy);
+      camT.yaw=Math.max(-YAW_LIM,Math.min(YAW_LIM,camT.yaw+dx*0.0075));
+      camT.pitch=Math.max(PITCH_MIN,Math.min(PITCH_MAX,camT.pitch+dy*0.0065));
+      lastX=e.clientX;lastY=e.clientY;kick();
+    }else if(pointers.size===2){
+      const [a,b]=[...pointers.values()];
+      const d=Math.hypot(a.x-b.x,a.y-b.y);
+      const c={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+      if(pinchD>0){camT.dist=Math.max(3.2,Math.min(14,camT.dist*(pinchD/d)));pinchD=d;}
+      if(panLast){
+        const scale=camT.dist/(Math.min(W,H)*1.15);
+        pan.x-=(c.x-panLast.x)*scale;
+        pan.y+=(c.y-panLast.y)*scale;
+        pan.x=Math.max(-SEC_W,Math.min(SEC_W,pan.x));
+        pan.y=Math.max(-2,Math.min(2,pan.y));
+        panLast=c;
+      }
+      moved+=10;kick();
+    }
+  });
+  function endPointer(e){
+    pointers.delete(e.pointerId);
+    if(pointers.size<2){pinchD=0;panLast=null;}
+    if(pointers.size===0){
+      cv.classList.remove('dragging');
+      if(moved<8){
+        const r=cv.getBoundingClientRect();
+        const hit=pickCell(e.clientX-r.left,e.clientY-r.top);
+        if(hit) onTapCelula(hit);
+        else {sel=null;updateAddrChip();kick();}
+      }
+    }
+  }
+  cv.addEventListener('pointerup',endPointer);
+  cv.addEventListener('pointercancel',endPointer);
+  cv.addEventListener('wheel',e=>{
+    e.preventDefault();
+    camT.dist=Math.max(3.2,Math.min(14,camT.dist+e.deltaY*0.008));
+    kick();
+  },{passive:false});
+  cv.addEventListener('dblclick',()=>{
+    Object.assign(camT,VIEWS['frente']);pan={x:0,y:0};setChip('frente');kick();
+  });
+  function setChip(v){
+    document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on',c.dataset.v===v));
+  }
+  document.querySelectorAll('.chip').forEach(c=>{
+    c.addEventListener('click',()=>{
+      Object.assign(camT,VIEWS[c.dataset.v]);pan={x:0,y:0};
+      setChip(c.dataset.v);kick();
+    });
+  });
+
+  // ================= SEÇÕES =================
+  function gotoSec(i){
+    secao=(i+NSEC)%NSEC;
+    document.getElementById('secNum').textContent=secao+1;
+    document.getElementById('secPos').textContent=
+      'P'+(secao*SEC_SLOTS+1)+'\u2013P'+(secao*SEC_SLOTS+SEC_SLOTS);
+    document.querySelectorAll('#minimap .mseg').forEach((m,idx)=>m.classList.toggle('on',idx===secao));
+    if(sel&&Math.floor(sel.p/SEC_SLOTS)!==secao){sel=null;updateAddrChip();}
+    rebuildProducts();kick();
+  }
+  document.getElementById('prevSec').addEventListener('click',()=>gotoSec(secao-1));
+  document.getElementById('nextSec').addEventListener('click',()=>gotoSec(secao+1));
+  const minimap=document.getElementById('minimap');
+  for(let i=0;i<NSEC;i++){
+    const m=document.createElement('div');
+    m.className='mseg'+(i===0?' on':'');
+    m.dataset.i=i;
+    m.innerHTML=(i+1)+'<span class="cnt">0</span>';
+    m.addEventListener('click',()=>gotoSec(i));
+    minimap.appendChild(m);
+  }
+
+  // ================= EXPANDERS + AUTOCOMPLETE =================
+  let expAberto=0;
+  function abrirExpander(n){
+    expAberto=(expAberto===n)?0:n;
+    document.getElementById('exp1').classList.toggle('open',expAberto===1);
+    document.getElementById('exp2').classList.toggle('open',expAberto===2);
+    if(expAberto===1)setTimeout(()=>document.getElementById('inp1').focus(),50);
+    if(expAberto===2)setTimeout(()=>document.getElementById('inp2').focus(),50);
+  }
+  document.querySelectorAll('.expHead').forEach(h=>
+    h.addEventListener('click',()=>abrirExpander(+h.dataset.e)));
+
+  function filtrar(q){
+    q=q.trim().toLowerCase();
+    if(!q)return[];
+    return CATALOGO.filter(p=>
+      p.nome.toLowerCase().includes(q)||p.codigo.includes(q)).slice(0,6);
+  }
+  function renderSug(el,list,onPick){
+    el.innerHTML='';
+    el.style.display=list.length?'block':'none';
+    for(const p of list){
+      const it=document.createElement('div');
+      it.className='sugItem';
+      it.innerHTML=`<span class="sw" style="background:${p.cor}"></span>${p.nome}<span class="cat">${p.cat}</span>`;
+      it.addEventListener('click',()=>onPick(p));
+      el.appendChild(it);
+    }
+  }
+
+  // Expander 1 — armar produto
+  const inp1=document.getElementById('inp1'),sug1=document.getElementById('sug1');
+  inp1.addEventListener('input',()=>renderSug(sug1,filtrar(inp1.value),p=>{
+    armado=p;
+    inp1.value='';sug1.style.display='none';
+    document.getElementById('armedSw').style.background=p.cor;
+    document.getElementById('armedTx').textContent=
+      '\u2713 '+p.nome+' \u2014 toque numa c\u00e9lula para adicionar';
+    document.getElementById('armedChip').classList.add('show');
+    abrirExpander(0);
+  }));
+  document.getElementById('armedX').addEventListener('click',()=>{
+    armado=null;
+    document.getElementById('armedChip').classList.remove('show');
+  });
+
+  // Expander 2 — buscar produto
+  const inp2=document.getElementById('inp2'),sug2=document.getElementById('sug2');
+  inp2.addEventListener('input',()=>renderSug(sug2,filtrar(inp2.value),p=>{
+    inp2.value='';sug2.style.display='none';
+    const achadas=caixas.filter(c=>c.codigo===p.codigo);
+    const rc=document.getElementById('resultChip');
+    const tx=document.getElementById('resultTx');
+    if(achadas.length===0){
+      tx.textContent=p.nome+' \u2014 n\u00e3o est\u00e1 nesta estante';
+    }else{
+      const locs=achadas.map(c=>{
+        const q=qtds[c.s+'_'+c.p+'_'+c.slot];
+        return addrTexto(c)+(q!=null?' ('+q+' cx)':'');
+      });
+      tx.textContent=p.nome+': '+locs.join('  |  ');
+      // navega e destaca a primeira
+      const c0=achadas[0];
+      gotoSec(Math.floor(c0.p/SEC_SLOTS));
+      sel={s:c0.s,p:c0.p,slot:c0.slot};
+      updateAddrChip();kick();
+    }
+    rc.classList.add('show');
+    abrirExpander(0);
+  }));
+  document.getElementById('resultX').addEventListener('click',()=>
+    document.getElementById('resultChip').classList.remove('show'));
+
+  // ================= DIALOG QUANTIDADE =================
+  let qtyCaixa=null,qtyN=0;
+  function abrirQuantidade(cx){
+    qtyCaixa=cx;
+    qtyN=qtds[cx.s+'_'+cx.p+'_'+cx.slot]??0;
+    document.getElementById('qtyProd').textContent=prodById(cx.codigo)?.nome||cx.codigo;
+    document.getElementById('qtyAddr').textContent=addrTexto(cx);
+    document.getElementById('qtyVal').textContent=qtyN;
+    document.getElementById('qtyModal').classList.add('open');
+  }
+  document.getElementById('qtyMinus').addEventListener('click',()=>{
+    qtyN=Math.max(0,qtyN-1);
+    document.getElementById('qtyVal').textContent=qtyN;
+  });
+  document.getElementById('qtyPlus').addEventListener('click',()=>{
+    qtyN++;
+    document.getElementById('qtyVal').textContent=qtyN;
+  });
+  document.getElementById('qtyCancel').addEventListener('click',()=>
+    document.getElementById('qtyModal').classList.remove('open'));
+  document.getElementById('qtySave').addEventListener('click',()=>{
+    if(qtyCaixa)qtds[qtyCaixa.s+'_'+qtyCaixa.p+'_'+qtyCaixa.slot]=qtyN;
+    document.getElementById('qtyModal').classList.remove('open');
+    toast('Quantidade salva: '+qtyN+' cx','ok');
+  });
+  document.getElementById('qtyRemove').addEventListener('click',()=>{
+    if(qtyCaixa){
+      delete qtds[qtyCaixa.s+'_'+qtyCaixa.p+'_'+qtyCaixa.slot];
+      caixas=caixas.filter(c=>c!==qtyCaixa);
+      sel=null;updateAddrChip();
+      rebuildProducts();kick();
+    }
+    document.getElementById('qtyModal').classList.remove('open');
+  });
+
+  // ================= TOAST =================
+  let toastT=null;
+  function toast(msg,cls){
+    const t=document.getElementById('toast');
+    t.textContent=msg;
+    t.className='show'+(cls?' '+cls:'');
+    clearTimeout(toastT);
+    toastT=setTimeout(()=>t.className='',2000);
+  }
+
+  // ================= LIMPAR / SALVAR =================
+  document.getElementById('btnLimpar').addEventListener('click',()=>{
+    if(caixas.length===0)return;
+    if(confirm('Limpar todas as '+caixas.length+' caixa(s) da estante?')){
+      caixas=[];sel=null;
+      for(const k in qtds)delete qtds[k];
+      updateAddrChip();rebuildProducts();kick();
+    }
+  });
+  document.getElementById('btnSalvar').addEventListener('click',()=>{
+    const layout={
+      estante:'parede',secoes:NSEC,niveis:6,posicoes:NSEC*SEC_SLOTS,
+      maxSlotsPorCelula:MAX_SLOTS,
+      geometria:{ys,SLOT,SEC_SLOTS,DEPTH},
+      caixas:caixas.map(c=>({
+        secao:Math.floor(c.p/SEC_SLOTS)+1,
+        nivel:c.s,posicao:c.p+1,slot:c.slot+1,
+        produto_id:c.codigo,
+        produto:prodById(c.codigo)?.nome||c.codigo,
+        quantidade:qtds[c.s+'_'+c.p+'_'+c.slot]??null,
+      })),
+    };
+    document.getElementById('jsonOut').value=JSON.stringify(layout,null,2);
+    document.getElementById('saveModal').classList.add('open');
+  });
+  document.getElementById('btnFechar').addEventListener('click',()=>
+    document.getElementById('saveModal').classList.remove('open'));
+  document.getElementById('btnCopiar').addEventListener('click',async()=>{
+    const ta=document.getElementById('jsonOut');
+    try{await navigator.clipboard.writeText(ta.value);}
+    catch(e){ta.select();document.execCommand('copy');}
+    document.getElementById('btnCopiar').textContent='Copiado \u2713';
+    setTimeout(()=>document.getElementById('btnCopiar').textContent='Copiar',1500);
+  });
+
+  const link=document.createElement('link');
+  link.rel='stylesheet';
+  link.href='https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700&display=swap';
+  link.onload=()=>render();
+  document.head.appendChild(link);
+
+  rebuildProducts();
+  resize();
+})();
+</script>
+</body>
+</html>

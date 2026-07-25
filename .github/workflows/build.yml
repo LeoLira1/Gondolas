@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - "claude/gondola-3d-flutter-prototype-9637uw"
+      - "claude/new-session-n5jyhk"
+      - "claude/turso-direct-libsql-dart-vw93za"
   workflow_dispatch:
 
 jobs:
@@ -39,17 +41,36 @@ jobs:
             --project-name gondola_camda \
             /tmp/scaffold
 
-          # Corrige o label do app no manifesto
+          MANIFEST=/tmp/scaffold/android/app/src/main/AndroidManifest.xml
+
+          # Corrige o label do app
           sed -i \
             's/android:label="gondola_camda"/android:label="Gôndola CAMDA"/' \
-            /tmp/scaffold/android/app/src/main/AndroidManifest.xml
+            "$MANIFEST"
+
+          # Garante permissões de rede — flutter create nem sempre injeta
+          # ambas no manifesto principal; sem elas o DNS falha em release.
+          grep -q 'android.permission.INTERNET' "$MANIFEST" || \
+            sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <application|' \
+              "$MANIFEST"
 
           cp -r /tmp/scaffold/android .
+
+      # CMake removido: era necessário para three_js/flutter_angle,
+      # que foram substituídos pelo renderizador puro Dart (CustomPaint).
 
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Generate launcher icons
+        # Gera os mipmaps do ícone do app (mapa.png na raiz, config no
+        # pubspec.yaml) dentro do android/ recém-scaffoldado.
+        run: dart run flutter_launcher_icons
+
       - name: Build APK release
+        # TODO: configure um keystore fixo via secrets para evitar o erro
+        # "App não foi instalado" ao atualizar (assinatura muda a cada build).
+        # Secrets necessários: KEYSTORE_BASE64, KEY_ALIAS, KEY_PASSWORD, STORE_PASSWORD
         run: flutter build apk --release
 
       - name: Upload artifact
@@ -63,13 +84,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "build-${{ github.run_number }}"
-          name: "Gôndola 3D CAMDA #${{ github.run_number }}"
+          name: "Gôndola CAMDA #${{ github.run_number }}"
           body: |
-            ## Gôndola 3D CAMDA — Protótipo
+            ## Gôndola 3D CAMDA — Layout de Gôndola
 
-            APK de validação visual. Instale no tablet e teste:
-            - **Arrastar** para girar 360°
-            - **Pinçar** para zoom in/out
+            APK com integração Turso (conexão direta via libsql_dart).
+
+            **Primeiro uso:** toque em ⚙️ e configure URL + Token do banco.
 
             **Build:** #${{ github.run_number }} | Branch: `${{ github.ref_name }}`
           files: build/app/outputs/flutter-apk/app-release.apk

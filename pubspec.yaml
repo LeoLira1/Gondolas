@@ -1,5 +1,5 @@
 name: gondola_camda
-description: Protótipo 3D Gôndola CAMDA — visualizador octogonal 3 andares
+description: Protótipo 3D Gôndola CAMDA — visualizador hexagonal 3 andares
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,10 +9,22 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  libsql_dart: ^0.9.0
+  path_provider: ^2.1.0
+  shared_preferences: ^2.2.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.3
 
 flutter:
   uses-material-design: true
+
+# Ícone do app (mapa.png na raiz). O projeto Android é gerado pelo CI
+# (flutter create no build.yml), então os mipmaps são gerados lá com
+# `dart run flutter_launcher_icons` logo após o scaffold.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "mapa.png"
