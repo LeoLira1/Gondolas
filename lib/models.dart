@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import 'palete_registry.dart';
+
 /// Face 1-6 da gôndola derivada da posição (px, pz) da caixa na prateleira.
 /// Face 1 = voltada para a entrada (+Z), numeração horária vista de cima.
 /// A face não é persistida no Turso — é sempre derivada de pos_x/pos_z.
@@ -122,16 +124,40 @@ const int      colunasParede       = 2;
 bool ehEstanteParede(int estanteNum) =>
     estanteNum >= estanteParedeMin && estanteNum <= estanteParedeMax;
 
+// Paletes de madeira do piso (1,20 m × 1,00 m, 15 posições em grade 5 × 3).
+// Diferente das estantes e expositores, o número de paletes na loja é VARIÁVEL:
+// eles são cadastrados em runtime na tabela `paletes` e lidos pelo
+// PaleteRegistry, então não existe const listando cada um — só a faixa de
+// números reservada. Números começam em 101 para não colidir com nenhuma
+// estante/expositor existente, e nunca são reciclados: palete que sai da loja
+// vira ativo = 0 na tabela (nunca DELETE), senão o número voltaria e herdaria
+// os endereços velhos em estoque_localizado (mesma lição das estantes 3 e 4,
+// ver estantesRemovidas). Reutilizam a infra de estante como os expositores:
+// local_tipo 'estante', número próprio, slot sempre 0.
+const int paleteNumMin     = 101;
+const int colunasPalete    = 5;   // posições na frente (1,20 m ÷ 5 = 24 cm)
+const int fileirasPalete   = 3;   // posições na profundidade (1,00 m ÷ 3 ≈ 33 cm)
+
+bool ehPalete(int estanteNum) => estanteNum >= paleteNumMin;
+
 /// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
 /// filosofia do faceFromPos): cada seção contribui com 2 posições.
 int posicaoGlobalParede(int estanteNum, int coluna) =>
     (estanteNum - estanteParedeMin) * colunasParede + coluna + 1;
 
-/// Ordem de navegação do carrossel de estantes. As seções da parede (13–18)
-/// ocupam o lugar onde ficavam as estantes 3 e 4.
-const List<int> ordemNavegacaoEstantes = [
+/// Parte FIXA da ordem de navegação do carrossel de estantes. As seções da
+/// parede (13–18) ocupam o lugar onde ficavam as estantes 3 e 4.
+const List<int> ordemNavegacaoBase = [
   1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20,
 ];
+
+/// Ordem completa do carrossel: a base fixa seguida dos paletes ativos
+/// (ordenados por número), no fim — depois dos expositores 19 e 20. É um
+/// getter, não const, porque paletes são cadastrados em runtime; a lista é
+/// remontada a cada leitura para refletir cadastros/desativações sem
+/// reiniciar o app.
+List<int> get ordemNavegacaoEstantes =>
+    [...ordemNavegacaoBase, ...PaleteRegistry().ativos.map((p) => p.num)];
 
 /// Estantes que saíram da loja (substituídas pela Estante Parede). As linhas
 /// antigas delas continuam no Turso, mas esses endereços não aparecem mais em
@@ -141,7 +167,14 @@ const Set<int> estantesRemovidas = {3, 4};
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 
-int niveisProdutoPara(int estanteNum) => ehEstanteEdr300(estanteNum)
+// O palete é testado PRIMEIRO aqui e em numColunasPara: é uma comparação de
+// faixa só (>= paleteNumMin), enquanto o resto da cadeia compara número por
+// número contra cada expositor. Fica como guarda antes da cadeia, e não como
+// mais um ternário dentro dela, porque palete não é "mais um expositor": é a
+// única família cujo conjunto de números cresce em runtime.
+int niveisProdutoPara(int estanteNum) {
+  if (ehPalete(estanteNum)) return fileirasPalete;
+  return ehEstanteEdr300(estanteNum)
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
         ? linhasExpositorMagnojet + 1   // ganchos (0–5) + base (6)
@@ -154,10 +187,13 @@ int niveisProdutoPara(int estanteNum) => ehEstanteEdr300(estanteNum)
                     : temNivelTopoPara(estanteNum)
                         ? niveisProdutoEstendido
                         : niveisProdutoPadrao;
+}
 
 /// Número de colunas de uma estante — usado pra clampar/nomear a coluna
 /// encontrada numa busca sem estourar a grade real da estrutura.
-int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
+int numColunasPara(int estanteNum) {
+  if (ehPalete(estanteNum)) return colunasPalete;
+  return estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == estanteEdr300TriplaNum
         ? colunasEdr300Tripla
@@ -170,6 +206,7 @@ int numColunasPara(int estanteNum) => estanteNum == estanteEdr300Num
                     : ehEstanteParede(estanteNum)
                         ? colunasParede
                         : numColunasEstante;
+}
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes
 /// de converter para letra. Só a Estante 4 precisa de offset, para continuar
@@ -202,6 +239,15 @@ String letraDoIndice(int index) {
 /// seção 13 antes da 14... — igual à numeração física etiquetada na loja
 /// (E13: 1–6 e 7–12; E14: 13–24; ...; E18: 61–72).
 String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
+  // No palete a grade é HORIZONTAL, então a contagem não é de cima pra baixo
+  // como nas estantes: fileira 0 é a do corredor (frente), fileira 2 é a do
+  // fundo, e dentro de cada fileira a coluna 0 é a da esquerda. Resulta em
+  // 1–5 na frente, 6–10 no meio, 11–15 no fundo — igual à etiqueta física no
+  // chão. Rótulos numéricos, não letras, como as bases do Nellore/Monitor/
+  // MagnoJet e a Estante Parede.
+  if (ehPalete(estanteNum)) {
+    return '${nivel * colunasPalete + coluna + 1}';
+  }
   final nNiveis  = niveisProdutoPara(estanteNum);
   if (ehEstanteParede(estanteNum)) {
     final numero = (estanteNum - estanteParedeMin) * nNiveis * colunasParede +
