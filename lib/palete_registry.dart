@@ -128,10 +128,15 @@ class PaleteRegistry {
   /// estantes 3 e 4, ver estantesRemovidas). A garantia só se sustenta se as
   /// linhas desativadas PERMANECEREM na tabela — um DELETE FROM paletes
   /// quebra a não-reciclagem.
+  /// posX/posZ/rotacao ficam em 0 por padrão: o palete não é desenhado no mapa
+  /// da loja (como a estante 5, ele só existe no carrossel de detalhes), então
+  /// não há posição a informar. Os parâmetros continuam aqui para o dia em que
+  /// o palete ganhar geometria no mapa — aí é só passar os valores, sem mudar
+  /// a assinatura nem a tabela.
   Future<int?> criar({
     String apelido = '',
-    required double posX,
-    required double posZ,
+    double posX = 0,
+    double posZ = 0,
     double rotacao = 0,
   }) async {
     if (modoMemoria) {

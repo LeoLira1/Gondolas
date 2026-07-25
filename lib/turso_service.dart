@@ -899,11 +899,18 @@ class TursoService {
         final estanteNum = r['estante_num'] as int? ?? 0;
         final nivProduto = niveisProdutoPara(estanteNum);
         final n = ((r['nivel'] as int?) ?? 0).clamp(0, nivProduto - 1);
+        // No palete o nível é a FILEIRA (0 = corredor), não uma altura, então
+        // "Nível 2" não ajudaria ninguém a achar o produto. Como esta busca
+        // agrupa por estante + nível (sem coluna), o mais específico que dá
+        // pra dizer é a faixa de posições daquela fileira: 1–5, 6–10, 11–15.
+        final descricao = ehPalete(estanteNum)
+            ? 'Posições ${n * colunasPalete + 1}–${n * colunasPalete + colunasPalete}'
+            : 'Nível ${n + 1}';
         return ProdutoEncontrado(
           nome:           r['produto_nome']   as String? ?? '',
           tipo:           'estante',
           numero:         estanteNum,
-          nivelDescricao: 'Nível ${n + 1}',
+          nivelDescricao: descricao,
           produtoCodigo:  r['produto_codigo'] as String? ?? '',
           nivel:          n,
         );

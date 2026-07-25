@@ -63,15 +63,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   }
 
   Future<void> _adicionarPalete() async {
-    final dados = await _dialogPalete();
-    if (dados == null) return;
+    final apelido = await _dialogPalete();
+    if (apelido == null) return;
     setState(() => _salvandoPalete = true);
-    final num = await PaleteRegistry().criar(
-      apelido: dados.apelido,
-      posX:    dados.posX,
-      posZ:    dados.posZ,
-      rotacao: dados.rotacao,
-    );
+    final num = await PaleteRegistry().criar(apelido: apelido);
     if (!mounted) return;
     setState(() {
       _salvandoPalete = false;
@@ -88,15 +83,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   }
 
   Future<void> _editarPalete(Palete p) async {
-    final dados = await _dialogPalete(inicial: p);
-    if (dados == null) return;
+    final apelido = await _dialogPalete(inicial: p);
+    if (apelido == null) return;
     setState(() => _salvandoPalete = true);
-    final ok = await PaleteRegistry().atualizar(p.copyWith(
-      apelido: dados.apelido,
-      posX:    dados.posX,
-      posZ:    dados.posZ,
-      rotacao: dados.rotacao,
-    ));
+    final ok = await PaleteRegistry().atualizar(p.copyWith(apelido: apelido));
     if (!mounted) return;
     setState(() {
       _salvandoPalete = false;
@@ -167,17 +157,17 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     ));
   }
 
-  /// Dialog de cadastro/edição. Devolve null se o usuário cancelou.
-  Future<_DadosPalete?> _dialogPalete({Palete? inicial}) {
+  /// Dialog de cadastro/edição. Devolve o apelido, ou null se cancelou.
+  ///
+  /// O apelido é o ÚNICO campo: o palete tem tamanho e grade padrão (1,20 ×
+  /// 1,00 m, 15 posições), e não é desenhado no mapa da loja — como a estante
+  /// 5, só existe no carrossel de detalhes. Sem geometria no mapa, pedir x/z
+  /// seria entrada morta, então a posição fica gravada como 0 na tabela até
+  /// que (se) o palete passe a aparecer no mapa.
+  Future<String?> _dialogPalete({Palete? inicial}) {
     final apelidoCtrl = TextEditingController(text: inicial?.apelido ?? '');
-    final xCtrl       = TextEditingController(
-        text: inicial != null ? inicial.posX.toString() : '');
-    final zCtrl       = TextEditingController(
-        text: inicial != null ? inicial.posZ.toString() : '');
-    final rotCtrl     = TextEditingController(
-        text: inicial != null ? inicial.rotacao.toString() : '0');
 
-    return showDialog<_DadosPalete>(
+    return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF141a22),
@@ -192,47 +182,22 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (inicial == null)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 14),
-                  child: Text(
-                    'O número do palete é alocado automaticamente e mostrado '
-                    'ao salvar.',
-                    style: TextStyle(
-                        color: Color(0xFF8a9aa8), fontSize: 12, height: 1.4),
-                  ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Text(
+                  inicial == null
+                      ? 'Tamanho padrão: 1,20 × 1,00 m, 15 posições (5 × 3). '
+                          'O número é alocado automaticamente e mostrado ao salvar.'
+                      : 'Tamanho padrão: 1,20 × 1,00 m, 15 posições (5 × 3).',
+                  style: const TextStyle(
+                      color: Color(0xFF8a9aa8), fontSize: 12, height: 1.4),
                 ),
+              ),
               _Campo(
                 label: 'Apelido',
                 controller: apelidoCtrl,
                 hint: 'Palete óleo — corredor 3',
                 obscure: false,
-              ),
-              const SizedBox(height: 14),
-              // A loja tem 10,0 m de largura (X) por 14,0 m de fundo (Z) —
-              // mesma escala do mapa, então x/z são metros medidos do canto.
-              _Campo(
-                label: 'Posição X (m, 0–10)',
-                controller: xCtrl,
-                hint: '5.0',
-                obscure: false,
-                numerico: true,
-              ),
-              const SizedBox(height: 14),
-              _Campo(
-                label: 'Posição Z (m, 0–14)',
-                controller: zCtrl,
-                hint: '7.0',
-                obscure: false,
-                numerico: true,
-              ),
-              const SizedBox(height: 14),
-              _Campo(
-                label: 'Rotação (graus)',
-                controller: rotCtrl,
-                hint: '0',
-                obscure: false,
-                numerico: true,
               ),
             ],
           ),
@@ -244,22 +209,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 style: TextStyle(color: Color(0xFF8a9aa8))),
           ),
           TextButton(
-            onPressed: () {
-              final x = double.tryParse(xCtrl.text.trim().replaceAll(',', '.'));
-              final z = double.tryParse(zCtrl.text.trim().replaceAll(',', '.'));
-              if (x == null || z == null) return;   // posição é obrigatória
-              final rot =
-                  double.tryParse(rotCtrl.text.trim().replaceAll(',', '.')) ?? 0;
-              Navigator.pop(
-                ctx,
-                _DadosPalete(
-                  apelido: apelidoCtrl.text.trim(),
-                  posX:    x,
-                  posZ:    z,
-                  rotacao: rot,
-                ),
-              );
-            },
+            onPressed: () => Navigator.pop(ctx, apelidoCtrl.text.trim()),
             child: const Text('Salvar',
                 style: TextStyle(color: Color(0xFF4a9d6a))),
           ),
@@ -499,7 +449,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                   SwitchListTile(
                     value: _cacheLocal,
                     onChanged: _alterarCacheLocal,
-                    activeColor: const Color(0xFF4a9d6a),
+                    activeThumbColor: const Color(0xFF4a9d6a),
                     title: const Text(
                       'Cache local',
                       style: TextStyle(color: Colors.white, fontSize: 13),
@@ -629,7 +579,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                             SizedBox(height: 3),
                             Text(
                               'Paletes de madeira do piso (15 posições, 5 × 3). '
-                              'Aparecem no fim do carrossel e no mapa da loja.',
+                              'Aparecem no fim do carrossel de estantes; como a '
+                              'estante 5, não são desenhados no mapa da loja.',
                               style: TextStyle(
                                   color: Color(0xFF8a9aa8),
                                   fontSize: 11,
@@ -697,9 +648,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    'x ${p.posX.toStringAsFixed(2)} · '
-                                    'z ${p.posZ.toStringAsFixed(2)}'
-                                    '${p.rotacao == 0 ? '' : ' · ${p.rotacao.toStringAsFixed(0)}°'}',
+                                    '${p.colunas * p.fileiras} posições · '
+                                    '${p.colunas} × ${p.fileiras}',
                                     style: const TextStyle(
                                         color: Color(0xFF8a9aa8),
                                         fontSize: 11),
@@ -784,33 +734,17 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   }
 }
 
-/// Valores digitados no dialog de palete. O número não entra aqui: na criação
-/// ele é alocado pelo PaleteRegistry e, na edição, é imutável.
-class _DadosPalete {
-  final String apelido;
-  final double posX, posZ, rotacao;
-
-  const _DadosPalete({
-    required this.apelido,
-    required this.posX,
-    required this.posZ,
-    required this.rotacao,
-  });
-}
-
 class _Campo extends StatelessWidget {
   final String label;
   final TextEditingController controller;
   final String hint;
   final bool obscure;
-  final bool numerico;
 
   const _Campo({
     required this.label,
     required this.controller,
     required this.hint,
     required this.obscure,
-    this.numerico = false,
   });
 
   @override
@@ -831,9 +765,6 @@ class _Campo extends StatelessWidget {
         TextField(
           controller: controller,
           obscureText: obscure,
-          keyboardType:
-              numerico ? const TextInputType.numberWithOptions(
-                  decimal: true, signed: true) : null,
           style: const TextStyle(color: Colors.white, fontSize: 13),
           decoration: InputDecoration(
             hintText: hint,
