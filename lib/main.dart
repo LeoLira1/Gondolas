@@ -13,6 +13,8 @@ import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
 import 'models.dart';
+import 'palete_registry.dart';
+import 'palete_scene.dart';
 import 'quantidade_dialog.dart';
 import 'turso_service.dart';
 
@@ -903,7 +905,8 @@ class _SearchBox extends StatelessWidget {
                                           const SizedBox(width: 5),
                                           Flexible(
                                             child: Text(
-                                              '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivelDescricao}',
+                                              '${p.tipo == 'gondola' ? 'Gôndola' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
+                                              ' nº ${p.numero} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
                                             ),
@@ -1609,10 +1612,18 @@ class _GondolaPageState extends State<GondolaPage> {
             List.generate(nivProduto, (i) => 'Nível ${i + 1}');
         final colNomes   =
             List.generate(maxColunas, (i) => 'Col. ${i + 1}');
-        final locEstante =
-            '📦 ${produto.nome}\n'
-            'Estante ${naEstante.estanteNum} · ${colNomes[naEstante.coluna.clamp(0, maxColunas - 1)]} · '
-            '${nivelNomes[naEstante.nivel.clamp(0, nivProduto - 1)]} · Slot ${naEstante.slot + 1}';
+        final col = naEstante.coluna.clamp(0, maxColunas - 1);
+        final niv = naEstante.nivel.clamp(0, nivProduto - 1);
+        // No palete o endereço é uma posição só (1–15) e o slot é sempre 0, então
+        // decompor em Col./Nível/Slot não diria nada ao usuário: ele procura pela
+        // etiqueta no chão.
+        final locEstante = ehPalete(naEstante.estanteNum)
+            ? '📦 ${produto.nome}\n'
+                'Palete ${naEstante.estanteNum} · posição '
+                '${letraEstanteCelula(naEstante.estanteNum, col, niv)}'
+            : '📦 ${produto.nome}\n'
+                'Estante ${naEstante.estanteNum} · ${colNomes[col]} · '
+                '${nivelNomes[niv]} · Slot ${naEstante.slot + 1}';
         setState(() => _resultadoBusca = locEstante);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(locEstante.replaceAll('\n', ' — ')),
@@ -2699,6 +2710,20 @@ class _EstantePageState extends State<EstantePage> {
         gap:      0.0,
       );
     }
+    // Palete: uma caixa por posição, slot sempre 0. Precisa de entrada própria
+    // aqui (como cada uma das outras geometrias) porque o fallback lá embaixo
+    // usa EstanteGeometry, que tem 3 colunas fixas e estouraria no firstWhere
+    // nas colunas 3 e 4 do palete.
+    if (ehPalete(_estanteAtual)) {
+      final celula = PaleteGeometry.celulas()
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      return (
+        maxSlots: 1,
+        xMin:     celula.xCenter - PaleteGeometry.wCaixa / 2,
+        wCaixa:   PaleteGeometry.wCaixa,
+        gap:      0.0,
+      );
+    }
     if (ehEstanteParede(_estanteAtual)) {
       final celula = EstanteParedeGeometry.celulas()
           .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
@@ -2782,6 +2807,9 @@ class _EstantePageState extends State<EstantePage> {
   String get _enderecoSelecionadoTexto {
     final letra = letraEstanteCelula(
         _estanteAtual, _colunaSelecionada!, _nivelSelecionado!);
+    // No palete o prefixo é P (não E) e não há slot a mostrar — uma caixa por
+    // posição —, então o chip fica só 'P102 · 7', igual à etiqueta no chão.
+    if (ehPalete(_estanteAtual)) return 'P$_estanteAtual · $letra';
     // Na parede o chip mostra também a posição global P1–P12 (derivada),
     // ex.: 'E15 · AH · Slot 2 (P6)'.
     final sufixoParede = ehEstanteParede(_estanteAtual)
@@ -3407,6 +3435,20 @@ class _EstantePageState extends State<EstantePage> {
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:    _destacadosCodigos,
                       )
+                : ehPalete(_estanteAtual)
+                    ? PaleteScene(
+                        estanteAtual:         _estanteAtual,
+                        caixas:               _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:        _corPorProduto,
+                        onTapCelula:          _onTapCelula,
+                        onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                        destacadoCodigo:      _destacadoCodigo,
+                        desatualizados:       _desatualizados,
+                        divergentes:          _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
+                        destacadosCodigos:    _destacadosCodigos,
+                      )
                 : EstanteScene(
                     estanteAtual:         _estanteAtual,
                     caixas:               _caixasAtuais,
@@ -3624,6 +3666,15 @@ class _EstanteSelector extends StatelessWidget {
     required this.onNext,
   });
 
+  // O palete não tem geometria própria no mapa, então o apelido é a única
+  // pista de QUAL palete da loja é este — vai no subtítulo. Palete sem apelido
+  // cai no rótulo puro em vez de mostrar um separador solto.
+  static String _subtituloPalete(int num) {
+    final apelido = PaleteRegistry().byNum(num)?.apelido ?? '';
+    final base    = 'de ${ordemNavegacaoEstantes.length} · PALETE';
+    return apelido.isEmpty ? base : '$base · $apelido';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -3660,7 +3711,9 @@ class _EstanteSelector extends StatelessWidget {
                       'P${posicaoGlobalParede(estanteAtual, colunasParede - 1)}'
                   : estanteAtual == estanteEdr300TriplaNum
                       ? 'de ${ordemNavegacaoEstantes.length} · 3× EDR-300'
-                      : 'de ${ordemNavegacaoEstantes.length}',
+                      : ehPalete(estanteAtual)
+                          ? _subtituloPalete(estanteAtual)
+                          : 'de ${ordemNavegacaoEstantes.length}',
               style: const TextStyle(
                 color: Color(0xFF5a6a78),
                 fontSize: 10,

@@ -135,7 +135,13 @@ class ExpositorMagnojetGeometry {
     final xMin = -util / 2;
     final n = colunasPorLinha;
     if (n <= 1) return 0;
-    final fisica = c < colunas ? c * 2 : (c - colunas) * 2 + 1;
+    // O mapeamento para posições pares só vale quando os intercalados existem
+    // (régua de 2·colunas-1 posições). Sem eles a régua tem só `colunas`
+    // posições, então a primária c é a posição c — multiplicar por 2 jogaria
+    // as últimas colunas para fora do painel.
+    final fisica = intercalados
+        ? (c < colunas ? c * 2 : (c - colunas) * 2 + 1)
+        : c;
     return xMin + util * fisica / (n - 1);
   }
 
