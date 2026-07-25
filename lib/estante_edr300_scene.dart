@@ -5,7 +5,8 @@ import 'gondola_scene.dart'
     show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
         corEnderecoDivergentePositiva;
 import 'models.dart'
-    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano, estanteEdr300Num;
+    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
+        letraDoIndice;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Edr300Cell — célula de produto na estante metálica
@@ -29,14 +30,18 @@ class Edr300Cell {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Edr300Geometry — estante de aço com montantes em L perfurados
+// Edr300Geometry — estante de aço com montantes em L perfurados. Com
+// colunas > 1 desenha vários módulos EDR-300 encostados lado a lado (a
+// Estante 6 da loja é a junção física de 3 deles); cada módulo tem sua
+// própria armação de 4 montantes, como as peças reais.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class Edr300Geometry {
   final int    shelves;
   final double height;
-  final double width;
+  final double width;   // largura de UM módulo
   final double depth;
+  final int    colunas; // módulos encostados lado a lado (1 = EDR-300 solo)
   final bool   showHoles;
   final bool   showFloor;
 
@@ -45,18 +50,23 @@ class Edr300Geometry {
     this.height    = 1.98,
     this.width     = 0.92,
     this.depth     = 0.30,
+    this.colunas   = 1,
     this.showHoles = false,
     this.showFloor = true,
   });
 
-  // Dimensões das caixas de produto (em metros). Cada nível é uma única
-  // fileira que comporta 5 caixas lado a lado ocupando a largura toda da
-  // estante (a letra do label já é por nível, não por coluna).
+  // Dimensões das caixas de produto (em metros). Cada nível de um módulo é
+  // uma única fileira que comporta 5 caixas lado a lado ocupando a largura
+  // toda do módulo (a letra do label já é por módulo × nível, não por slot).
   static const double wCaixa    = 0.15;
   static const double hCaixa    = 0.20;
   static const double dCaixa    = 0.13;
   static const double gap       = 0.016;
-  static const int    numColunas = 1;
+
+  double get larguraTotal => width * colunas;
+
+  /// Centro em X do módulo [col] (0 = mais à esquerda).
+  double xCentroModulo(int col) => -larguraTotal / 2 + width * (col + 0.5);
 
   static const _steel     = Color(0xFFb8bcc2);
   static const _steelDark = Color(0xFF9a9ea6);
@@ -70,12 +80,13 @@ class Edr300Geometry {
       ? (height - _shelfT) * i / (shelves - 1)
       : height / 2;
 
-  // Grade de células para posicionar produtos
+  // Grade de células para posicionar produtos: uma célula por módulo × nível
+  // (coluna = módulo físico, mesma convenção salva no banco).
   List<Edr300Cell> get cells {
     final lista = <Edr300Cell>[];
-    final colW  = (width - 0.01) / numColunas;
-    for (var col = 0; col < numColunas; col++) {
-      final xMin = -width / 2 + 0.005 + colW * col;
+    final colW  = width - 0.01;
+    for (var col = 0; col < colunas; col++) {
+      final xMin = -larguraTotal / 2 + width * col + 0.005;
       final xMax = xMin + colW - 0.003;
       for (var niv = 0; niv < shelves; niv++) {
         lista.add(Edr300Cell(
@@ -125,6 +136,17 @@ class Edr300Geometry {
       ], _floor));
     }
 
+    for (var col = 0; col < colunas; col++) {
+      _moduloFaces(faces, xCentroModulo(col));
+    }
+
+    return faces;
+  }
+
+  // Armação completa de um módulo EDR-300 centrado em [cx]: 4 montantes em L
+  // + prateleiras. Módulos vizinhos ficam encostados, com os montantes de um
+  // lado a lado com os do outro, como as estantes reais enfileiradas.
+  void _moduloFaces(List<Face> faces, double cx) {
     final half  = width  / 2 - _postW / 2;
     final halfD = depth  / 2 - _postW / 2;
 
@@ -133,7 +155,7 @@ class Edr300Geometry {
       (half,  halfD), (-half,  halfD),
       (half, -halfD), (-half, -halfD),
     ]) {
-      final px = pos.$1, pz = pos.$2;
+      final px = cx + pos.$1, pz = pos.$2;
 
       _box(faces,
         x0: px - _postW / 2, x1: px + _postW / 2,
@@ -141,7 +163,8 @@ class Edr300Geometry {
         z0: pz - 0.003,      z1: pz + 0.003,
         color: _steel);
 
-      final sideX = px + (px > 0 ? -_postW / 2 : _postW / 2);
+      // A aba lateral do L aponta pra dentro do módulo (sinal LOCAL de x).
+      final sideX = px + (pos.$1 > 0 ? -_postW / 2 : _postW / 2);
       _box(faces,
         x0: sideX - 0.003,  x1: sideX + 0.003,
         y0: 0,               y1: height,
@@ -165,25 +188,23 @@ class Edr300Geometry {
       final y = shelfY(i);
 
       _box(faces,
-        x0: -width / 2 + 0.005, x1: width / 2 - 0.005,
-        y0: y,                   y1: y + _shelfT,
-        z0: -depth / 2 + 0.005, z1: depth / 2 - 0.005,
+        x0: cx - width / 2 + 0.005, x1: cx + width / 2 - 0.005,
+        y0: y,                       y1: y + _shelfT,
+        z0: -depth / 2 + 0.005,     z1: depth / 2 - 0.005,
         color: _steel);
 
       _box(faces,
-        x0: -(width - 0.01) / 2, x1: (width - 0.01) / 2,
-        y0: y - 0.03,             y1: y,
-        z0: depth / 2 - 0.015,   z1: depth / 2 - 0.005,
+        x0: cx - (width - 0.01) / 2, x1: cx + (width - 0.01) / 2,
+        y0: y - 0.03,                 y1: y,
+        z0: depth / 2 - 0.015,       z1: depth / 2 - 0.005,
         color: _steelDark);
 
       _box(faces,
-        x0: -(width - 0.01) / 2,  x1: (width - 0.01) / 2,
-        y0: y - 0.03,              y1: y,
-        z0: -(depth / 2 - 0.005), z1: -(depth / 2 - 0.015),
+        x0: cx - (width - 0.01) / 2,  x1: cx + (width - 0.01) / 2,
+        y0: y - 0.03,                  y1: y,
+        z0: -(depth / 2 - 0.005),     z1: -(depth / 2 - 0.015),
         color: _steelDark);
     }
-
-    return faces;
   }
 
   static void _box(List<Face> faces, {
@@ -322,30 +343,37 @@ class Edr300Painter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    for (var i = 0; i < geometry.shelves; i++) {
-      final hit = project(Vec3(0, geometry.shelfY(i) + 0.05, 0));
-      if (hit == null) continue;
+    // Um badge por módulo × prateleira, com letras contínuas por módulo de
+    // cima pra baixo (mesma régua de letraEstanteCelula): solo A–F; tripla
+    // A–F, G–L, M–R.
+    for (var col = 0; col < geometry.colunas; col++) {
+      for (var i = 0; i < geometry.shelves; i++) {
+        final hit = project(
+            Vec3(geometry.xCentroModulo(col), geometry.shelfY(i) + 0.05, 0));
+        if (hit == null) continue;
 
-      final (screen, cz) = hit;
-      final fontSize = 22.0 * (3.0 / cz).clamp(0.5, 1.8);
-      final radius   = fontSize * 0.72;
+        final (screen, cz) = hit;
+        final fontSize = 22.0 * (3.0 / cz).clamp(0.5, 1.8);
+        final radius   = fontSize * 0.72;
 
-      canvas.drawCircle(screen, radius, bgPaint);
-      canvas.drawCircle(screen, radius, rimPaint);
+        canvas.drawCircle(screen, radius, bgPaint);
+        canvas.drawCircle(screen, radius, rimPaint);
 
-      final letter = String.fromCharCode(65 + (geometry.shelves - 1 - i));
-      final tp = TextPainter(
-        text: TextSpan(
-          text: letter,
-          style: TextStyle(
-            color:      camda,
-            fontSize:   fontSize,
-            fontWeight: FontWeight.bold,
+        final letter = letraDoIndice(
+            col * geometry.shelves + (geometry.shelves - 1 - i));
+        final tp = TextPainter(
+          text: TextSpan(
+            text: letter,
+            style: TextStyle(
+              color:      camda,
+              fontSize:   fontSize,
+              fontWeight: FontWeight.bold,
+            ),
           ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+      }
     }
   }
 
@@ -361,6 +389,7 @@ class Edr300Painter extends CustomPainter {
       old.geometry.height    != geometry.height    ||
       old.geometry.width     != geometry.width     ||
       old.geometry.depth     != geometry.depth     ||
+      old.geometry.colunas   != geometry.colunas   ||
       old.geometry.showHoles != geometry.showHoles ||
       old.geometry.showFloor != geometry.showFloor;
 }
@@ -371,6 +400,9 @@ class Edr300Painter extends CustomPainter {
 
 class Edr300Scene extends StatefulWidget {
   final Edr300Geometry geometry;
+  // Número da estante representada — 8 (EDR-300 solo) ou 6 (a tripla).
+  // Entra na chave dos endereços (desatualizados/divergentes) e no salvar.
+  final int            estanteNum;
   final bool           wireframe;
   final bool           autoRotate;
   final bool           showLabels;
@@ -399,6 +431,7 @@ class Edr300Scene extends StatefulWidget {
   const Edr300Scene({
     super.key,
     required this.geometry,
+    required this.estanteNum,
     this.wireframe           = false,
     this.autoRotate          = true,
     this.showLabels          = true,
@@ -429,13 +462,18 @@ class _Edr300SceneState extends State<Edr300Scene>
   bool    _isDragging = false;
   static const double _dragThreshold = 6.0;
 
+  // Distância inicial da câmera: mais longe quanto mais módulos lado a lado,
+  // pra tripla caber inteira na tela de primeira.
+  static double _distPara(Edr300Geometry geo) =>
+      3.5 + (geo.colunas - 1) * 1.15;
+
   @override
   void initState() {
     super.initState();
     _camera = Camera(
       rotY:   0.9,
       rotX:   0.35,
-      dist:   3.5,
+      dist:   _distPara(widget.geometry),
       target: Vec3(0, widget.geometry.height / 2, 0),
     );
     _ticker = createTicker((_) {
@@ -448,6 +486,12 @@ class _Edr300SceneState extends State<Edr300Scene>
   @override
   void didUpdateWidget(Edr300Scene old) {
     super.didUpdateWidget(old);
+    // O carrossel reaproveita este State ao alternar entre as estantes 6 e 8
+    // (mesmo tipo de widget na mesma posição da árvore): reenquadra o zoom
+    // quando o número de módulos muda.
+    if (old.geometry.colunas != widget.geometry.colunas) {
+      _camera = _camera.copyWith(dist: _distPara(widget.geometry));
+    }
     if (old.geometry.height != widget.geometry.height) {
       _camera = Camera(
         rotY:   _camera.rotY,
@@ -557,12 +601,10 @@ class _Edr300SceneState extends State<Edr300Scene>
           .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
           .toList();
       if (celulaList.isEmpty) continue;
-      // Edr300Scene com caixas em uso sempre representa a Estante 8 (a única
-      // de aço no layout atual).
       final chave = chaveEnderecoEstoque(
         produtoCodigo: caixa.produtoId,
         localTipo:     'estante',
-        localNum:      estanteEdr300Num,
+        localNum:      widget.estanteNum,
         faceOuColuna:  caixa.coluna,
         andarOuNivel:  caixa.nivel,
       );

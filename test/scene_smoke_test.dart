@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
+import 'package:gondola_camda/estante_edr300_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
 import 'package:gondola_camda/expositor_monitor_scene.dart';
@@ -290,6 +291,47 @@ void main() {
     expect(letraEstanteCelula(3, 2, 0), 'O');
     expect(letraEstanteCelula(4, 0, 4), 'P');
     expect(letraEstanteCelula(4, 2, 0), 'AD');
+  });
+
+  test('estante 6: grade de 3 módulos EDR-300 com letras contínuas', () {
+    expect(niveisProdutoPara(estanteEdr300TriplaNum), niveisProdutoEdr300);
+    expect(numColunasPara(estanteEdr300TriplaNum), colunasEdr300Tripla);
+    // 3 módulos × 6 níveis = 18 células, uma armação por módulo.
+    const geo = Edr300Geometry(colunas: colunasEdr300Tripla);
+    expect(geo.cells.length, colunasEdr300Tripla * niveisProdutoEdr300);
+    expect(geo.larguraTotal, closeTo(geo.width * colunasEdr300Tripla, 1e-9));
+    // Letras de cima pra baixo dentro de cada módulo, continuando no
+    // vizinho: esquerdo A–F, meio G–L, direito M–R — etiqueta de cada
+    // módulo lê igual à da Estante 8.
+    expect(letraEstanteCelula(estanteEdr300TriplaNum, 0, 5), 'A');
+    expect(letraEstanteCelula(estanteEdr300TriplaNum, 0, 0), 'F');
+    expect(letraEstanteCelula(estanteEdr300TriplaNum, 1, 5), 'G');
+    expect(letraEstanteCelula(estanteEdr300TriplaNum, 1, 0), 'L');
+    expect(letraEstanteCelula(estanteEdr300TriplaNum, 2, 5), 'M');
+    expect(letraEstanteCelula(estanteEdr300TriplaNum, 2, 0), 'R');
+    // A Estante 8 (solo) segue com A–F de cima pra baixo, como sempre.
+    expect(letraEstanteCelula(estanteEdr300Num, 0, 5), 'A');
+    expect(letraEstanteCelula(estanteEdr300Num, 0, 0), 'F');
+  });
+
+  testWidgets('Edr300Scene tripla (Estante 6) renderiza sem exceções',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Edr300Scene(
+        geometry:
+            Edr300Geometry(showFloor: false, colunas: colunasEdr300Tripla),
+        estanteNum: estanteEdr300TriplaNum,
+        autoRotate: false,
+        caixas: [
+          CaixaColocadaEstante(coluna: 0, nivel: 5, slot: 0, produtoId: 'T1'),
+          CaixaColocadaEstante(coluna: 2, nivel: 0, slot: 4, produtoId: 'T2'),
+        ],
+        corPorProduto: {'T1': Colors.green, 'T2': Colors.amber},
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
   });
 
   test('ordem de navegação: parede no lugar das estantes 3 e 4', () {
