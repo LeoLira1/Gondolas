@@ -3667,11 +3667,12 @@ class _EstanteSelector extends StatelessWidget {
   });
 
   // O palete não tem geometria própria no mapa, então o apelido é a única
-  // pista de QUAL palete da loja é este — vai no subtítulo. Palete sem apelido
-  // cai no rótulo puro em vez de mostrar um separador solto.
+  // pista de QUAL palete da loja é este — vai no subtítulo. O rótulo "PALETE"
+  // já está no título, então aqui entra só o apelido; sem apelido, fica a
+  // contagem pura em vez de mostrar um separador solto.
   static String _subtituloPalete(int num) {
     final apelido = PaleteRegistry().byNum(num)?.apelido ?? '';
-    final base    = 'de ${ordemNavegacaoEstantes.length} · PALETE';
+    final base    = 'de ${ordemNavegacaoEstantes.length}';
     return apelido.isEmpty ? base : '$base · $apelido';
   }
 
@@ -3686,9 +3687,11 @@ class _EstanteSelector extends StatelessWidget {
           _ArrowBtn(icon: Icons.chevron_left,  onTap: onPrev),
           const SizedBox(width: 24),
           Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text(
-              'ESTANTE',
-              style: TextStyle(
+            // O carrossel mistura estantes e paletes: o título acompanha o que
+            // está na tela, senão um palete aparece rotulado como "ESTANTE".
+            Text(
+              ehPalete(estanteAtual) ? 'PALETE' : 'ESTANTE',
+              style: const TextStyle(
                 color: Color(0xFF8a9aa8),
                 fontSize: 10,
                 letterSpacing: 2.0,

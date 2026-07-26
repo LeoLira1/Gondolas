@@ -358,7 +358,7 @@ class PaletePainter extends CustomPainter {
     final rimPaint = Paint()
       ..color       = camda
       ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.4;
 
     // Rótulo 1–15 de cada posição. O texto vem SEMPRE de letraEstanteCelula
     // (nunca calculado aqui), pra etiqueta desenhada e endereço salvo não
@@ -368,7 +368,10 @@ class PaletePainter extends CustomPainter {
       if (hit == null) continue;
 
       final (screen, cz) = hit;
-      final fontSize = 20.0 * (2.2 / cz).clamp(0.5, 1.8);
+      // Base menor que nas estantes: o palete é raso e as 15 posições ficam
+      // todas visíveis de uma vez, então etiqueta grande cobre o deck e as
+      // caixas. O clamp de escala também é mais curto pelo mesmo motivo.
+      final fontSize = 11.0 * (2.2 / cz).clamp(0.6, 1.5);
 
       final texto = letraEstanteCelula(estanteAtual, celula.coluna, celula.nivel);
       final tp = TextPainter(
