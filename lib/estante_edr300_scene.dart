@@ -460,7 +460,17 @@ class _Edr300SceneState extends State<Edr300Scene>
   Offset? _gestureOrigin;
   Camera? _cameraAtStart;
   bool    _isDragging = false;
+  int     _gesturePointers = 0;
   static const double _dragThreshold = 6.0;
+
+  // Zoom: mesma folga do mapa da loja — dá pra chegar bem perto de uma caixa
+  // e também afastar até a estante inteira caber na tela.
+  static const double _distMin = 0.8;
+  static const double _distMax = 12.0;
+
+  // Pan: o alvo da câmera não escapa de uma caixa em volta da estante, pra
+  // não ser possível arrastar até perder o modelo de vista.
+  static const double _panMargem = 0.7;
 
   // Distância inicial da câmera: mais longe quanto mais módulos lado a lado,
   // pra tripla caber inteira na tela de primeira.
@@ -490,7 +500,14 @@ class _Edr300SceneState extends State<Edr300Scene>
     // (mesmo tipo de widget na mesma posição da árvore): reenquadra o zoom
     // quando o número de módulos muda.
     if (old.geometry.colunas != widget.geometry.colunas) {
-      _camera = _camera.copyWith(dist: _distPara(widget.geometry));
+      // Reenquadra e recentraliza: o pan do usuário na estante anterior não
+      // deve deixar a próxima fora de quadro.
+      _camera = Camera(
+        rotY:   _camera.rotY,
+        rotX:   _camera.rotX,
+        dist:   _distPara(widget.geometry),
+        target: Vec3(0, widget.geometry.height / 2, 0),
+      );
     }
     if (old.geometry.height != widget.geometry.height) {
       _camera = Camera(
@@ -509,24 +526,75 @@ class _Edr300SceneState extends State<Edr300Scene>
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin = d.focalPoint;
-    _cameraAtStart = _camera;
-    _isDragging    = false;
+    _gestureOrigin   = d.focalPoint;
+    _cameraAtStart   = _camera;
+    _isDragging      = false;
+    _gesturePointers = d.pointerCount;
   }
 
+  // Mesmo esquema de câmera do mapa da loja (LojaScene): um dedo arrasta
+  // (pan — o ponto tocado acompanha o dedo), dois dedos orbitam e dão zoom
+  // com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
-    final c0     = _cameraAtStart;
-    if (origin == null || c0 == null) return;
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
+    if (_gestureOrigin == null || _cameraAtStart == null) return;
+
+    // Reancora o gesto quando muda o número de dedos, senão o focal point
+    // salta ao encostar/levantar o segundo dedo.
+    if (d.pointerCount != _gesturePointers) {
+      _gestureOrigin   = d.focalPoint;
+      _cameraAtStart   = _camera;
+      _gesturePointers = d.pointerCount;
+    }
+
+    final origin = _gestureOrigin!;
+    final c0     = _cameraAtStart!;
+    final delta  = d.focalPoint - origin;
+
+    if (delta.distance > _dragThreshold ||
+        (d.scale - 1.0).abs() > 0.02 ||
+        d.pointerCount > 1) {
       _isDragging = true;
     }
+
+    if (d.pointerCount >= 2) {
+      // Dois dedos: orbita (arrastar) + zoom (pinça)
+      setState(() {
+        _camera = Camera(
+          rotY:   c0.rotY - delta.dx * 0.008,
+          rotX:   (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
+          dist:   (c0.dist / d.scale).clamp(_distMin, _distMax),
+          target: _camera.target,
+        );
+      });
+      return;
+    }
+
+    // Um dedo: pan no plano da tela — converte pixels em metros pela altura
+    // do viewport e pelo FOV do painter (42°), então desloca o alvo ao longo
+    // dos eixos "direita" e "cima" da própria câmera.
+    final rb  = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    final hPx = rb?.size.height ?? 600.0;
+    final worldPerPx = 2 * c0.dist * math.tan(21.0 * math.pi / 180) / hPx;
+    final dxW = delta.dx * worldPerPx;
+    final dyW = delta.dy * worldPerPx;
+
+    final sinY = math.sin(c0.rotY), cosY = math.cos(c0.rotY);
+    final sinX = math.sin(c0.rotX), cosX = math.cos(c0.rotX);
+    // right = (cosY, 0, -sinY); up = (-sinY·sinX, cosX, -cosY·sinX)
+    final geo    = widget.geometry;
+    final limXZ  = geo.larguraTotal / 2 + _panMargem;
+
     setState(() {
-      _camera = c0.copyWith(
-        rotY: c0.rotY - delta.dx * 0.008,
-        rotX: (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
-        dist: (c0.dist / d.scale).clamp(1.5, 8.0),
+      _camera = Camera(
+        rotY:   c0.rotY,
+        rotX:   c0.rotX,
+        dist:   c0.dist,
+        target: Vec3(
+          (c0.target.x - cosY * dxW - sinY * sinX * dyW).clamp(-limXZ, limXZ),
+          (c0.target.y + cosX * dyW)
+              .clamp(-_panMargem, geo.height + _panMargem),
+          (c0.target.z + sinY * dxW - cosY * sinX * dyW).clamp(-limXZ, limXZ),
+        ),
       );
     });
   }
@@ -535,9 +603,10 @@ class _Edr300SceneState extends State<Edr300Scene>
     if (!_isDragging && _gestureOrigin != null) {
       _tryFireTap(_gestureOrigin!);
     }
-    _gestureOrigin = null;
-    _cameraAtStart = null;
-    _isDragging    = false;
+    _gestureOrigin   = null;
+    _cameraAtStart   = null;
+    _isDragging      = false;
+    _gesturePointers = 0;
   }
 
   void _tryFireTap(Offset globalTap) {
