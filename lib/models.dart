@@ -140,6 +140,22 @@ const int fileirasPalete   = 3;   // posições na profundidade (1,00 m ÷ 3 ≈
 
 bool ehPalete(int estanteNum) => estanteNum >= paleteNumMin;
 
+/// Rótulo curto de uma estrutura, do jeito que ela é etiquetada na loja:
+/// "G7", "E5", "P101". Paletes reutilizam local_tipo 'estante' no banco, mas
+/// nunca são apresentados como estante ao usuário.
+String rotuloCurtoEstrutura(String tipo, int numero) => tipo == 'gondola'
+    ? 'G$numero'
+    : ehPalete(numero)
+        ? 'P$numero'
+        : 'E$numero';
+
+/// Nome por extenso da estrutura: "Gôndola 7", "Estante 5", "Palete 101".
+String nomeEstrutura(String tipo, int numero) => tipo == 'gondola'
+    ? 'Gôndola $numero'
+    : ehPalete(numero)
+        ? 'Palete $numero'
+        : 'Estante $numero';
+
 /// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
 /// filosofia do faceFromPos): cada seção contribui com 2 posições.
 int posicaoGlobalParede(int estanteNum, int coluna) =>
