@@ -215,27 +215,38 @@ class _LojaPageState extends State<LojaPage> {
     _searchFocus.unfocus();
   }
 
-  Future<void> _verDetalhes(int idx) async {
-    final item = itensLoja[idx];
+  /// Abre a cena da estrutura selecionada. [idx] é o índice em [itensLoja]
+  /// quando o toque veio do mapa; quando é null, a estrutura do produto
+  /// encontrado na busca NÃO tem maquete no mapa (paletes e estante 5, que só
+  /// existem no carrossel de detalhes) e o endereço do próprio produto é o que
+  /// diz onde abrir — sem isso o "Ver detalhes" ficava inalcançável para esses
+  /// endereços, mesmo a busca achando o produto.
+  Future<void> _verDetalhes([int? idx]) async {
+    final item   = idx != null ? itensLoja[idx] : null;
+    final tipo   = item?.tipo   ?? _produtoSelecionado?.tipo;
+    final numero = item?.numero ?? _produtoSelecionado?.numero;
+    if (tipo == null || numero == null) return;
+    await _abrirEstrutura(tipo, numero);
+  }
 
+  Future<void> _abrirEstrutura(String tipo, int numero) async {
     if (_modoConferencia) {
       // O retângulo da parede representa as 6 seções (13–18): acende os
       // pendentes de todas ao abrir a cena pela seção 1.
       final codigos = <String>{};
-      if (item.tipo == 'estante' && ehEstanteParede(item.numero)) {
+      if (tipo == 'estante' && ehEstanteParede(numero)) {
         for (var n = estanteParedeMin; n <= estanteParedeMax; n++) {
           codigos.addAll(
               _conferencia?.estruturas['estante:$n']?.codigos ?? const {});
         }
       } else {
-        codigos.addAll(_conferencia
-                ?.estruturas['${item.tipo}:${item.numero}']?.codigos ??
-            const {});
+        codigos.addAll(
+            _conferencia?.estruturas['$tipo:$numero']?.codigos ?? const {});
       }
       await Navigator.push(context, MaterialPageRoute(
-        builder: (_) => item.tipo == 'gondola'
-            ? GondolaPage(gondolaInicial: item.numero, codigosConferencia: codigos)
-            : EstantePage(estanteInicial: item.numero, codigosConferencia: codigos),
+        builder: (_) => tipo == 'gondola'
+            ? GondolaPage(gondolaInicial: numero, codigosConferencia: codigos)
+            : EstantePage(estanteInicial: numero, codigosConferencia: codigos),
       ));
       // O usuário pode ter confirmado itens no app de contagem enquanto
       // estava na cena — recarrega pra refletir o estado atual ao voltar.
@@ -254,10 +265,10 @@ class _LojaPageState extends State<LojaPage> {
             andar:         _produtoSelecionado!.andar,
           )
         : null;
-    if (item.tipo == 'gondola') {
+    if (tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
-          gondolaInicial:   item.numero,
+          gondolaInicial:   numero,
           produtoDestacado: produto,
         ),
       ));
@@ -266,7 +277,7 @@ class _LojaPageState extends State<LojaPage> {
       // sem produto, o retângulo da parede abre pela seção 1 (E13).
       final estanteInicial = produto != null && produto.tipo == 'estante'
           ? produto.numero
-          : item.numero;
+          : numero;
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => EstantePage(
           estanteInicial:   estanteInicial,
@@ -304,6 +315,22 @@ class _LojaPageState extends State<LojaPage> {
       _conferencia           = resultado;
       _carregandoConferencia = false;
     });
+  }
+
+  /// Estruturas com pendentes que não têm maquete no mapa (paletes, estante 5).
+  /// O badge delas não tem retângulo onde pousar, então sumiriam do Modo
+  /// Conferência sem sequer cair na lista "sem endereço" — elas TÊM endereço
+  /// cadastrado. Viram um atalho próprio no banner.
+  List<EstruturaConferencia> get _estruturasForaDoMapa {
+    final conferencia = _conferencia;
+    if (conferencia == null) return const [];
+    final fora = conferencia.estruturas.values.where((e) {
+      final numeroMapa = numeroNoMapaLoja(e.tipo, e.numero);
+      return !itensLoja
+          .any((it) => it.tipo == e.tipo && it.numero == numeroMapa);
+    }).toList();
+    fora.sort((a, b) => a.numero.compareTo(b.numero));
+    return fora;
   }
 
   // idx (em itensLoja) → nº de pendentes na estrutura, pronto pro painter.
@@ -406,6 +433,93 @@ class _LojaPageState extends State<LojaPage> {
     if (ok && _modoConferencia) _carregarConferencia();
   }
 
+  void _mostrarForaDoMapa() {
+    final estruturas = _estruturasForaDoMapa;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF141a22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Fora do mapa geral',
+                style: TextStyle(
+                    color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Estruturas com pendentes que não são desenhadas no mapa '
+                '(paletes e estante 5). Toque para abrir a cena.',
+                style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: estruturas.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: Color(0xFF232f3a), height: 8),
+                  itemBuilder: (_, i) {
+                    final e = estruturas[i];
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _abrirEstrutura(e.tipo, e.numero);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: corConferenciaCiano.withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                rotuloCurtoEstrutura(e.tipo, e.numero),
+                                style: const TextStyle(
+                                    color: corConferenciaCiano,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${nomeEstrutura(e.tipo, e.numero)} · '
+                                '${e.itens.length} pendente(s)',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 13),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right,
+                                color: Color(0xFF8a9aa8), size: 20),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _limparBusca() {
     _debounce?.cancel();
     _searchCtrl.clear();
@@ -424,6 +538,10 @@ class _LojaPageState extends State<LojaPage> {
   @override
   Widget build(BuildContext context) {
     final item = _selecionadoIdx != null ? itensLoja[_selecionadoIdx!] : null;
+    // O card também aparece quando a busca achou o produto numa estrutura sem
+    // maquete no mapa (item == null): é a única porta de entrada para os
+    // detalhes de paletes e da estante 5.
+    final mostrarCard = item != null || _produtoSelecionado != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0b0c0e),
@@ -488,6 +606,8 @@ class _LojaPageState extends State<LojaPage> {
                           resultado:  _conferencia,
                           onRefresh:  _carregarConferencia,
                           onVerSemEndereco: _mostrarSemEndereco,
+                          foraDoMapa: _estruturasForaDoMapa,
+                          onVerForaDoMapa: _mostrarForaDoMapa,
                         ),
                       ),
                     // Título / dica
@@ -506,7 +626,7 @@ class _LojaPageState extends State<LojaPage> {
           ),
 
           // ── Card inferior ────────────────────────────────────────────────
-          if (item != null && !_modoConferencia)
+          if (mostrarCard && !_modoConferencia)
             Positioned(
               bottom: 24,
               left: 20,
@@ -514,7 +634,7 @@ class _LojaPageState extends State<LojaPage> {
               child: _LocationCard(
                 item:    item,
                 produto: _produtoSelecionado,
-                onVerDetalhes: () => _verDetalhes(_selecionadoIdx!),
+                onVerDetalhes: () => _verDetalhes(_selecionadoIdx),
               ),
             ),
         ],
@@ -720,12 +840,18 @@ class _BannerConferencia extends StatelessWidget {
   final ModoConferenciaResultado? resultado;
   final VoidCallback              onRefresh;
   final VoidCallback              onVerSemEndereco;
+  // Estruturas com pendentes que não são desenhadas no mapa (paletes,
+  // estante 5): não têm retângulo pra piscar, então ganham um atalho próprio.
+  final List<EstruturaConferencia> foraDoMapa;
+  final VoidCallback               onVerForaDoMapa;
 
   const _BannerConferencia({
     required this.carregando,
     required this.resultado,
     required this.onRefresh,
     required this.onVerSemEndereco,
+    this.foraDoMapa = const [],
+    required this.onVerForaDoMapa,
   });
 
   @override
@@ -736,6 +862,7 @@ class _BannerConferencia extends StatelessWidget {
     final temFiltrados   = r != null && r.totalFiltradosDeposito > 0;
     final filtradosTexto =
         temFiltrados ? ' · ${r.totalFiltradosDeposito} depósito (filtrados)' : '';
+    final temForaDoMapa  = !carregando && foraDoMapa.isNotEmpty;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -770,6 +897,30 @@ class _BannerConferencia extends StatelessWidget {
                   ),
                 ),
         ),
+        if (temForaDoMapa) ...[
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onVerForaDoMapa,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0x33d9a441),
+                border: Border.all(color: const Color(0x99d9a441)),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.location_off_outlined,
+                    size: 12, color: Color(0xFFd9a441)),
+                const SizedBox(width: 4),
+                Text(
+                  '${foraDoMapa.length} fora do mapa',
+                  style: const TextStyle(color: Color(0xFFd9a441), fontSize: 11),
+                ),
+              ]),
+            ),
+          ),
+        ],
+        const SizedBox(width: 4),
         IconButton(
           icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
           onPressed: carregando ? null : onRefresh,
@@ -1003,7 +1154,9 @@ class _HexClipper extends CustomClipper<Path> {
 // ── _LocationCard ─────────────────────────────────────────────────────────────
 
 class _LocationCard extends StatelessWidget {
-  final ItemLoja           item;
+  // null quando a estrutura do produto encontrado não é desenhada no mapa
+  // (paletes e estante 5): aí o endereço do próprio produto descreve o card.
+  final ItemLoja?          item;
   final ProdutoEncontrado? produto;
   final VoidCallback?      onVerDetalhes;
 
@@ -1011,25 +1164,36 @@ class _LocationCard extends StatelessWidget {
     required this.item,
     this.produto,
     this.onVerDetalhes,
-  });
+  }) : assert(item != null || produto != null);
 
   @override
   Widget build(BuildContext context) {
-    final cor    = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
-    final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
-    final ehParede = item.tipo == 'estante' && ehEstanteParede(item.numero);
-    final tipoLabel = item.tipo == 'gondola'
+    final foraDoMapa = item == null;
+    final tipo       = item?.tipo   ?? produto!.tipo;
+    final numero     = item?.numero ?? produto!.numero;
+
+    final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
+    final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
+    final cor     = tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+    final prefixo = tipo == 'gondola'
+        ? 'G'
+        : ehPaleteAqui
+            ? 'P'
+            : 'E';
+    final tipoLabel = tipo == 'gondola'
         ? 'Gôndola'
-        : ehParede
-            ? 'Estante Parede'
-            : 'Estante';
+        : ehPaleteAqui
+            ? 'Palete'
+            : ehParede
+                ? 'Estante Parede'
+                : 'Estante';
     // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
     // resultado da busca quando há produto selecionado.
     final numeroTitulo = ehParede
         ? 'E$estanteParedeMin–E$estanteParedeMax'
-        : '$prefixo${item.numero}';
+        : '$prefixo$numero';
     final numeroTexto =
-        produto != null && produto!.tipo == item.tipo ? produto!.numero : item.numero;
+        produto != null && produto!.tipo == tipo ? produto!.numero : numero;
 
     return Container(
       decoration: BoxDecoration(
@@ -1070,7 +1234,7 @@ class _LocationCard extends StatelessWidget {
                 ? '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
                 : ehParede
                     ? '$tipoLabel · 6 seções · P1–P12'
-                    : '$tipoLabel nº ${item.numero}',
+                    : '$tipoLabel nº $numero',
             style: const TextStyle(
               color: Color(0xFFb0ada8),
               fontSize: 12,
@@ -1079,6 +1243,34 @@ class _LocationCard extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
+          // Sem maquete no mapa não há retângulo piscando pra guiar o olho:
+          // o aviso explica por que nada acendeu e o botão abaixo continua
+          // levando à cena da estrutura.
+          if (foraDoMapa) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0x33d9a441),
+                border: Border.all(color: const Color(0x66d9a441)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.info_outline, size: 13, color: Color(0xFFd9a441)),
+                  SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Esta estrutura não é desenhada no mapa geral — '
+                      'abra os detalhes para ver a posição.',
+                      style: TextStyle(color: Color(0xFFd9a441), fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (onVerDetalhes != null) ...[
             const SizedBox(height: 12),
             SizedBox(

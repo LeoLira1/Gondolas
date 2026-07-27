@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gondola_camda/loja_scene.dart';
 import 'package:gondola_camda/models.dart';
 import 'package:gondola_camda/palete_registry.dart';
 import 'package:gondola_camda/palete_scene.dart';
@@ -155,6 +156,47 @@ void main() {
     expect(ordemNavegacaoEstantes.contains(3), isFalse);
     expect(ordemNavegacaoEstantes.contains(4), isFalse);
     expect(ordemNavegacaoEstantes.sublist(2, 8), [13, 14, 15, 16, 17, 18]);
+  });
+
+  // ── Fora do mapa geral ─────────────────────────────────────────────────────
+
+  test('paletes e estante 5 são navegáveis mas não existem no mapa geral',
+      () async {
+    await PaleteRegistry().criar(apelido: 'A');   // 101
+
+    // O mapa (itensLoja) é uma lista fixa de maquetes; palete e estante 5 não
+    // aparecem lá, mas são paradas legítimas do carrossel. É por isso que a
+    // busca precisa oferecer "Ver detalhes" sem depender de um item do mapa.
+    for (final n in [5, paleteNumMin]) {
+      expect(
+        itensLoja.any((it) => it.tipo == 'estante' && it.numero == n),
+        isFalse,
+        reason: 'estante/palete $n passou a ter maquete no mapa',
+      );
+      expect(ordemNavegacaoEstantes.contains(n), isTrue);
+    }
+  });
+
+  test('estruturas do mapa continuam achando o próprio item', () {
+    // Contraprova do teste acima: quem tem maquete é encontrado normalmente,
+    // então o caminho "fora do mapa" só vale para quem realmente não tem.
+    for (final n in [1, 2, 6, 7, 8]) {
+      final numeroMapa = numeroNoMapaLoja('estante', n);
+      expect(
+        itensLoja.any((it) => it.tipo == 'estante' && it.numero == numeroMapa),
+        isTrue,
+        reason: 'estante $n sumiu do mapa',
+      );
+    }
+  });
+
+  test('palete nunca é apresentado como estante ao usuário', () {
+    expect(rotuloCurtoEstrutura('estante', paleteNumMin), 'P101');
+    expect(nomeEstrutura('estante', paleteNumMin), 'Palete 101');
+    expect(rotuloCurtoEstrutura('estante', 5), 'E5');
+    expect(nomeEstrutura('estante', 5), 'Estante 5');
+    expect(rotuloCurtoEstrutura('gondola', 7), 'G7');
+    expect(nomeEstrutura('gondola', 7), 'Gôndola 7');
   });
 
   // ── Geometria ──────────────────────────────────────────────────────────────
