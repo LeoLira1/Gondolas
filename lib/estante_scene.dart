@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'gondola_scene.dart';
 import 'models.dart';
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CelulaEstante
@@ -370,7 +371,8 @@ class EstanteScene extends StatefulWidget {
   State<EstanteScene> createState() => _EstanteSceneState();
 }
 
-class _EstanteSceneState extends State<EstanteScene> {
+class _EstanteSceneState extends State<EstanteScene>
+    with SceneGestureGuard<EstanteScene> {
   Camera _camera = const Camera(
     rotY:   0.5,
     rotX:   0.25,
@@ -379,27 +381,25 @@ class _EstanteSceneState extends State<EstanteScene> {
   );
   final _painterKey = GlobalKey();
 
-  Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
-  bool    _isDragging = false;
-
-  static const double _dragThreshold = 7.0;
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin        = d.focalPoint;
+    beginGesture(d);
     _cameraAtGestureStart = _camera;
-    _isDragging           = false;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtGestureStart;
     if (origin == null || c0 == null) return;
 
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtGestureStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
 
     setState(() {
       _camera = c0.copyWith(
@@ -410,13 +410,9 @@ class _EstanteSceneState extends State<EstanteScene> {
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin        = null;
-    _cameraAtGestureStart = null;
-    _isDragging           = false;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _tryFireTap(tap!);
   }
 
   void _tryFireTap(Offset globalTap) {

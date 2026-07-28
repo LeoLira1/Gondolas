@@ -4,6 +4,7 @@ import 'gondola_scene.dart'
     show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
         corEnderecoDivergentePositiva;
 import 'models.dart';
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CelulaPalete — uma das 15 posições de produto do palete
@@ -452,7 +453,8 @@ class PaleteScene extends StatefulWidget {
   State<PaleteScene> createState() => _PaleteSceneState();
 }
 
-class _PaleteSceneState extends State<PaleteScene> {
+class _PaleteSceneState extends State<PaleteScene>
+    with SceneGestureGuard<PaleteScene> {
   // Pivô no CENTRO do palete (0,60 / 0,50), não no canto (0,0): a geometria é
   // escrita com as medidas reais a partir da origem, então orbitar (0,0,0)
   // faria o palete descrever um arco pela tela em vez de girar no lugar — era
@@ -472,27 +474,25 @@ class _PaleteSceneState extends State<PaleteScene> {
   );
   final _painterKey = GlobalKey();
 
-  Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
-  bool    _isDragging = false;
-
-  static const double _dragThreshold = 7.0;
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin        = d.focalPoint;
+    beginGesture(d);
     _cameraAtGestureStart = _camera;
-    _isDragging           = false;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtGestureStart;
     if (origin == null || c0 == null) return;
 
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtGestureStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
 
     setState(() {
       // O palete fica no chão e é acessível por todos os lados: a órbita em Y
@@ -506,13 +506,9 @@ class _PaleteSceneState extends State<PaleteScene> {
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin        = null;
-    _cameraAtGestureStart = null;
-    _isDragging           = false;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _tryFireTap(tap!);
   }
 
   void _tryFireTap(Offset globalTap) {
