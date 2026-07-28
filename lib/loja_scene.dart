@@ -10,6 +10,7 @@ import 'models.dart'
     show colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
          ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
          expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum;
+import 'scene_gestures.dart';
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
 /// Parede (13–18) são um retângulo único no mapa, registrado como o número da
@@ -736,7 +737,8 @@ class LojaScene extends StatefulWidget {
   State<LojaScene> createState() => _LojaSceneState();
 }
 
-class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
+class _LojaSceneState extends State<LojaScene>
+    with TickerProviderStateMixin, SceneGestureGuard<LojaScene> {
   Camera _camera = Camera(
     rotY:   0.4,
     rotX:   0.85,
@@ -745,11 +747,7 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
   );
 
   final _key = GlobalKey();
-  Offset? _gestureOrigin;
   Camera? _cam0;
-  bool    _isDragging = false;
-  int     _gesturePointers = 1;
-  static const double _kDrag = 7.0;
 
   late final Ticker _ticker;
   double _pulseT = 0;
@@ -823,29 +821,22 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
   // ── Gestures ──────────────────────────────────────────────────────────────
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin   = d.focalPoint;
-    _cam0            = _camera;
-    _isDragging      = false;
-    _gesturePointers = d.pointerCount;
-    _animTo          = null; // usuário assume o controle da câmera
+    beginGesture(d);
+    _cam0   = _camera;
+    _animTo = null; // usuário assume o controle da câmera
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    if (_gestureOrigin == null || _cam0 == null) return;
+    final origin = gestureOrigin;
+    if (origin == null || _cam0 == null) return;
 
-    // Reancora o gesto quando muda o número de dedos (evita salto do focal point)
-    if (d.pointerCount != _gesturePointers) {
-      _gestureOrigin   = d.focalPoint;
-      _cam0            = _camera;
-      _gesturePointers = d.pointerCount;
+    if (reanchorIfPointersChanged(d)) {
+      _cam0 = _camera;
+      return;
     }
+    markDragIfMoved(d);
 
-    final delta = d.focalPoint - _gestureOrigin!;
-    if (delta.distance > _kDrag ||
-        (d.scale - 1.0).abs() > 0.02 ||
-        d.pointerCount > 1) {
-      _isDragging = true;
-    }
+    final delta = d.focalPoint - origin;
 
     if (d.pointerCount >= 2) {
       // Dois dedos: orbita (arrastar) + zoom (pinça)
@@ -885,13 +876,9 @@ class _LojaSceneState extends State<LojaScene> with TickerProviderStateMixin {
     }
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryHitTest(_gestureOrigin!);
-    }
-    _gestureOrigin = null;
-    _cam0          = null;
-    _isDragging    = false;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _tryHitTest(tap!);
   }
 
   void _tryHitTest(Offset globalTap) {

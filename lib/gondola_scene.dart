@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'models.dart' show faceFromPos, chaveEnderecoEstoque, corConferenciaCiano;
+import 'scene_gestures.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Faces do hexágono — convenção fixa para todas as gôndolas
@@ -550,7 +551,8 @@ class GondolaScene extends StatefulWidget {
   State<GondolaScene> createState() => _GondolaSceneState();
 }
 
-class _GondolaSceneState extends State<GondolaScene> {
+class _GondolaSceneState extends State<GondolaScene>
+    with SceneGestureGuard<GondolaScene> {
   Camera _camera = const Camera();
   final  _painterKey = GlobalKey();
 
@@ -574,28 +576,25 @@ class _GondolaSceneState extends State<GondolaScene> {
     }
   }
 
-  Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
-  bool    _isDragging = false;
-
-  static const double _dragThreshold = 7.0;
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin        = d.focalPoint;
+    beginGesture(d);
     _cameraAtGestureStart = _camera;
-    _isDragging           = false;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtGestureStart;
     if (origin == null || c0 == null) return;
 
-    final delta = d.focalPoint - origin;
-    // Multi-finger or large movement → drag (not a tap)
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtGestureStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
 
     setState(() {
       _camera = c0.copyWith(
@@ -606,13 +605,9 @@ class _GondolaSceneState extends State<GondolaScene> {
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _handleTap(_gestureOrigin!);
-    }
-    _gestureOrigin        = null;
-    _cameraAtGestureStart = null;
-    _isDragging           = false;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _handleTap(tap!);
   }
 
   void _handleTap(Offset globalTap) {

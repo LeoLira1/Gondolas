@@ -7,6 +7,7 @@ import 'gondola_scene.dart'
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
          expositorMonitorNum, letraEstanteCelula;
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Expositor Monitor Produtos Agropecuários — estrutura escalonada: laterais
@@ -600,15 +601,12 @@ class ExpositorMonitorScene extends StatefulWidget {
 }
 
 class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, SceneGestureGuard<ExpositorMonitorScene> {
   late Ticker _ticker;
   late Camera _camera;
 
   final _painterKey = GlobalKey();
-  Offset? _gestureOrigin;
   Camera? _cameraAtStart;
-  bool    _isDragging = false;
-  static const double _dragThreshold = 6.0;
 
   @override
   void initState() {
@@ -646,19 +644,22 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin = d.focalPoint;
+    beginGesture(d);
     _cameraAtStart = _camera;
-    _isDragging    = false;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtStart;
     if (origin == null || c0 == null) return;
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
     setState(() {
       _camera = c0.copyWith(
         rotY: c0.rotY - delta.dx * 0.008,
@@ -668,13 +669,9 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin = null;
-    _cameraAtStart = null;
-    _isDragging    = false;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _tryFireTap(tap!);
   }
 
   void _tryFireTap(Offset globalTap) {

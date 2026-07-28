@@ -4,6 +4,7 @@ import 'gondola_scene.dart'
     show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
         corEnderecoDivergentePositiva;
 import 'models.dart';
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CelulaParede — célula de produto de uma seção da Estante Parede
@@ -427,7 +428,8 @@ class EstanteParedeScene extends StatefulWidget {
   State<EstanteParedeScene> createState() => _EstanteParedeSceneState();
 }
 
-class _EstanteParedeSceneState extends State<EstanteParedeScene> {
+class _EstanteParedeSceneState extends State<EstanteParedeScene>
+    with SceneGestureGuard<EstanteParedeScene> {
   static Camera _cameraInicial() => Camera(
         rotY:   0.35,
         rotX:   0.12,
@@ -438,12 +440,8 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene> {
   Camera _camera = _cameraInicial();
   final _painterKey = GlobalKey();
 
-  Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
-  bool    _isDragging = false;
-  int     _gesturePointers = 0;
 
-  static const double _dragThreshold = 7.0;
   // A peça é fixa na parede: a órbita não passa para trás dela.
   static const double _rotYLim = 1.35;
 
@@ -475,39 +473,25 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene> {
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin        = d.focalPoint;
+    beginGesture(d);
     _cameraAtGestureStart = _camera;
-    _isDragging           = false;
-    _gesturePointers      = d.pointerCount;
   }
 
   // Mesmo esquema de câmera da Estante 6 (Edr300Scene) e do mapa da loja: um
   // dedo arrasta (pan — o ponto tocado acompanha o dedo), dois dedos orbitam e
   // dão zoom com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtGestureStart;
     if (origin == null || c0 == null) return;
 
-    // Reancora o gesto quando muda o número de dedos, senão o focal point salta
-    // ao encostar/levantar o segundo dedo.
-    if (d.pointerCount != _gesturePointers) {
-      _gestureOrigin        = d.focalPoint;
+    if (reanchorIfPointersChanged(d)) {
       _cameraAtGestureStart = _camera;
-      _gesturePointers      = d.pointerCount;
-      // Encostar o segundo dedo já conta como gesto: sem isso um toque de dois
-      // dedos terminaria em _onScaleEnd com _isDragging false e dispararia um
-      // tap na célula.
-      if (d.pointerCount > 1) _isDragging = true;
       return;
     }
+    markDragIfMoved(d);
 
     final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold ||
-        (d.scale - 1.0).abs() > 0.02 ||
-        d.pointerCount > 1) {
-      _isDragging = true;
-    }
 
     if (d.pointerCount >= 2) {
       // Dois dedos: orbita (arrastar) + zoom (pinça). O limite de rotY continua
@@ -552,14 +536,9 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene> {
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin        = null;
-    _cameraAtGestureStart = null;
-    _isDragging           = false;
-    _gesturePointers      = 0;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _tryFireTap(tap!);
   }
 
   void _tryFireTap(Offset globalTap) {

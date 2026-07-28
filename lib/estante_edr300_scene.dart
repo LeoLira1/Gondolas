@@ -7,6 +7,7 @@ import 'gondola_scene.dart'
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
         letraDoIndice;
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Edr300Cell — célula de produto na estante metálica
@@ -452,16 +453,12 @@ class Edr300Scene extends StatefulWidget {
 }
 
 class _Edr300SceneState extends State<Edr300Scene>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, SceneGestureGuard<Edr300Scene> {
   late Ticker _ticker;
   late Camera _camera;
 
   final _painterKey = GlobalKey();
-  Offset? _gestureOrigin;
   Camera? _cameraAtStart;
-  bool    _isDragging = false;
-  int     _gesturePointers = 0;
-  static const double _dragThreshold = 6.0;
 
   // Zoom: mesma folga do mapa da loja — dá pra chegar bem perto de uma caixa
   // e também afastar até a estante inteira caber na tela.
@@ -526,35 +523,25 @@ class _Edr300SceneState extends State<Edr300Scene>
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin   = d.focalPoint;
-    _cameraAtStart   = _camera;
-    _isDragging      = false;
-    _gesturePointers = d.pointerCount;
+    beginGesture(d);
+    _cameraAtStart = _camera;
   }
 
   // Mesmo esquema de câmera do mapa da loja (LojaScene): um dedo arrasta
   // (pan — o ponto tocado acompanha o dedo), dois dedos orbitam e dão zoom
   // com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    if (_gestureOrigin == null || _cameraAtStart == null) return;
+    final origin = gestureOrigin;
+    final c0     = _cameraAtStart;
+    if (origin == null || c0 == null) return;
 
-    // Reancora o gesto quando muda o número de dedos, senão o focal point
-    // salta ao encostar/levantar o segundo dedo.
-    if (d.pointerCount != _gesturePointers) {
-      _gestureOrigin   = d.focalPoint;
-      _cameraAtStart   = _camera;
-      _gesturePointers = d.pointerCount;
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
 
-    final origin = _gestureOrigin!;
-    final c0     = _cameraAtStart!;
-    final delta  = d.focalPoint - origin;
-
-    if (delta.distance > _dragThreshold ||
-        (d.scale - 1.0).abs() > 0.02 ||
-        d.pointerCount > 1) {
-      _isDragging = true;
-    }
+    final delta = d.focalPoint - origin;
 
     if (d.pointerCount >= 2) {
       // Dois dedos: orbita (arrastar) + zoom (pinça)
@@ -599,14 +586,9 @@ class _Edr300SceneState extends State<Edr300Scene>
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin   = null;
-    _cameraAtStart   = null;
-    _isDragging      = false;
-    _gesturePointers = 0;
+  void _onScaleEnd(ScaleEndDetails d) {
+    final tap = gestureOrigin;
+    if (endGesture(d)) _tryFireTap(tap!);
   }
 
   void _tryFireTap(Offset globalTap) {
