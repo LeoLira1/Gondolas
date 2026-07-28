@@ -876,11 +876,6 @@ class _LojaSceneState extends State<LojaScene>
     }
   }
 
-  void _onScaleEnd(ScaleEndDetails d) {
-    final tap = gestureOrigin;
-    if (endGesture(d)) _tryHitTest(tap!);
-  }
-
   void _tryHitTest(Offset globalTap) {
     final rb = _key.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
@@ -973,20 +968,24 @@ class _LojaSceneState extends State<LojaScene>
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _key,
-        painter: LojaPainter(
-          _camera,
-          selecionadoIdx:       widget.selecionadoIdx,
-          pulseT:               _pulseT,
-          modoConferencia:      widget.modoConferencia,
-          contagemConferencia:  widget.contagemConferencia,
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryHitTest(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _key,
+          painter: LojaPainter(
+            _camera,
+            selecionadoIdx:       widget.selecionadoIdx,
+            pulseT:               _pulseT,
+            modoConferencia:      widget.modoConferencia,
+            contagemConferencia:  widget.contagemConferencia,
+          ),
+          child: const SizedBox.expand(),
         ),
-        child: const SizedBox.expand(),
       ),
     );
   }

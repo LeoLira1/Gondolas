@@ -755,11 +755,6 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails d) {
-    final tap = gestureOrigin;
-    if (endGesture(d)) _tryFireTap(tap!);
-  }
-
   void _tryFireTap(Offset globalTap) {
     final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
@@ -879,17 +874,21 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
       }
     }
 
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _painterKey,
-        painter: ExpositorMagnojetPainter(_camera, widget.geometry,
-            wireframe:  widget.wireframe,
-            showLabels: widget.showLabels,
-            extraFaces: extraFaces),
-        child:   const SizedBox.expand(),
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryFireTap(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _painterKey,
+          painter: ExpositorMagnojetPainter(_camera, widget.geometry,
+              wireframe:  widget.wireframe,
+              showLabels: widget.showLabels,
+              extraFaces: extraFaces),
+          child:   const SizedBox.expand(),
+        ),
       ),
     );
   }

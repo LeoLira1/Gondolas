@@ -1,40 +1,51 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 /// Contabilidade do gesto de câmera das cenas 3D.
 ///
-/// Nenhuma cena usa `onTap`: todas montam um único [GestureDetector] com
-/// `onScaleStart/Update/End`, porque o mesmo gesto precisa orbitar, dar zoom,
-/// arrastar *e* selecionar. O toque é então **sintetizado** no fim do gesto —
-/// se o dedo não arrastou, aquilo era um tap.
+/// Nenhuma cena usa `onTap`: todas montam um [GestureDetector] com
+/// `onScaleStart/Update`, porque o mesmo gesto precisa orbitar, dar zoom,
+/// arrastar *e* selecionar. O toque é então **sintetizado** — se a mão saiu da
+/// tela sem ter arrastado nem usado dois dedos, aquilo era um toque.
 ///
-/// O risco desse esquema é o inverso: um gesto de câmera que mal se moveu
-/// termina indistinguível de um toque e dispara a conferência do produto sem
-/// que o usuário tenha pedido. Este mixin concentra as guardas que evitam
-/// isso, para que não fiquem valendo em umas cenas e faltando em outras.
-///
-/// A armadilha principal está no [ScaleGestureRecognizer]: ele reconfigura o
-/// gesto sempre que o número de dedos muda, e nessa reconfiguração **dispara
-/// um `onScaleEnd`** — antes de qualquer `onScaleUpdate`. Encostar o segundo
-/// dedo para dar zoom produz esta sequência:
+/// A decisão vem dos eventos de ponteiro crus, de um [Listener] montado por
+/// fora do [GestureDetector], e **não** da sequência de callbacks do
+/// [ScaleGestureRecognizer], que não serve para contar dedos: ele reconfigura
+/// o gesto a cada mudança no número de dedos, disparando `onScaleEnd` e
+/// `onScaleStart` no meio de um toque que continua, e não dispara `onEnd`
+/// nenhum quando o último dedo sai. Uma pinça inteira produz:
 ///
 /// ```
-/// onScaleStart pointerCount=1
-/// onScaleEnd   pointerCount=2   ← nenhum update rodou ainda
-/// onScaleStart pointerCount=2
-/// onScaleUpdate…
-/// onScaleEnd   pointerCount=1
+/// onScaleStart p=1
+/// onScaleEnd   p=2     ← reconfiguração ao encostar o 2º dedo
+/// onScaleStart p=2
+/// onScaleUpdate p=2 …
+/// onScaleEnd   p=1     ← reconfiguração ao soltar o 1º dedo
+/// (levanta o último dedo → nenhum callback)
 /// ```
 ///
-/// enquanto um toque de verdade é só `onScaleStart pointerCount=1` seguido de
-/// `onScaleEnd pointerCount=0`.
+/// Quem tentar deduzir daí quando a mão saiu da tela erra dos dois lados: se
+/// tratar o `onScaleEnd p=2` como fim de gesto, encostar o segundo dedo para
+/// dar zoom abre a conferência do produto sozinho; se esperar um `onScaleEnd`
+/// com `pointerCount == 0`, ele nunca chega e o toque seguinte é engolido.
 ///
-/// Uma flag de arrasto calculada dentro do `onScaleUpdate` chega tarde demais
-/// para aquele primeiro `onScaleEnd`: era ele que abria a conferência do
-/// produto ao dar zoom. Por isso a decisão final olha o `pointerCount` do
-/// próprio `onScaleEnd` — só houve toque quando **todos** os dedos já saíram
-/// da tela.
+/// O [Listener] não tem esse problema: todo dedo que encosta na tela também
+/// sai dela, então [aoSoltarDedo] sempre chega e sempre zera o estado.
 ///
 /// A câmera continua sendo de cada cena — o mixin não sabe projetar nada. Uso:
+///
+/// ```dart
+/// Listener(
+///   onPointerDown:   aoEncostarDedo,
+///   onPointerUp:     (e) { if (aoSoltarDedo(e)) _handleTap(pontoDoToque!); },
+///   onPointerCancel: aoSoltarDedo,
+///   child: GestureDetector(
+///     onScaleStart:  _onScaleStart,
+///     onScaleUpdate: _onScaleUpdate,
+///     child: …,
+///   ),
+/// )
+/// ```
 ///
 /// ```dart
 /// void _onScaleStart(ScaleStartDetails d) {
@@ -53,30 +64,41 @@ import 'package:flutter/widgets.dart';
 ///   markDragIfMoved(d);
 ///   ... matemática de câmera ...
 /// }
-///
-/// void _onScaleEnd(ScaleEndDetails d) {
-///   final tap = gestureOrigin;
-///   if (endGesture(d)) _handleTap(tap!);
-/// }
 /// ```
 mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
-  /// Ponto focal do início do gesto. É ele — e não o ponto onde o dedo saiu —
-  /// que alimenta o hit-test, senão um tremor de alguns pixels moveria o alvo.
+  /// Posição do primeiro dedo a encostar na tela — o alvo do hit-test.
+  ///
+  /// É o ponto onde a mão *pousou*, não onde saiu: um toque que arrasta uns
+  /// poucos pixels ainda abre o endereço que o usuário mirou.
+  Offset? pontoDoToque;
+
+  /// Ponto focal do início do trecho de gesto atual, para a matemática de
+  /// câmera. Distinto de [pontoDoToque]: o recognizer reancora este a cada
+  /// mudança no número de dedos, e a câmera precisa acompanhar.
   Offset? gestureOrigin;
+
+  /// Ponteiros com o dedo encostado na tela, por id.
+  ///
+  /// Um [Set] e não um contador: ids são únicos, então um evento repetido ou
+  /// fora de ordem não desequilibra a conta.
+  final Set<int> _dedos = <int>{};
+
+  /// Instante do último evento de dedo, para detectar registro obsoleto.
+  Duration _ultimoEventoDeDedo = Duration.zero;
 
   bool _isDragging = false;
   int  _pointers   = 0;
 
-  /// Houve mais de um dedo em algum momento desde que a mão encostou na tela.
+  /// Depois deste tempo sem nenhum evento, um dedo ainda registrado é lixo.
   ///
-  /// Precisa ser separado de [_isDragging] porque o recognizer parte o gesto
-  /// em vários start/end: quem dá zoom, solta um dedo e levanta o outro
-  /// produz um `onScaleStart pointerCount=1` no fim, que zeraria [_isDragging]
-  /// e deixaria o último trecho — de um dedo só, quase parado — virar toque.
-  /// Esta trava só cai quando a tela fica de fato sem nenhum dedo.
-  bool _houveMultiToque = false;
+  /// Um dedo parado não gera eventos, mas ninguém segura o dedo por segundos e
+  /// só então começa outro toque — o que existe de verdade é o `PointerUp` que
+  /// se perde (a cena reconstruída no meio do toque, por exemplo). Sem essa
+  /// janela, um dedo fantasma faria a cena parar de responder para sempre:
+  /// nenhum toque seguinte chegaria a ser o "último dedo".
+  static const Duration _registroObsoleto = Duration(seconds: 3);
 
-  /// Deslocamento a partir do qual o gesto deixa de poder virar tap.
+  /// Deslocamento a partir do qual o gesto deixa de poder virar toque.
   ///
   /// As cenas usavam 6.0 e 7.0, baixo demais para o dedo: quem toca numa caixa
   /// com o celular na mão raramente fica dentro disso. O padrão do Flutter para
@@ -88,69 +110,82 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
   /// Variação de escala tolerada antes de considerar que houve pinça.
   static const double _scaleThreshold = 0.02;
 
-  /// O gesto já deixou de ser um toque? Uma vez ligado não desliga até o fim
-  /// do gesto: arrastar longe e voltar ao ponto de partida não vira tap.
+  /// O gesto já deixou de ser um toque? Uma vez ligado não desliga até a mão
+  /// sair da tela: arrastar longe e voltar ao ponto de partida não vira toque.
   bool get isDragging => _isDragging;
 
-  /// Quantos dedos estão na tela neste gesto.
-  int get gesturePointers => _pointers;
+  /// Quantos dedos estão encostados na tela agora.
+  int get dedosNaTela => _dedos.length;
+
+  // ── Eventos de ponteiro (Listener) ────────────────────────────────────────
+
+  void aoEncostarDedo(PointerDownEvent e) {
+    if (_dedos.isNotEmpty &&
+        e.timeStamp - _ultimoEventoDeDedo > _registroObsoleto) {
+      _dedos.clear();
+    }
+    _ultimoEventoDeDedo = e.timeStamp;
+
+    _dedos.add(e.pointer);
+    if (_dedos.length == 1) {
+      // Começo real de um toque: nada do gesto anterior sobrevive até aqui.
+      pontoDoToque = e.position;
+      _isDragging  = false;
+    }
+  }
+
+  /// Retorna `true` quando este era o último dedo e o gesto foi um toque —
+  /// é o momento de chamar o hit-test com [pontoDoToque].
+  bool aoSoltarDedo(PointerEvent e) {
+    _ultimoEventoDeDedo = e.timeStamp;
+    _dedos.remove(e.pointer);
+    if (_dedos.isNotEmpty) return false;
+
+    final ehToque = !_isDragging && pontoDoToque != null;
+    _isDragging   = false;
+    gestureOrigin = null;
+    _pointers     = 0;
+    return ehToque;
+  }
+
+  // ── Callbacks de escala (câmera) ──────────────────────────────────────────
 
   void beginGesture(ScaleStartDetails d) {
     gestureOrigin = d.focalPoint;
-    if (d.pointerCount > 1) _houveMultiToque = true;
-    // Um trecho que nasce com dois dedos é câmera, não toque — e um que nasce
-    // depois de já ter havido dois dedos também: a mão ainda está no meio de
-    // um gesto de zoom.
-    _isDragging = _houveMultiToque;
-    _pointers   = d.pointerCount;
+    _pointers     = d.pointerCount;
   }
 
   /// Reancora o gesto quando muda o número de dedos.
   ///
   /// Sem isso o ponto focal salta ao encostar/levantar o segundo dedo e a
-  /// câmera dá um pulo. Encostar o segundo dedo também já conta como gesto,
-  /// por si só — ninguém põe dois dedos na tela querendo tocar numa caixa.
-  ///
-  /// Retorna `true` quando reancorou: a cena deve re-salvar a sua câmera-base
-  /// e sair sem mover a câmera neste frame.
+  /// câmera dá um pulo. Retorna `true` quando reancorou: a cena deve re-salvar
+  /// a sua câmera-base e sair sem mover a câmera neste frame.
   bool reanchorIfPointersChanged(ScaleUpdateDetails d) {
     if (d.pointerCount == _pointers) return false;
     gestureOrigin = d.focalPoint;
     _pointers     = d.pointerCount;
-    if (d.pointerCount > 1) {
-      _houveMultiToque = true;
-      _isDragging      = true;
-    }
     return true;
   }
 
-  /// Marca o gesto como arrasto se o dedo andou, a pinça abriu/fechou, ou há
-  /// mais de um dedo na tela.
+  /// Marca o gesto como arrasto se o dedo andou ou a pinça abriu/fechou.
+  ///
+  /// O critério é a câmera ter mudado de verdade, e não quantos dedos estão na
+  /// tela. Contar dedos parecia mais seguro, mas desqualificava o toque a cada
+  /// contato acidental — a palma roçando a tela, o polegar da mão que segura o
+  /// aparelho —, e era isso que deixava a cena dura. Nem adiantava exigir que
+  /// o segundo dedo "mexesse": o próprio `PointerDown` já gera um update.
+  ///
+  /// O zoom, que era o gesto que abria a conferência sem querer, não escapa:
+  /// a pinça muda a escala e o arrasto de dois dedos desloca o ponto focal.
+  ///
+  /// Em troca, dois dedos pousados e levantados sem mexer nada abrem o produto
+  /// — situação rara, e o preço combinado por toques que respondem.
   void markDragIfMoved(ScaleUpdateDetails d) {
     final origin = gestureOrigin;
     if (origin == null) return;
-    if (d.pointerCount > 1) _houveMultiToque = true;
     if ((d.focalPoint - origin).distance > dragThreshold ||
-        (d.scale - 1.0).abs() > _scaleThreshold ||
-        d.pointerCount > 1) {
+        (d.scale - 1.0).abs() > _scaleThreshold) {
       _isDragging = true;
     }
-  }
-
-  /// Encerra o gesto e diz se ele deve virar um toque. Leia [gestureOrigin]
-  /// antes de chamar — o estado é limpo aqui.
-  ///
-  /// `d.pointerCount > 0` significa que ainda há dedo na tela: este não é o
-  /// fim de um toque, é a reconfiguração do recognizer ao mudar o número de
-  /// dedos. Nesse caso o estado do gesto é preservado, porque o
-  /// `onScaleStart` seguinte vem logo atrás e reancora tudo.
-  bool endGesture(ScaleEndDetails d) {
-    if (d.pointerCount > 0) return false;
-    final fireTap = !_isDragging && !_houveMultiToque && gestureOrigin != null;
-    gestureOrigin    = null;
-    _isDragging      = false;
-    _houveMultiToque = false;
-    _pointers        = 0;
-    return fireTap;
   }
 }

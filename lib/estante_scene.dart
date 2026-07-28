@@ -410,11 +410,6 @@ class _EstanteSceneState extends State<EstanteScene>
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails d) {
-    final tap = gestureOrigin;
-    if (endGesture(d)) _tryFireTap(tap!);
-  }
-
   void _tryFireTap(Offset globalTap) {
     final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
@@ -503,17 +498,21 @@ class _EstanteSceneState extends State<EstanteScene>
           desatualizado: widget.desatualizados.contains(chave));
     }
 
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _painterKey,
-        painter: EstantePainter(_camera,
-            extraFaces:   extraFaces,
-            showLabels:   widget.showLabels,
-            estanteAtual: widget.estanteAtual),
-        child:   const SizedBox.expand(),
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryFireTap(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _painterKey,
+          painter: EstantePainter(_camera,
+              extraFaces:   extraFaces,
+              showLabels:   widget.showLabels,
+              estanteAtual: widget.estanteAtual),
+          child:   const SizedBox.expand(),
+        ),
       ),
     );
   }
