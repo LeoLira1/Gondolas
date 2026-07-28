@@ -279,6 +279,30 @@ void main() {
     expect(letraEstanteCelula(18, 1, 0), '72');
   });
 
+  test('estante parede: 6 slots por número, cabendo na largura da coluna', () {
+    expect(EstanteParedeGeometry.maxSlots, 6);
+
+    const w   = EstanteParedeGeometry.maxSlots;
+    final wCx = EstanteParedeGeometry.wCaixa;
+    final gap = EstanteParedeGeometry.gap;
+    expect(wCx, greaterThan(0));
+    expect(gap, greaterThan(0));
+
+    for (final celula in EstanteParedeGeometry.celulas()) {
+      final x0Primeiro = EstanteParedeGeometry.xSlot0(celula);
+      final x1Ultimo   = x0Primeiro + (w - 1) * (wCx + gap) + wCx;
+      // As 6 caixas ficam dentro da posição, sem vazar para a vizinha.
+      expect(x0Primeiro, greaterThanOrEqualTo(celula.xMin));
+      expect(x1Ultimo,   lessThanOrEqualTo(celula.xMax));
+      // E sem se sobrepor: o x0 de cada slot começa depois do x1 do anterior.
+      for (var s = 1; s < w; s++) {
+        final x0Atual     = x0Primeiro + s * (wCx + gap);
+        final x1Anterior  = x0Primeiro + (s - 1) * (wCx + gap) + wCx;
+        expect(x0Atual, greaterThan(x1Anterior));
+      }
+    }
+  });
+
   test('estante parede: posição global P1–P12 derivada de seção + coluna', () {
     expect(posicaoGlobalParede(13, 0), 1);
     expect(posicaoGlobalParede(13, 1), 2);

@@ -44,9 +44,19 @@ class EstanteParedeGeometry {
   static const int    numColunas    = colunasParede;
   static const double larguraTotal  = larguraColuna * numColunas;
 
-  static const int    maxSlots = 4;
-  static const double wCaixa   = 0.27;
-  static const double gap      = 0.045;
+  // Cada número da parede comporta 6 caixas na prateleira real (era 4 no app).
+  // As 2 novas entram à DIREITA — slots 4 e 5 —, então os slots 0–3 já salvos
+  // em estante_layout mantêm o índice e o endereço não muda para ninguém
+  // (mesma lição dos ganchos intercalados do MagnoJet, ver models.dart).
+  static const int    maxSlots      = 6;
+  static const double gap           = 0.03;
+  static const double margemLateral = 0.02;
+
+  // Largura da caixa DERIVADA de maxSlots, e não literal como o antigo 0.27
+  // (dimensionado para 4): com 6 caixas o valor fixo estouraria a coluna
+  // (6 × 0.27 + 5 × gap > larguraColuna) e as últimas vazariam para fora.
+  static double get wCaixa =>
+      (larguraColuna - 2 * margemLateral - (maxSlots - 1) * gap) / maxSlots;
 
   // Frente aberta (produtos, toques) voltada para a câmera em +Z; ferros e
   // mãos francesas no fundo (lado da parede), em -Z — como na loja real.
@@ -58,7 +68,9 @@ class EstanteParedeGeometry {
   static const _corFerro          = Color(0xFF18221D);
   static const _corMaoFrancesa    = Color(0xFF1C2822);
 
-  // Margem interna que centraliza os 4 slots dentro da coluna.
+  // Margem interna que centraliza os 6 slots dentro da coluna. Com o wCaixa
+  // derivado acima o resultado é exatamente margemLateral, mas a fórmula fica
+  // como está para continuar valendo se wCaixa voltar a ser um valor fixo.
   static double get margemSlots =>
       (larguraColuna - (maxSlots * wCaixa + (maxSlots - 1) * gap)) / 2;
 
