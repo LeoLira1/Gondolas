@@ -119,9 +119,34 @@ void main() {
         await descartar(tester);
       });
 
-      // A regressão: era assim que a conferência abria sozinha. Antes da
-      // guarda de pointerCount este teste falhava em 6 das 9 cenas.
-      testWidgets('dois dedos com pouco movimento não dispara o toque',
+      // A regressão original: era assim que a conferência abria sozinha ao dar
+      // zoom. Basta a pinça mexer na escala — não precisa ser um zoom grande.
+      testWidgets('dois dedos que mexem a câmera não disparam o toque',
+          (tester) async {
+        final ponto = await acharPontoDeToque(tester, constroi);
+        final toques = await montar(tester, constroi);
+
+        final dedo1 = await tester.startGesture(ponto - const Offset(30, 0));
+        final dedo2 = await tester.startGesture(ponto + const Offset(30, 0));
+        await tester.pump();
+        // Pinça curta: abaixo do limiar de deslocamento, mas a escala muda.
+        await dedo1.moveBy(const Offset(-3, 0));
+        await dedo2.moveBy(const Offset(3, 0));
+        await tester.pump();
+        await dedo1.up();
+        await dedo2.up();
+        await tester.pump();
+
+        expect(toques.value, 0);
+        await descartar(tester);
+      });
+
+      // O buraco que aceitamos ao trocar "contar dedos" por "a câmera mudou":
+      // dois dedos pousados e levantados sem mexer em absolutamente nada abrem
+      // o produto. É raro, e é o preço de o toque de um dedo não ser engolido
+      // por um contato acidental da palma ou do polegar que segura o aparelho.
+      // Se um dia isso incomodar, o lugar de apertar é markDragIfMoved.
+      testWidgets('dois dedos totalmente parados abrem — buraco conhecido',
           (tester) async {
         final ponto = await acharPontoDeToque(tester, constroi);
         final toques = await montar(tester, constroi);
@@ -129,15 +154,11 @@ void main() {
         final dedo1 = await tester.startGesture(ponto);
         final dedo2 = await tester.startGesture(ponto + const Offset(40, 0));
         await tester.pump();
-        // Abaixo do limiar de arrasto: só o segundo dedo denuncia o gesto.
-        await dedo1.moveBy(const Offset(3, 2));
-        await dedo2.moveBy(const Offset(3, 2));
-        await tester.pump();
         await dedo1.up();
         await dedo2.up();
         await tester.pump();
 
-        expect(toques.value, 0);
+        expect(toques.value, 1);
         await descartar(tester);
       });
 
@@ -222,33 +243,44 @@ void main() {
       // intencional. A proteção contra abertura acidental não pode sobreviver
       // ao gesto que a motivou, senão engole o toque seguinte.
       //
-      // Os dois dedos aqui mal se movem, de propósito: a trava de multitoque
-      // não olha a magnitude do gesto, e um zoom de verdade giraria a câmera a
-      // ponto de o ponto de toque conhecido não cair mais sobre nenhuma caixa
-      // — o teste falharia por ter mirado no vazio, não pela trava. O caminho
-      // com zoom de verdade está coberto logo abaixo, na LojaScene.
-      testWidgets('depois de dois dedos, o próximo toque abre', (tester) async {
+      // A cena não pode ficar muda depois de um gesto de câmera: era esse o
+      // relato de "clico algumas vezes e não abre".
+      //
+      // A verificação é por varredura, e não por um toque no ponto conhecido,
+      // porque a pinça move a câmera — a caixa que estava sob aquele ponto sai
+      // de lá, e um toque isolado falharia por ter mirado no vazio, não pela
+      // trava. Com a trava presa, *nenhum* ponto da tela responde; é essa a
+      // diferença que interessa. O "abre já no primeiro toque" está afirmado
+      // ao pé da letra na LojaScene, mais abaixo, onde o toque avisa mesmo sem
+      // acertar estrutura nenhuma.
+      testWidgets('depois de uma pinça, a cena continua respondendo',
+          (tester) async {
         final ponto = await acharPontoDeToque(tester, constroi);
         final toques = await montar(tester, constroi);
 
         final dedo1 = await tester.startGesture(ponto - const Offset(30, 0));
         final dedo2 = await tester.startGesture(ponto + const Offset(30, 0));
         await tester.pump();
-        await dedo1.moveBy(const Offset(2, 1));
-        await dedo2.moveBy(const Offset(2, 1));
+        await dedo1.moveBy(const Offset(-50, 0));
+        await dedo2.moveBy(const Offset(50, 0));
         await tester.pump();
         await dedo1.up();
         await dedo2.up();
         await tester.pump();
-        expect(toques.value, 0, reason: 'o gesto de dois dedos não abre nada');
+        expect(toques.value, 0, reason: 'a pinça em si não abre nada');
 
-        // Mão fora da tela. Agora um toque de verdade.
-        final toque = await tester.startGesture(ponto);
-        await toque.up();
-        await tester.pump();
+        final tamanho = tester.view.physicalSize / tester.view.devicePixelRatio;
+        for (var fy = 0.30; fy <= 0.75 && toques.value == 0; fy += 0.05) {
+          for (var fx = 0.30; fx <= 0.70 && toques.value == 0; fx += 0.05) {
+            final toque = await tester
+                .startGesture(Offset(tamanho.width * fx, tamanho.height * fy));
+            await toque.up();
+            await tester.pump();
+          }
+        }
 
-        expect(toques.value, 1,
-            reason: 'o primeiro toque após o gesto de câmera já abre');
+        expect(toques.value, greaterThan(0),
+            reason: 'nenhum toque respondeu após a pinça');
         await descartar(tester);
       });
 
@@ -283,6 +315,47 @@ void main() {
       });
     });
   }
+
+  // Um PointerUp pode se perder — a cena reconstruída no meio do toque, por
+  // exemplo — e deixar um dedo registrado que nunca sai. Sem auto-cura, a cena
+  // para de responder de vez: nenhum toque seguinte chega a ser o último dedo.
+  // A LojaScene serve de banco de prova porque o toque avisa mesmo sem acertar
+  // estrutura nenhuma.
+  testWidgets('LojaScene: dedo fantasma não deixa a cena muda para sempre',
+      (tester) async {
+    final toques = await montar(tester, cenas['LojaScene']!);
+    const ponto = Offset(400, 300);
+
+    // A auto-cura é medida pelo timeStamp dos próprios eventos, e os gestos
+    // sintéticos nascem todos em Duration.zero — daí o createGesture, que
+    // deixa marcar o instante de cada evento.
+    const t0 = Duration(seconds: 1);
+
+    // Dedo que encosta e nunca sai (nem up, nem cancel).
+    final fantasma = await tester.createGesture();
+    await fantasma.down(ponto, timeStamp: t0);
+    await tester.pump();
+
+    // Enquanto ele "está na tela", o toque de outro dedo não vira toque —
+    // é indistinguível de um gesto de dois dedos.
+    final durante = await tester.createGesture();
+    await durante.down(ponto + const Offset(80, 0),
+        timeStamp: t0 + const Duration(milliseconds: 100));
+    await durante.up(timeStamp: t0 + const Duration(milliseconds: 200));
+    await tester.pump();
+    expect(toques.value, 0);
+
+    // Passado o tempo do registro obsoleto, o fantasma é descartado e a cena
+    // volta a responder sozinha.
+    const t1 = Duration(seconds: 10);
+    final depois = await tester.createGesture();
+    await depois.down(ponto, timeStamp: t1);
+    await depois.up(timeStamp: t1 + const Duration(milliseconds: 100));
+    await tester.pump();
+
+    expect(toques.value, 1, reason: 'a cena se recupera do dedo fantasma');
+    await descartar(tester);
+  });
 
   // O relato original: "dou um zoom e depois clico algumas vezes intencionais
   // e não abre". Aqui a pinça é de verdade, com a câmera afastando — o que nas

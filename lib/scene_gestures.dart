@@ -77,10 +77,26 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
   /// mudança no número de dedos, e a câmera precisa acompanhar.
   Offset? gestureOrigin;
 
-  int  _dedosNaTela     = 0;
-  bool _isDragging      = false;
-  bool _houveMultiToque = false;
-  int  _pointers        = 0;
+  /// Ponteiros com o dedo encostado na tela, por id.
+  ///
+  /// Um [Set] e não um contador: ids são únicos, então um evento repetido ou
+  /// fora de ordem não desequilibra a conta.
+  final Set<int> _dedos = <int>{};
+
+  /// Instante do último evento de dedo, para detectar registro obsoleto.
+  Duration _ultimoEventoDeDedo = Duration.zero;
+
+  bool _isDragging = false;
+  int  _pointers   = 0;
+
+  /// Depois deste tempo sem nenhum evento, um dedo ainda registrado é lixo.
+  ///
+  /// Um dedo parado não gera eventos, mas ninguém segura o dedo por segundos e
+  /// só então começa outro toque — o que existe de verdade é o `PointerUp` que
+  /// se perde (a cena reconstruída no meio do toque, por exemplo). Sem essa
+  /// janela, um dedo fantasma faria a cena parar de responder para sempre:
+  /// nenhum toque seguinte chegaria a ser o "último dedo".
+  static const Duration _registroObsoleto = Duration(seconds: 3);
 
   /// Deslocamento a partir do qual o gesto deixa de poder virar toque.
   ///
@@ -98,35 +114,37 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
   /// sair da tela: arrastar longe e voltar ao ponto de partida não vira toque.
   bool get isDragging => _isDragging;
 
-  /// Houve mais de um dedo na tela desde que a mão encostou?
-  bool get houveMultiToque => _houveMultiToque;
+  /// Quantos dedos estão encostados na tela agora.
+  int get dedosNaTela => _dedos.length;
 
   // ── Eventos de ponteiro (Listener) ────────────────────────────────────────
 
   void aoEncostarDedo(PointerDownEvent e) {
-    _dedosNaTela++;
-    if (_dedosNaTela == 1) {
+    if (_dedos.isNotEmpty &&
+        e.timeStamp - _ultimoEventoDeDedo > _registroObsoleto) {
+      _dedos.clear();
+    }
+    _ultimoEventoDeDedo = e.timeStamp;
+
+    _dedos.add(e.pointer);
+    if (_dedos.length == 1) {
       // Começo real de um toque: nada do gesto anterior sobrevive até aqui.
-      pontoDoToque     = e.position;
-      _isDragging      = false;
-      _houveMultiToque = false;
-    } else {
-      // Ninguém põe dois dedos na tela querendo tocar numa caixa.
-      _houveMultiToque = true;
+      pontoDoToque = e.position;
+      _isDragging  = false;
     }
   }
 
   /// Retorna `true` quando este era o último dedo e o gesto foi um toque —
   /// é o momento de chamar o hit-test com [pontoDoToque].
   bool aoSoltarDedo(PointerEvent e) {
-    if (_dedosNaTela > 0) _dedosNaTela--;
-    if (_dedosNaTela > 0) return false;
+    _ultimoEventoDeDedo = e.timeStamp;
+    _dedos.remove(e.pointer);
+    if (_dedos.isNotEmpty) return false;
 
-    final ehToque = !_isDragging && !_houveMultiToque && pontoDoToque != null;
-    _isDragging      = false;
-    _houveMultiToque = false;
-    gestureOrigin    = null;
-    _pointers        = 0;
+    final ehToque = !_isDragging && pontoDoToque != null;
+    _isDragging   = false;
+    gestureOrigin = null;
+    _pointers     = 0;
     return ehToque;
   }
 
@@ -150,6 +168,18 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
   }
 
   /// Marca o gesto como arrasto se o dedo andou ou a pinça abriu/fechou.
+  ///
+  /// O critério é a câmera ter mudado de verdade, e não quantos dedos estão na
+  /// tela. Contar dedos parecia mais seguro, mas desqualificava o toque a cada
+  /// contato acidental — a palma roçando a tela, o polegar da mão que segura o
+  /// aparelho —, e era isso que deixava a cena dura. Nem adiantava exigir que
+  /// o segundo dedo "mexesse": o próprio `PointerDown` já gera um update.
+  ///
+  /// O zoom, que era o gesto que abria a conferência sem querer, não escapa:
+  /// a pinça muda a escala e o arrasto de dois dedos desloca o ponto focal.
+  ///
+  /// Em troca, dois dedos pousados e levantados sem mexer nada abrem o produto
+  /// — situação rara, e o preço combinado por toques que respondem.
   void markDragIfMoved(ScaleUpdateDetails d) {
     final origin = gestureOrigin;
     if (origin == null) return;
