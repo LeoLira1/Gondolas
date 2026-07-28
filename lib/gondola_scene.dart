@@ -605,11 +605,6 @@ class _GondolaSceneState extends State<GondolaScene>
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails d) {
-    final tap = gestureOrigin;
-    if (endGesture(d)) _handleTap(tap!);
-  }
-
   void _handleTap(Offset globalTap) {
     final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
     if (rb == null) return;
@@ -754,16 +749,20 @@ class _GondolaSceneState extends State<GondolaScene>
           desatualizado: widget.desatualizados.contains(chave));
     }
 
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _painterKey,
-        painter: GondolaPainter(_camera,
-            extraFaces:      extraFaces,
-            faceSelecionada: widget.faceSelecionada),
-        child:   const SizedBox.expand(),
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _handleTap(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _painterKey,
+          painter: GondolaPainter(_camera,
+              extraFaces:      extraFaces,
+              faceSelecionada: widget.faceSelecionada),
+          child:   const SizedBox.expand(),
+        ),
       ),
     );
   }

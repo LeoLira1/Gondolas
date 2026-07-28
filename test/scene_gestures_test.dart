@@ -218,6 +218,54 @@ void main() {
         await descartar(tester);
       });
 
+      // Depois de um gesto de câmera a mão sai da tela e o próximo toque é
+      // intencional. A proteção contra abertura acidental não pode sobreviver
+      // ao gesto que a motivou, senão engole o toque seguinte.
+      //
+      // Os dois dedos aqui mal se movem, de propósito: a trava de multitoque
+      // não olha a magnitude do gesto, e um zoom de verdade giraria a câmera a
+      // ponto de o ponto de toque conhecido não cair mais sobre nenhuma caixa
+      // — o teste falharia por ter mirado no vazio, não pela trava. O caminho
+      // com zoom de verdade está coberto logo abaixo, na LojaScene.
+      testWidgets('depois de dois dedos, o próximo toque abre', (tester) async {
+        final ponto = await acharPontoDeToque(tester, constroi);
+        final toques = await montar(tester, constroi);
+
+        final dedo1 = await tester.startGesture(ponto - const Offset(30, 0));
+        final dedo2 = await tester.startGesture(ponto + const Offset(30, 0));
+        await tester.pump();
+        await dedo1.moveBy(const Offset(2, 1));
+        await dedo2.moveBy(const Offset(2, 1));
+        await tester.pump();
+        await dedo1.up();
+        await dedo2.up();
+        await tester.pump();
+        expect(toques.value, 0, reason: 'o gesto de dois dedos não abre nada');
+
+        // Mão fora da tela. Agora um toque de verdade.
+        final toque = await tester.startGesture(ponto);
+        await toque.up();
+        await tester.pump();
+
+        expect(toques.value, 1,
+            reason: 'o primeiro toque após o gesto de câmera já abre');
+        await descartar(tester);
+      });
+
+      testWidgets('toques seguidos abrem todas as vezes', (tester) async {
+        final ponto = await acharPontoDeToque(tester, constroi);
+        final toques = await montar(tester, constroi);
+
+        for (var i = 0; i < 3; i++) {
+          final toque = await tester.startGesture(ponto);
+          await toque.up();
+          await tester.pump();
+        }
+
+        expect(toques.value, 3);
+        await descartar(tester);
+      });
+
       testWidgets('tremor abaixo do limiar ainda dispara o toque',
           (tester) async {
         final ponto = await acharPontoDeToque(tester, constroi);
@@ -235,6 +283,35 @@ void main() {
       });
     });
   }
+
+  // O relato original: "dou um zoom e depois clico algumas vezes intencionais
+  // e não abre". Aqui a pinça é de verdade, com a câmera afastando — o que nas
+  // outras cenas tiraria a caixa de baixo do dedo. A LojaScene serve de banco
+  // de prova porque o toque avisa mesmo quando não acerta estrutura nenhuma
+  // (`onSelecionado(null)`), então o resultado depende só da trava de gesto.
+  testWidgets('LojaScene: zoom de verdade e o toque seguinte já abre',
+      (tester) async {
+    final toques = await montar(tester, cenas['LojaScene']!);
+    const ponto = Offset(400, 300);
+
+    final dedo1 = await tester.startGesture(ponto - const Offset(40, 0));
+    final dedo2 = await tester.startGesture(ponto + const Offset(40, 0));
+    await tester.pump();
+    await dedo1.moveBy(const Offset(-90, -20));
+    await dedo2.moveBy(const Offset(90, 20));
+    await tester.pump();
+    await dedo1.up();
+    await dedo2.up();
+    await tester.pump();
+    expect(toques.value, 0, reason: 'a pinça em si não abre nada');
+
+    final toque = await tester.startGesture(ponto);
+    await toque.up();
+    await tester.pump();
+
+    expect(toques.value, 1, reason: 'o primeiro toque após o zoom já abre');
+    await descartar(tester);
+  });
 
   test('o limiar de arrasto acomoda o tremor do dedo sem engolir o arrasto',
       () {
