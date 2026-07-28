@@ -43,10 +43,24 @@ class EstanteParedeGeometry {
   static const double larguraColuna = 1.3;
   static const int    numColunas    = colunasParede;
   static const double larguraTotal  = larguraColuna * numColunas;
+  // Altura da peça (topo da última prateleira) — usada para enquadrar a câmera
+  // e limitar o pan, como o `height` da Edr300Geometry. Getter, e não const,
+  // porque `ys.last` não é expressão constante — assim não duplica o 2.38.
+  static double get alturaTotal => ys.last + espessura;
 
-  static const int    maxSlots = 4;
-  static const double wCaixa   = 0.27;
-  static const double gap      = 0.045;
+  // Cada número da parede comporta 6 caixas na prateleira real (era 4 no app).
+  // As 2 novas entram à DIREITA — slots 4 e 5 —, então os slots 0–3 já salvos
+  // em estante_layout mantêm o índice e o endereço não muda para ninguém
+  // (mesma lição dos ganchos intercalados do MagnoJet, ver models.dart).
+  static const int    maxSlots      = 6;
+  static const double gap           = 0.03;
+  static const double margemLateral = 0.02;
+
+  // Largura da caixa DERIVADA de maxSlots, e não literal como o antigo 0.27
+  // (dimensionado para 4): com 6 caixas o valor fixo estouraria a coluna
+  // (6 × 0.27 + 5 × gap > larguraColuna) e as últimas vazariam para fora.
+  static double get wCaixa =>
+      (larguraColuna - 2 * margemLateral - (maxSlots - 1) * gap) / maxSlots;
 
   // Frente aberta (produtos, toques) voltada para a câmera em +Z; ferros e
   // mãos francesas no fundo (lado da parede), em -Z — como na loja real.
@@ -58,7 +72,9 @@ class EstanteParedeGeometry {
   static const _corFerro          = Color(0xFF18221D);
   static const _corMaoFrancesa    = Color(0xFF1C2822);
 
-  // Margem interna que centraliza os 4 slots dentro da coluna.
+  // Margem interna que centraliza os 6 slots dentro da coluna. Com o wCaixa
+  // derivado acima o resultado é exatamente margemLateral, mas a fórmula fica
+  // como está para continuar valendo se wCaixa voltar a ser um valor fixo.
   static double get margemSlots =>
       (larguraColuna - (maxSlots * wCaixa + (maxSlots - 1) * gap)) / 2;
 
@@ -412,43 +428,126 @@ class EstanteParedeScene extends StatefulWidget {
 }
 
 class _EstanteParedeSceneState extends State<EstanteParedeScene> {
-  Camera _camera = const Camera(
-    rotY:   0.35,
-    rotX:   0.12,
-    dist:   6.4,
-    target: Vec3(0, 1.30, 0),
-  );
+  static Camera _cameraInicial() => Camera(
+        rotY:   0.35,
+        rotX:   0.12,
+        dist:   _distInicial,
+        target: Vec3(0, EstanteParedeGeometry.alturaTotal / 2, 0),
+      );
+
+  Camera _camera = _cameraInicial();
   final _painterKey = GlobalKey();
 
   Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
   bool    _isDragging = false;
+  int     _gesturePointers = 0;
 
   static const double _dragThreshold = 7.0;
   // A peça é fixa na parede: a órbita não passa para trás dela.
   static const double _rotYLim = 1.35;
 
+  // Zoom com a mesma folga da Estante 6 (Edr300Scene): dá pra colar numa caixa
+  // e também afastar até a seção inteira caber na tela. Antes o mínimo era 3.2,
+  // o que impedia chegar perto o bastante pra distinguir as caixas de um número.
+  static const double _distMin     = 0.8;
+  static const double _distMax     = 12.0;
+  static const double _distInicial = 6.4;
+
+  // Pan: o alvo não escapa de uma caixa em volta da seção, pra não ser possível
+  // arrastar até perder a peça de vista.
+  static const double _panMargem = 0.7;
+
+  @override
+  void didUpdateWidget(EstanteParedeScene old) {
+    super.didUpdateWidget(old);
+    // O carrossel reaproveita este State ao trocar de seção (13→14→…): todas
+    // têm a mesma geometria, mas o pan feito na seção anterior deixaria a
+    // seguinte fora de quadro. Recentraliza o alvo preservando ângulo e zoom.
+    if (old.estanteAtual != widget.estanteAtual) {
+      _camera = Camera(
+        rotY:   _camera.rotY,
+        rotX:   _camera.rotX,
+        dist:   _camera.dist,
+        target: Vec3(0, EstanteParedeGeometry.alturaTotal / 2, 0),
+      );
+    }
+  }
+
   void _onScaleStart(ScaleStartDetails d) {
     _gestureOrigin        = d.focalPoint;
     _cameraAtGestureStart = _camera;
     _isDragging           = false;
+    _gesturePointers      = d.pointerCount;
   }
 
+  // Mesmo esquema de câmera da Estante 6 (Edr300Scene) e do mapa da loja: um
+  // dedo arrasta (pan — o ponto tocado acompanha o dedo), dois dedos orbitam e
+  // dão zoom com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
     final origin = _gestureOrigin;
     final c0     = _cameraAtGestureStart;
     if (origin == null || c0 == null) return;
 
+    // Reancora o gesto quando muda o número de dedos, senão o focal point salta
+    // ao encostar/levantar o segundo dedo.
+    if (d.pointerCount != _gesturePointers) {
+      _gestureOrigin        = d.focalPoint;
+      _cameraAtGestureStart = _camera;
+      _gesturePointers      = d.pointerCount;
+      // Encostar o segundo dedo já conta como gesto: sem isso um toque de dois
+      // dedos terminaria em _onScaleEnd com _isDragging false e dispararia um
+      // tap na célula.
+      if (d.pointerCount > 1) _isDragging = true;
+      return;
+    }
+
     final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
+    if (delta.distance > _dragThreshold ||
+        (d.scale - 1.0).abs() > 0.02 ||
+        d.pointerCount > 1) {
       _isDragging = true;
     }
 
+    if (d.pointerCount >= 2) {
+      // Dois dedos: orbita (arrastar) + zoom (pinça). O limite de rotY continua
+      // valendo — a peça é fixa na parede, não se olha por trás dela.
+      setState(() {
+        _camera = Camera(
+          rotY:   (c0.rotY - delta.dx * 0.008).clamp(-_rotYLim, _rotYLim),
+          rotX:   (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
+          dist:   (c0.dist / d.scale).clamp(_distMin, _distMax),
+          target: _camera.target,
+        );
+      });
+      return;
+    }
+
+    // Um dedo: pan no plano da tela — converte pixels em metros pela altura do
+    // viewport e pelo FOV do painter (45°, então meia-abertura de 22,5°), e
+    // desloca o alvo ao longo dos eixos "direita" e "cima" da própria câmera.
+    final rb  = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    final hPx = rb?.size.height ?? 600.0;
+    final worldPerPx = 2 * c0.dist * math.tan(22.5 * math.pi / 180) / hPx;
+    final dxW = delta.dx * worldPerPx;
+    final dyW = delta.dy * worldPerPx;
+
+    final sinY = math.sin(c0.rotY), cosY = math.cos(c0.rotY);
+    final sinX = math.sin(c0.rotX), cosX = math.cos(c0.rotX);
+    // right = (cosY, 0, -sinY); up = (-sinY·sinX, cosX, -cosY·sinX)
+    final limXZ  = EstanteParedeGeometry.larguraTotal / 2 + _panMargem;
+    final limY   = EstanteParedeGeometry.alturaTotal + _panMargem;
+
     setState(() {
-      _camera = c0.copyWith(
-        rotY: (c0.rotY - delta.dx * 0.008).clamp(-_rotYLim, _rotYLim),
-        rotX: (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
-        dist: (c0.dist / d.scale).clamp(3.2, 14.0),
+      _camera = Camera(
+        rotY:   c0.rotY,
+        rotX:   c0.rotX,
+        dist:   c0.dist,
+        target: Vec3(
+          (c0.target.x - cosY * dxW - sinY * sinX * dyW).clamp(-limXZ, limXZ),
+          (c0.target.y + cosX * dyW).clamp(-_panMargem, limY),
+          (c0.target.z + sinY * dxW - cosY * sinX * dyW).clamp(-limXZ, limXZ),
+        ),
       );
     });
   }
@@ -460,6 +559,7 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene> {
     _gestureOrigin        = null;
     _cameraAtGestureStart = null;
     _isDragging           = false;
+    _gesturePointers      = 0;
   }
 
   void _tryFireTap(Offset globalTap) {
