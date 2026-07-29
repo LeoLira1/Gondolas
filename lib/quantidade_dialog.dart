@@ -113,6 +113,9 @@ class _QuantidadeDialog extends StatefulWidget {
 
 class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   final _service = EstoqueLocalizadoService();
+  // Controller próprio da lista de endereços: a Scrollbar precisa dele pra
+  // manter o polegar sempre visível (thumbVisibility).
+  final _scrollController = ScrollController();
 
   bool    _carregando = true;
   bool    _salvando   = false;
@@ -143,6 +146,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     for (final l in _linhasRemovidas) {
       l.controller.dispose();
     }
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -421,9 +425,14 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Em celular a margem padrão do AlertDialog (40 de cada lado) espreme
+    // demais os cards de endereço; 16 dá espaço pro texto respirar.
+    final larguraTela = MediaQuery.of(context).size.width;
+    final largura = larguraTela - 64 < 380 ? larguraTela - 64 : 380.0;
     return AlertDialog(
       backgroundColor: const Color(0xFF141a22),
       surfaceTintColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: Column(
         mainAxisSize: MainAxisSize.min,
@@ -438,24 +447,48 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
               style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 12)),
         ],
       ),
+      titlePadding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       content: SizedBox(
-        width: 380,
+        width: largura,
         child: _carregando
             ? const Padding(
                 padding: EdgeInsets.symmetric(vertical: 30),
                 child: Center(child: CircularProgressIndicator()),
               )
+            // A lista de endereços rola (com barra sempre visível) e o resumo
+            // fica fixo no rodapé: com muitos endereços o conteúdo passava da
+            // altura da tela e os últimos campos ficavam inacessíveis.
             : Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_sugestao != null) _buildSugestaoCard(_sugestao!),
-                  ..._linhas.map(_buildLinha),
+                  Flexible(
+                    child: Scrollbar(
+                      controller: _scrollController,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        // Espaço pro polegar da barra não cobrir os cards.
+                        padding: const EdgeInsets.only(right: 10),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_sugestao != null) _buildSugestaoCard(_sugestao!),
+                            ..._linhas.map(_buildLinha),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   _buildResumo(),
                 ],
               ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      actionsOverflowButtonSpacing: 6,
       actions: _carregando
           ? null
           : [
