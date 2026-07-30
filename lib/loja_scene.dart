@@ -63,13 +63,16 @@ class ProdutoLoja {
 const double lojaW = 10.0;
 const double lojaH = 14.0;
 
-// Pontos de referência fixos da loja, escritos no chão do mapa.
-const List<({String nome, double x, double z})> referenciasLoja = [
-  (nome: 'CAIXA',       x: 5.0, z: 0.8),
-  (nome: 'BALCÃO LOJA', x: 0.9, z: 8.0),
-  (nome: 'COZINHA',     x: 9.2, z: 8.0),
-  (nome: 'ENTRADA',     x: 7.5, z: 13.6),
-  (nome: 'ENTRADA 2',   x: 2.5, z: 13.6),
+// Pontos de referência fixos da loja. Os do interior são escritos no piso
+// claro (texto escuro); os das entradas ficam sobre o topo da parede escura —
+// que é onde elas realmente estão — e por isso usam texto claro.
+const List<({String nome, double x, double z, bool naParede})>
+    referenciasLoja = [
+  (nome: 'CAIXA',       x: 5.0, z:  0.80, naParede: false),
+  (nome: 'BALCÃO LOJA', x: 0.9, z:  8.00, naParede: false),
+  (nome: 'COZINHA',     x: 9.2, z:  8.00, naParede: false),
+  (nome: 'ENTRADA',     x: 7.5, z: 13.91, naParede: true),
+  (nome: 'ENTRADA 2',   x: 2.5, z: 13.91, naParede: true),
 ];
 
 const List<ItemLoja> itensLoja = [
@@ -127,6 +130,9 @@ const Color corEstanteLoja = Color(0xFF4a93d8);
 const Color _corApagado    = Color(0xFF2d2e31);
 const Color _corParede     = Color(0xFF2a2b2f);
 const Color _corBg         = Color(0xFF0b0c0e);
+// Piso da loja: ladrilhos claros com rejunte discreto.
+const Color _corPiso       = Color(0xFFedeff0);
+const Color _corPisoRejunte = Color(0x14000000);
 
 // ── LojaGeometry ──────────────────────────────────────────────────────────────
 
@@ -138,8 +144,42 @@ class LojaGeometry {
   static const int    _estanteNiveis = 5;
   static const double _shelfT       = 0.013;
 
+  /// Lado nominal do ladrilho do piso, em metros; o tamanho real é ajustado
+  /// pra caber um número inteiro de ladrilhos entre as paredes.
+  static const double _pisoLado = 1.0;
+
   static double _nivelY(int i) =>
       i * (_estanteH - _shelfT) / (_estanteNiveis - 1);
+
+  /// Ladrilhos do piso (plano y = 0, dentro das paredes). Ficam numa lista à
+  /// parte da das estruturas: a câmera está sempre acima do chão, então o piso
+  /// é sempre a superfície mais ao fundo e pode ser desenhado antes de tudo,
+  /// sem entrar no depth-sort — o que também evita z-fighting com as bases das
+  /// gôndolas e estantes, que apoiam exatamente em y = 0.
+  ///
+  /// A geometria é fixa, então a lista é construída uma vez e reprojetada a
+  /// cada paint.
+  static final List<Face> piso = _buildPiso();
+
+  static List<Face> _buildPiso() {
+    const x0 = _paredeEsp, x1 = lojaW - _paredeEsp;
+    const z0 = _paredeEsp, z1 = lojaH - _paredeEsp;
+    final nx = math.max(1, ((x1 - x0) / _pisoLado).round());
+    final nz = math.max(1, ((z1 - z0) / _pisoLado).round());
+    final dx = (x1 - x0) / nx, dz = (z1 - z0) / nz;
+
+    final faces = <Face>[];
+    for (var i = 0; i < nx; i++) {
+      final xa = x0 + i * dx, xb = xa + dx;
+      for (var j = 0; j < nz; j++) {
+        final za = z0 + j * dz, zb = za + dz;
+        faces.add(Face([
+          Vec3(xa, 0, za), Vec3(xa, 0, zb), Vec3(xb, 0, zb), Vec3(xb, 0, za),
+        ], _corPiso));
+      }
+    }
+    return faces;
+  }
 
   static List<Face> buildFaces(
     int? selecionadoIdx,
@@ -418,6 +458,9 @@ class LojaPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = _corBg);
+    final piso = LojaGeometry.piso;
+    _project(piso, size);
+    _drawPiso(canvas, piso);
     final faces = LojaGeometry.buildFaces(
       selecionadoIdx,
       pulseT,
@@ -490,6 +533,27 @@ class LojaPainter extends CustomPainter {
     }
   }
 
+  // Piso: preenchimento chapado (sem sombreamento, pra manter o claro do
+  // ladrilho) e o contorno de cada ladrilho, que é o próprio rejunte da grade.
+  // Todos os ladrilhos entram num único Path — são dois draw calls no total,
+  // e não uma centena.
+  void _drawPiso(Canvas canvas, List<Face> piso) {
+    final path = Path();
+    for (final f in piso) {
+      if (f.proj.length < 3) continue;
+      path.moveTo(f.proj[0].dx, f.proj[0].dy);
+      for (var i = 1; i < f.proj.length; i++) {
+        path.lineTo(f.proj[i].dx, f.proj[i].dy);
+      }
+      path.close();
+    }
+    canvas.drawPath(path, Paint()..color = _corPiso);
+    canvas.drawPath(path, Paint()
+      ..color       = _corPisoRejunte
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 0.8);
+  }
+
   void _draw(Canvas canvas, List<Face> faces) {
     final fill   = Paint();
     final stroke = Paint()
@@ -539,9 +603,11 @@ class LojaPainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    // Rótulos de referência escritos no chão (discretos, sem fundo)
+    // Rótulos de referência (discretos, sem fundo): escuros sobre o piso
+    // claro, claros sobre o topo escuro da parede das entradas.
     for (final ref in referenciasLoja) {
-      final hit = project(Vec3(ref.x, 0.02, ref.z));
+      final y   = ref.naParede ? LojaGeometry._paredeH + 0.02 : 0.02;
+      final hit = project(Vec3(ref.x, y, ref.z));
       if (hit == null) continue;
       final (screen, cz) = hit;
       final fontSize = 11.0 * (9.0 / cz).clamp(0.6, 1.5);
@@ -549,7 +615,9 @@ class LojaPainter extends CustomPainter {
         text: TextSpan(
           text: ref.nome,
           style: TextStyle(
-            color:         const Color(0x59FFFFFF), // branco 35%
+            color: ref.naParede
+                ? const Color(0x59FFFFFF)  // branco 35% sobre a parede
+                : const Color(0x8C15181c), // grafite 55% sobre o piso
             fontSize:      fontSize,
             fontWeight:    FontWeight.w600,
             letterSpacing: 1.2,
