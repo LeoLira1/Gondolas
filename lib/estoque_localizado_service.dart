@@ -135,6 +135,14 @@ class EstoqueLocalizadoService {
   DateTime? _divergentesCacheEm;
   static const Duration _cacheTtl = Duration(minutes: 2);
 
+  // Qual coluna de contagem_itens existe neste ambiente (ver
+  // fetchEnderecosDesatualizados). Descoberto na primeira consulta e reusado
+  // dali em diante: sem isso, num banco sem `confirmado_em`, a query mais cara
+  // do app rodava DUAS vezes a cada chamada — a tentativa e o fallback. Volta a
+  // null se a coluna memorizada falhar, então o app se corrige sozinho caso o
+  // dashboard irmão adicione a coluna depois.
+  String? _colunaConfirmacao;
+
   // Invalida os caches de badges após uma gravação, para a próxima leitura
   // refletir o novo atualizado_em / status_ciclo sem esperar o TTL.
   void _invalidarCachesBadges() {
@@ -162,13 +170,23 @@ class EstoqueLocalizadoService {
     final client = await _conexao();
     if (client == null) return _desatualizadosCache.keys.toSet();
 
+    // Ordem de tentativa: a coluna que já funcionou antes primeiro; só se ela
+    // falhar (ou na primeira vez) é que se tenta a outra.
+    final preferida = _colunaConfirmacao ?? 'confirmado_em';
+    final alternativa =
+        preferida == 'confirmado_em' ? 'registrado_em' : 'confirmado_em';
+
     List<dynamic> rows;
     try {
-      rows = await _queryDesatualizados(client, colunaConfirmacao: 'confirmado_em');
+      rows = await _queryDesatualizados(client, colunaConfirmacao: preferida);
+      _colunaConfirmacao = preferida;
     } catch (_) {
       try {
-        rows = await _queryDesatualizados(client, colunaConfirmacao: 'registrado_em');
+        rows =
+            await _queryDesatualizados(client, colunaConfirmacao: alternativa);
+        _colunaConfirmacao = alternativa;
       } catch (_) {
+        _colunaConfirmacao = null;
         return _desatualizadosCache.keys.toSet();
       }
     }

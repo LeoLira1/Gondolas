@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'estoque_localizado_service.dart';
 import 'models.dart';
@@ -151,10 +153,16 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   }
 
   Future<void> _carregar() async {
+    // fetchEnderecosDesatualizados fica FORA da espera: o resultado dela nem é
+    // usado aqui — ela só aquece o cache que `_avisoDesatualizado` lê de forma
+    // síncrona — e é a consulta mais cara do app (JOIN sem filtro sobre
+    // estoque_localizado inteira). Esperá-la atrasava o dialog inteiro pelo
+    // aviso de um único endereço. Chega depois, com um setState próprio.
+    unawaited(_carregarAvisosDesatualizados());
+
     final resultados = await Future.wait([
       _service.fetchEnderecosProduto(widget.produtoCodigo),
       _service.buscarInfoMestre(widget.produtoCodigo),
-      _service.fetchEnderecosDesatualizados(),
     ]);
     final enderecos = resultados[0] as List<EnderecoLocalizado>;
     final info      = resultados[1] as InfoEstoqueMestre?;
@@ -204,6 +212,15 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
             );
       _carregando = false;
     });
+  }
+
+  /// Aquece o cache de endereços desatualizados e repinta quando ele chega —
+  /// os avisos aparecem alguns instantes depois do resto do dialog, em vez de
+  /// segurarem a abertura inteira.
+  Future<void> _carregarAvisosDesatualizados() async {
+    await _service.fetchEnderecosDesatualizados();
+    if (!mounted) return;
+    setState(() {});
   }
 
   double get _totalContado =>
@@ -531,7 +548,12 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
               ),
       ),
       actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      actions: _carregando ? null : [_buildAcoes()],
+      // O rodapé existe desde o primeiro frame, inclusive durante a carga: com
+      // `_carregando ? null : …` o "Voltar" só nascia depois das consultas
+      // terminarem, e com o cache de badges frio o usuário ficava num modal sem
+      // saída. As ações de GRAVAÇÃO é que ficam travadas enquanto carrega —
+      // salvar antes de saber o que já existe no endereço apagaria contagem.
+      actions: [_buildAcoes()],
     );
   }
 
@@ -568,7 +590,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               OutlinedButton(
-                onPressed: _salvando ? null : _onSalvar,
+                onPressed: (_salvando || _carregando) ? null : _onSalvar,
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size(0, 40),
                   padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -577,7 +599,8 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
               ),
               const SizedBox(height: 8),
               ElevatedButton(
-                onPressed: _salvando ? null : _onConcluirContagem,
+                onPressed:
+                    (_salvando || _carregando) ? null : _onConcluirContagem,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF2e6b46),
                   foregroundColor: Colors.white,

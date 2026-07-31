@@ -1,12 +1,31 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb, ValueNotifier;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, kIsWeb, ValueNotifier, debugPrint;
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'layout_cache.dart';
 import 'models.dart';
 import 'palete_registry.dart';
+
+/// Cronometra uma etapa de banco e imprime o tempo no log, só em debug.
+///
+/// As otimizações de carregamento (cache de layout, catálogo fora do caminho
+/// crítico, prewarm) só dá para conferir com número na mão — "parece mais
+/// rápido" foi exatamente o que não se conseguiu afirmar do cache local.
+/// Em release o `if (kDebugMode)` é constante e o compilador remove o ramo.
+Future<T> cronometrar<T>(String etiqueta, Future<T> Function() acao) async {
+  if (!kDebugMode) return acao();
+  final relogio = Stopwatch()..start();
+  try {
+    return await acao();
+  } finally {
+    relogio.stop();
+    debugPrint('[turso] $etiqueta: ${relogio.elapsedMilliseconds}ms');
+  }
+}
 
 class TursoService {
   static final TursoService _instance = TursoService._internal();
@@ -51,10 +70,25 @@ class TursoService {
   Future<void>? _initEmAndamento;
 
   // Cache do catálogo (estoque_mestre): evita repetir o SELECT de até 5000
-  // linhas toda vez que uma página abre.
+  // linhas toda vez que uma página abre. No modo local o TTL é ignorado (ver
+  // fetchProdutos): a base do dispositivo só muda em sincronizar() /
+  // _bootstrapEmBackground, e os dois já zeram este cache — o relógio ali só
+  // garantia uma reconsulta inútil em toda sessão longa. O TTL continua valendo
+  // no modo remoto, onde um app irmão pode mexer no estoque_mestre por fora.
   List<Produto>? _produtosCache;
   DateTime?      _produtosCacheEm;
-  static const Duration _produtosCacheTtl = Duration(minutes: 5);
+  static const Duration _produtosCacheTtl = Duration(minutes: 30);
+
+  // Cache dos layouts por estrutura. Ver layout_cache.dart para o porquê de
+  // morar aqui dentro. Invalidado pelos mesmos pontos que zeram _produtosCache,
+  // mais os dois salvarLayout* (que gravam direto o que acabaram de persistir).
+  final CacheDeLayout<CaixaLayout>        _cacheGondola = CacheDeLayout();
+  final CacheDeLayout<CaixaLayoutEstante> _cacheEstante = CacheDeLayout();
+
+  /// Consultas efetivamente enviadas ao banco desde a abertura do app. Serve
+  /// para conferir, no log de debug, que reabrir uma cena já visitada não
+  /// emite consulta nenhuma.
+  int consultasEmitidas = 0;
 
   bool get isConnected => _connected;
 
@@ -118,8 +152,7 @@ class TursoService {
     _tokenAtivo      = null;
     _cacheLocalAtivo = null;
     _modoLocal       = false;
-    _produtosCache   = null;
-    _produtosCacheEm = null;
+    _invalidarCachesDeLeitura();
 
     if (clienteAntigo != null) {
       // Solta a conexão anterior (troca de credenciais ou de modo) sem
@@ -237,14 +270,26 @@ class TursoService {
       await _migrarEsquemaLabelsEstante3(client);
       await _migrarPaletesCadastroDinamico(client);
       await PaleteRegistry().carregar();
-      _produtosCache   = null;
-      _produtosCacheEm = null;
+      // Antes do dataRevision: os listeners disparam de forma síncrona no
+      // `value++` e chamam _carregarLayout na hora — limpar depois os serviria
+      // com as linhas de antes do sync.
+      _invalidarCachesDeLeitura();
       await _registrarSincronizacao();
       _ultimoErroSync  = null;
       dataRevision.value++;
     } catch (e) {
       _ultimoErroSync = _descreverErroSync(e);
     }
+  }
+
+  /// Zera tudo que é leitura em cache (catálogo e layouts). Chamado nos quatro
+  /// pontos em que a base sob o app pode ter mudado por inteiro: reconexão,
+  /// carga inicial, sincronização e limpeza do cache local.
+  void _invalidarCachesDeLeitura() {
+    _produtosCache   = null;
+    _produtosCacheEm = null;
+    _cacheGondola.invalidarTudo();
+    _cacheEstante.invalidarTudo();
   }
 
   /// True se o arquivo local acabou de ser criado (nenhuma tabela ainda).
@@ -368,6 +413,20 @@ class TursoService {
       'CREATE INDEX IF NOT EXISTS idx_estante_layout_produto '
       'ON estante_layout (produto_codigo)',
     );
+    // Espelha o índice de estante acima: buscarProduto e o SELECT DISTINCT do
+    // Modo Conferência filtram gondola_layout por produto_codigo e até aqui
+    // faziam varredura completa.
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_gondola_layout_produto '
+      'ON gondola_layout (produto_codigo)',
+    );
+    // As buscas de badge filtram por endereço físico. O índice implícito do
+    // UNIQUE de estoque_localizado NÃO serve esse predicado: a coluna líder
+    // dele é produto_codigo.
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_estoque_localizado_local '
+      'ON estoque_localizado (local_tipo, local_num)',
+    );
     await client.execute(
       'CREATE INDEX IF NOT EXISTS idx_paletes_ativo ON paletes (ativo)',
     );
@@ -405,8 +464,8 @@ class TursoService {
       if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
       // O sync pode ter trazido paletes cadastrados em outro dispositivo.
       await PaleteRegistry().carregar();
-      _produtosCache   = null;
-      _produtosCacheEm = null;
+      // Antes do dataRevision — ver a nota em _bootstrapEmBackground.
+      _invalidarCachesDeLeitura();
       await _registrarSincronizacao();
       _ultimoErroSync = null;
       dataRevision.value++;
@@ -459,9 +518,8 @@ class TursoService {
     _tokenAtivo      = null;
     _cacheLocalAtivo = null;
     _modoLocal       = false;
-    _produtosCache   = null;
-    _produtosCacheEm = null;
     _ultimoErroSync  = null;
+    _invalidarCachesDeLeitura();
 
     if (clienteAntigo != null) {
       try {
@@ -561,37 +619,57 @@ class TursoService {
     }
   }
 
+  /// True enquanto o catálogo em cache pode ser servido sem reconsultar.
+  ///
+  /// No modo local a validade não é por relógio: a base do dispositivo só muda
+  /// via `client.sync()`, que só acontece em `sincronizar()` e
+  /// `_bootstrapEmBackground` — e os dois zeram o cache. Cache não-nulo ali
+  /// significa "em dia", ponto. O TTL fica valendo só no modo remoto, onde um
+  /// app irmão pode alterar o estoque_mestre por fora sem avisar.
+  bool get _catalogoEmCacheValido {
+    final em = _produtosCacheEm;
+    if (_produtosCache == null || em == null) return false;
+    return _modoLocal || DateTime.now().difference(em) < _produtosCacheTtl;
+  }
+
   Future<List<Produto>> fetchProdutos({bool forceRefresh = false}) async {
-    if (!await _garantirConexao()) return [];
+    // Antes do _garantirConexao: um cache quente não tem por que esperar o
+    // init() terminar.
+    if (!forceRefresh && _catalogoEmCacheValido) return _produtosCache!;
+    if (!await _garantirConexao()) return _produtosCache ?? [];
+    if (!forceRefresh && _catalogoEmCacheValido) return _produtosCache!;
 
     final cache = _produtosCache;
-    final cacheEm = _produtosCacheEm;
-    if (!forceRefresh &&
-        cache != null &&
-        cacheEm != null &&
-        DateTime.now().difference(cacheEm) < _produtosCacheTtl) {
-      return cache;
-    }
-
     try {
       // Use prepare() so the return type is consistent with fetchLayout.
       // The bare client.query() returns a different type in libsql_dart 0.9.x
       // and silently fails the cast, yielding an empty list.
-      final stmt = await _client!.prepare(
-        'SELECT codigo, produto, categoria FROM estoque_mestre ORDER BY produto LIMIT 5000',
-      );
-      final rows = await stmt.query();
-      final produtos = (rows as List<dynamic>).map((dynamic row) {
-        final r      = row as Map<String, dynamic>;
-        final cat    = r['categoria'] as String? ?? '';
-        final corHex = categoriaCores[cat] ?? '#888888';
-        return Produto(
-          codigo:    r['codigo']  as String? ?? '',
-          nome:      r['produto'] as String? ?? '',
-          categoria: cat,
-          corHex:    corHex,
+      //
+      // Sem ORDER BY: estoque_mestre é de outro app e não tem índice em
+      // `produto`, então ordenar no banco montava uma b-tree temporária a cada
+      // leitura fria. A ordenação em Dart logo abaixo dá o mesmo resultado —
+      // a colação BINARY do SQLite e o String.compareTo do Dart são ambos por
+      // code point — e a ordem importa rio abaixo (produtosComCaixa documenta
+      // "mantém a ordem do catálogo", e o autocomplete faz .take(8)).
+      final produtos = await cronometrar('fetchProdutos', () async {
+        consultasEmitidas++;
+        final stmt = await _client!.prepare(
+          'SELECT codigo, produto, categoria FROM estoque_mestre LIMIT 5000',
         );
-      }).toList();
+        final rows = await stmt.query();
+        return (rows as List<dynamic>).map((dynamic row) {
+          final r      = row as Map<String, dynamic>;
+          final cat    = r['categoria'] as String? ?? '';
+          final corHex = categoriaCores[cat] ?? '#888888';
+          return Produto(
+            codigo:    r['codigo']  as String? ?? '',
+            nome:      r['produto'] as String? ?? '',
+            categoria: cat,
+            corHex:    corHex,
+          );
+        }).toList()
+          ..sort((a, b) => a.nome.compareTo(b.nome));
+      });
       _produtosCache   = produtos;
       _produtosCacheEm = DateTime.now();
       return produtos;
@@ -600,28 +678,52 @@ class TursoService {
     }
   }
 
-  Future<List<CaixaLayout>> fetchLayout(int gondolaNum) async {
-    if (!await _garantirConexao()) return [];
-    try {
-      final stmt = await _client!.prepare(
-        'SELECT gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex '
-        'FROM gondola_layout WHERE gondola_num = ? ORDER BY id',
+  CaixaLayout _caixaLayoutDaLinha(Map<String, dynamic> r, int gondolaNum) =>
+      CaixaLayout(
+        gondolaNum:    r['gondola_num']    as int?    ?? gondolaNum,
+        andar:         r['andar']          as int?    ?? 0,
+        produtoCodigo: r['produto_codigo'] as String? ?? '',
+        produtoNome:   r['produto_nome']   as String? ?? '',
+        posX:          (r['pos_x']  as num?)?.toDouble() ?? 0,
+        posZ:          (r['pos_z']  as num?)?.toDouble() ?? 0,
+        corHex:        r['cor_hex']        as String? ?? '#888888',
       );
-      final rows = await stmt.query(positional: [gondolaNum]);
-      return (rows as List<dynamic>).map((dynamic row) {
-        final r = row as Map<String, dynamic>;
-        return CaixaLayout(
-          gondolaNum:    r['gondola_num']    as int?    ?? gondolaNum,
-          andar:         r['andar']          as int?    ?? 0,
-          produtoCodigo: r['produto_codigo'] as String? ?? '',
-          produtoNome:   r['produto_nome']   as String? ?? '',
-          posX:          (r['pos_x']  as num?)?.toDouble() ?? 0,
-          posZ:          (r['pos_z']  as num?)?.toDouble() ?? 0,
-          corHex:        r['cor_hex']        as String? ?? '#888888',
+
+  static const String _colunasLayoutGondola =
+      'gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex';
+
+  /// Layout da gôndola já em memória, ou null se ainda não foi lido. Síncrono
+  /// de propósito: é o que permite semear a cena no mesmo frame do toque.
+  List<CaixaLayout>? layoutEmCache(int gondolaNum) =>
+      _cacheGondola.ler(gondolaNum);
+
+  Future<List<CaixaLayout>> fetchLayout(
+    int gondolaNum, {
+    bool forceRefresh = false,
+  }) async {
+    final cache = _cacheGondola.ler(gondolaNum);
+    // No modo local o cache é sempre confiável: o arquivo só muda por escrita
+    // deste app (que grava direto no cache) ou por sync (que o invalida). Não
+    // há terceiro escritor, então não há o que revalidar.
+    if (!forceRefresh && cache != null && _modoLocal) return cache;
+    if (!await _garantirConexao()) return cache ?? [];
+    try {
+      final itens = await cronometrar('fetchLayout($gondolaNum)', () async {
+        consultasEmitidas++;
+        final stmt = await _client!.prepare(
+          'SELECT $_colunasLayoutGondola '
+          'FROM gondola_layout WHERE gondola_num = ? ORDER BY id',
         );
-      }).toList();
+        final rows = await stmt.query(positional: [gondolaNum]);
+        return (rows as List<dynamic>)
+            .map((dynamic row) =>
+                _caixaLayoutDaLinha(row as Map<String, dynamic>, gondolaNum))
+            .toList();
+      });
+      _cacheGondola.gravar(gondolaNum, itens);
+      return itens;
     } catch (_) {
-      return [];
+      return cache ?? [];
     }
   }
 
@@ -680,38 +782,146 @@ class TursoService {
         }
         await stmtIns.query(positional: params);
       }
+      // Write-through: as linhas recém-gravadas SÃO o novo estado persistido,
+      // então dá para atualizar o cache sem reler.
+      _cacheGondola.gravar(gondolaNum, itens);
       return true;
     } catch (_) {
+      // DELETE + INSERT não é atômico aqui: o DELETE pode ter passado e o
+      // INSERT não. O estado persistido é desconhecido — o cache tem de cair,
+      // não ser adivinhado.
+      _cacheGondola.invalidar(gondolaNum);
       return false;
     }
   }
 
-  Future<List<CaixaLayoutEstante>> fetchLayoutEstante(int estanteNum) async {
-    if (!await _garantirConexao()) return [];
-    try {
-      final stmt = await _client!.prepare(
-        'SELECT estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex '
-        'FROM estante_layout WHERE estante_num = ? ORDER BY id',
+  CaixaLayoutEstante _caixaLayoutEstanteDaLinha(
+          Map<String, dynamic> r, int estanteNum) =>
+      CaixaLayoutEstante(
+        estanteNum:    r['estante_num']    as int?    ?? estanteNum,
+        coluna:        r['coluna']         as int?    ?? 0,
+        nivel:         r['nivel']          as int?    ?? 0,
+        slot:          r['slot']           as int?    ?? 0,
+        produtoCodigo: r['produto_codigo'] as String? ?? '',
+        produtoNome:   r['produto_nome']   as String? ?? '',
+        corHex:        r['cor_hex']        as String? ?? '#888888',
       );
-      final rows = await stmt.query(positional: [estanteNum]);
-      return (rows as List<dynamic>)
-          .map((dynamic row) {
-            final r = row as Map<String, dynamic>;
-            return CaixaLayoutEstante(
-              estanteNum:    r['estante_num']    as int?    ?? estanteNum,
-              coluna:        r['coluna']         as int?    ?? 0,
-              nivel:         r['nivel']          as int?    ?? 0,
-              slot:          r['slot']           as int?    ?? 0,
-              produtoCodigo: r['produto_codigo'] as String? ?? '',
-              produtoNome:   r['produto_nome']   as String? ?? '',
-              corHex:        r['cor_hex']        as String? ?? '#888888',
-            );
-          })
-          .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
-          .toList();
+
+  static const String _colunasLayoutEstante =
+      'estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex';
+
+  /// Layout da estante já em memória, ou null se ainda não foi lido.
+  List<CaixaLayoutEstante>? layoutEstanteEmCache(int estanteNum) =>
+      _cacheEstante.ler(estanteNum);
+
+  Future<List<CaixaLayoutEstante>> fetchLayoutEstante(
+    int estanteNum, {
+    bool forceRefresh = false,
+  }) async {
+    final cache = _cacheEstante.ler(estanteNum);
+    if (!forceRefresh && cache != null && _modoLocal) return cache;
+    if (!await _garantirConexao()) return cache ?? [];
+    try {
+      final itens =
+          await cronometrar('fetchLayoutEstante($estanteNum)', () async {
+        consultasEmitidas++;
+        final stmt = await _client!.prepare(
+          'SELECT $_colunasLayoutEstante '
+          'FROM estante_layout WHERE estante_num = ? ORDER BY id',
+        );
+        final rows = await stmt.query(positional: [estanteNum]);
+        return (rows as List<dynamic>)
+            .map((dynamic row) => _caixaLayoutEstanteDaLinha(
+                row as Map<String, dynamic>, estanteNum))
+            .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
+            .toList();
+      });
+      _cacheEstante.gravar(estanteNum, itens);
+      return itens;
     } catch (_) {
-      return [];
+      return cache ?? [];
     }
+  }
+
+  /// Carrega os layouts de TODAS as estruturas em duas consultas e deixa os
+  /// dois caches quentes.
+  ///
+  /// As tabelas são pequenas (dezenas de caixas por estrutura, ~30 estruturas),
+  /// então duas consultas sem WHERE saem mais baratas que as ~30 que percorrer
+  /// o carrossel dispararia uma a uma — e, chamadas do prewarm enquanto o
+  /// usuário olha o mapa, saem inteiramente de fora do caminho crítico.
+  ///
+  /// Falha em silêncio: é otimização, não caminho obrigatório. Se não der
+  /// certo, cada estrutura volta a ser lida sob demanda como antes.
+  Future<void> precarregarLayouts() async {
+    if (!await _garantirConexao()) return;
+    try {
+      await cronometrar('precarregarLayouts', () async {
+        consultasEmitidas++;
+        final stmtG = await _client!.prepare(
+          'SELECT $_colunasLayoutGondola '
+          'FROM gondola_layout ORDER BY gondola_num, id',
+        );
+        final rowsG = await stmtG.query() as List<dynamic>;
+        // Semeia vazio para toda estrutura conhecida: sem isso uma prateleira
+        // sem nenhuma caixa nunca apareceria no agrupamento, ficaria como miss
+        // e voltaria a consultar o banco a cada abertura. Lista vazia em cache
+        // é uma resposta legítima ("consultado, não tem nada").
+        final porGondola = <int, List<CaixaLayout>>{
+          for (var n = 1; n <= 12; n++) n: <CaixaLayout>[],
+        };
+        for (final dynamic row in rowsG) {
+          final r = row as Map<String, dynamic>;
+          final num_ = r['gondola_num'] as int? ?? 0;
+          porGondola
+              .putIfAbsent(num_, () => <CaixaLayout>[])
+              .add(_caixaLayoutDaLinha(r, num_));
+        }
+        // Nunca sobrescreve o que já está em cache: o prewarm começa na
+        // abertura do app e pode terminar DEPOIS de um salvarLayout ter feito
+        // write-through, e aí devolveria a estrutura ao estado anterior.
+        porGondola.forEach((n, itens) {
+          if (_cacheGondola.ler(n) == null) _cacheGondola.gravar(n, itens);
+        });
+
+        consultasEmitidas++;
+        final stmtE = await _client!.prepare(
+          'SELECT $_colunasLayoutEstante '
+          'FROM estante_layout ORDER BY estante_num, id',
+        );
+        final rowsE = await stmtE.query() as List<dynamic>;
+        final porEstante = <int, List<CaixaLayoutEstante>>{
+          for (final n in ordemNavegacaoEstantes) n: <CaixaLayoutEstante>[],
+        };
+        for (final dynamic row in rowsE) {
+          final r = row as Map<String, dynamic>;
+          final num_ = r['estante_num'] as int? ?? 0;
+          final caixa = _caixaLayoutEstanteDaLinha(r, num_);
+          // Mesmo filtro de fetchLayoutEstante: sem ele uma leitura do cache
+          // discordaria de uma consulta fresca da mesma estante.
+          if (_ehBaseNelloreRemovida(caixa.estanteNum, caixa.nivel)) continue;
+          porEstante
+              .putIfAbsent(num_, () => <CaixaLayoutEstante>[])
+              .add(caixa);
+        }
+        porEstante.forEach((n, itens) {
+          if (_cacheEstante.ler(n) == null) _cacheEstante.gravar(n, itens);
+        });
+      });
+    } catch (_) {
+      // Prewarm é best-effort — ver doc acima.
+    }
+  }
+
+  /// Aquece os caches de leitura enquanto o usuário ainda está no mapa.
+  ///
+  /// Chamado logo depois do init() na abertura do app: `LojaPage` é a home e
+  /// não emite trabalho de banco próprio, então essa janela é livre. É o que
+  /// faz a primeira abertura de uma cena custar o mesmo que as seguintes.
+  Future<void> prewarm() async {
+    if (!_connected) return;
+    await precarregarLayouts();
+    await fetchProdutos();
   }
 
   Future<bool> salvarLayoutEstante(

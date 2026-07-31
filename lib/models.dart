@@ -332,6 +332,49 @@ String chaveEnderecoEstoque({
   required int andarOuNivel,
 }) => '$produtoCodigo|$localTipo|$localNum|$faceOuColuna|$andarOuNivel';
 
+/// Cor cinza dos produtos sem cor conhecida (fora do catálogo, categoria sem
+/// cor cadastrada, ou `cor_hex` inválido vindo do banco).
+const Color corProdutoDesconhecido = Color(0xFF888888);
+
+// Memo do parse de hex. São ~9 cores distintas em toda a loja (8 categorias +
+// o cinza), mas `corDeHex` é chamada uma vez por produto ao montar o mapa de
+// cores da cena — com o catálogo inteiro isso era um `int.parse` por produto,
+// a cada vez. O mapa cresce no máximo até o número de hexes distintos que o
+// banco tiver, então não precisa de limite nem de expiração.
+final Map<String, Color> _memoCores = {};
+
+/// Converte `#rrggbb` (ou `rrggbb`) na [Color] opaca correspondente,
+/// memoizando o resultado. Hex malformado devolve [corProdutoDesconhecido] —
+/// antes um `cor_hex` inválido no banco estourava dentro do `build()`.
+Color corDeHex(String hex) => _memoCores.putIfAbsent(hex, () {
+      final limpo = hex.startsWith('#') ? hex.substring(1) : hex;
+      // O comprimento tem de ser conferido: 'FF' + '' ainda é um hex válido
+      // (255), e sairia como azul transparente em vez de cair no cinza.
+      if (limpo.length != 6) return corProdutoDesconhecido;
+      final valor = int.tryParse('FF$limpo', radix: 16);
+      return valor == null ? corProdutoDesconhecido : Color(valor);
+    });
+
+/// Mapa código → cor para a cena pintar as caixas, combinando as duas fontes.
+///
+/// [doLayout] vem do `cor_hex` gravado nas próprias linhas de
+/// `gondola_layout`/`estante_layout` — chega junto com o layout, então serve
+/// para pintar já no primeiro frame, sem esperar o catálogo. [catalogo] vem do
+/// `estoque_mestre` e vence quando o produto existe nele: o `cor_hex` da linha
+/// foi gravado A PARTIR do catálogo no momento do save, então os dois só
+/// discordam se a categoria do produto mudou desde então — e aí o certo é a
+/// categoria de agora.
+Map<String, Color> mesclarCores(
+  Map<String, Color> doLayout,
+  List<Produto> catalogo,
+) {
+  final cores = <String, Color>{...doLayout};
+  for (final p in catalogo) {
+    cores[p.codigo] = p.cor;
+  }
+  return cores;
+}
+
 class Produto {
   final String codigo;
   final String nome;
@@ -345,10 +388,7 @@ class Produto {
     required this.corHex,
   });
 
-  Color get cor {
-    final hex = corHex.replaceFirst('#', '');
-    return Color(int.parse('FF$hex', radix: 16));
-  }
+  Color get cor => corDeHex(corHex);
 }
 
 /// Produtos com caixa num local (gôndola ou estante) para o dialog

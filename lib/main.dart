@@ -143,7 +143,11 @@ class _LojaPageState extends State<LojaPage> {
       }
     });
 
-    TursoService().init();
+    // Prewarm: assim que a conexão sobe, carrega layouts e catálogo enquanto o
+    // usuário ainda está se situando no mapa. LojaPage é a home e não emite
+    // consulta própria, então essa janela é livre — e é ela que faz a PRIMEIRA
+    // abertura de uma gôndola/prateleira custar o mesmo que as seguintes.
+    unawaited(TursoService().init().then((_) => TursoService().prewarm()));
 
     if (widget.itemTipoInicial != null && widget.itemNumeroInicial != null) {
       final numeroMapa =
@@ -1380,13 +1384,37 @@ class _GondolaPageState extends State<GondolaPage> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  List<Produto> get _catalogoAtual =>
-      _produtos.isNotEmpty ? _produtos : _catalogoMock;
+  // Só cai no catálogo de exemplo quando NÃO há banco configurado — que é o
+  // caso para o qual ele existe (o banner "usando dados de exemplo"). Com banco
+  // conectado, o catálogo agora chega depois da cena (ver _inicializar), e
+  // deixar o mock valer nessa janela pintaria as caixas com códigos falsos.
+  List<Produto> get _catalogoAtual => _produtos.isNotEmpty
+      ? _produtos
+      : (_dbConectado ? const <Produto>[] : _catalogoMock);
 
   List<CaixaColocada> get _caixasAtuais => _caixas[_gondolaAtual] ?? const [];
 
-  Map<String, Color> get _corPorProduto =>
-      {for (final p in _catalogoAtual) p.codigo: p.cor};
+  // Cor e nome que vêm nas PRÓPRIAS linhas de gondola_layout: chegam junto com
+  // o layout, então a cena pinta certo no primeiro frame, sem esperar o
+  // catálogo. Também servem de rede de segurança ao salvar — ver _salvarLayout.
+  Map<String, String> _hexDoLayout   = const {};
+  Map<String, String> _nomesDoLayout = const {};
+
+  // Derivados do catálogo, recalculados só quando o catálogo ou o layout mudam.
+  // Eram getters avaliados a cada build() — com 854 produtos, isso era um mapa
+  // de 854 entradas remontado (e 854 hex reparseados) a cada setState, e a
+  // identidade nova do Map ainda derrubava as comparações rio abaixo.
+  Map<String, Color>   _corPorProduto    = const {};
+  Map<String, Produto> _produtoPorCodigo = const {};
+
+  void _recomputarCatalogoDerivado() {
+    final catalogo = _catalogoAtual;
+    _corPorProduto = mesclarCores(
+      {for (final e in _hexDoLayout.entries) e.key: corDeHex(e.value)},
+      catalogo,
+    );
+    _produtoPorCodigo = {for (final p in catalogo) p.codigo: p};
+  }
 
   List<Produto> _filtrarProdutos(String query) {
     if (query.length < 2) return [];
@@ -1435,32 +1463,53 @@ class _GondolaPageState extends State<GondolaPage> {
     final conectado = TursoService().isConnected;
     setState(() => _dbConectado = conectado);
 
-    if (conectado) {
-      // Catálogo, layout e endereços desatualizados em paralelo: corta idas
-      // ao servidor do caminho crítico de abertura da página.
-      final layoutFuture = _carregarLayout(_gondolaAtual);
-      final desatualizadosFuture = _carregarDesatualizados();
-      final produtos = await TursoService().fetchProdutos();
-      if (!mounted) return;
-      setState(() {
-        _produtos           = produtos;
-        _carregandoProdutos = false;
-      });
-      await Future.wait([layoutFuture, desatualizadosFuture]);
-    } else {
+    if (!conectado) {
       setState(() {
         _produtos           = [];
         _carregandoProdutos = false;
+        _recomputarCatalogoDerivado();
       });
+      return;
     }
+
+    // Só o layout é esperado: ele já traz cor e nome de cada caixa, então a
+    // cena aparece completa e nas cores certas. O catálogo (estoque_mestre) só
+    // é preciso para o autocomplete do "Adicionar" e para o contador — esperar
+    // por ele aqui era o que deixava as caixas cinzas até a consulta voltar,
+    // atrás ainda das duas consultas de badge na fila do banco.
+    await _carregarLayout(_gondolaAtual);
+    unawaited(_carregarDesatualizados());
+    unawaited(_carregarCatalogo());
+  }
+
+  Future<void> _carregarCatalogo() async {
+    final produtos = await TursoService().fetchProdutos();
+    if (!mounted) return;
+    setState(() {
+      _produtos           = produtos;
+      _carregandoProdutos = false;
+      _recomputarCatalogoDerivado();
+      // Reaplica o filtro no que já estava digitado: sem isso, quem começou a
+      // buscar antes do catálogo chegar teria de reescrever para ver sugestão.
+      if (_ctrl1.text.length >= 2) _sugestoes1 = _filtrarProdutos(_ctrl1.text);
+      if (_ctrl2.text.length >= 2) _sugestoes2 = _filtrarProdutos(_ctrl2.text);
+    });
   }
 
   // Recarrega a cena quando uma sincronização (carga inicial em segundo plano
-  // ou botão Sincronizar) traz dados novos, sem travar a abertura.
+  // ou botão Sincronizar) traz dados novos, sem travar a abertura. É o ÚNICO
+  // caminho de recarga pós-sync — o botão Sincronizar não chama _inicializar,
+  // senão tudo rodaria em dobro.
   void _aoAtualizarDados() {
     if (!mounted) return;
+    // Descarta só as OUTRAS estruturas: limpar a atual aqui (fora de setState,
+    // com o reload assíncrono) daria um frame com a gôndola vazia.
+    _caixas.removeWhere((k, _) => k != _gondolaAtual);
     _carregarLayout(_gondolaAtual);
-    _carregarDesatualizados(forceRefresh: true);
+    unawaited(_carregarDesatualizados(forceRefresh: true));
+    // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
+    // era o que o _inicializar do botão Sincronizar fazia.
+    unawaited(_carregarCatalogo());
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -1486,10 +1535,36 @@ class _GondolaPageState extends State<GondolaPage> {
       _gondolaAtual     = nova;
       // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
       // a barra de progresso só aparece na primeira visita à gôndola.
-      _carregandoLayout = _dbConectado && !_caixas.containsKey(nova);
+      final semeou = _semearDoCache(nova);
+      _carregandoLayout =
+          !semeou && _dbConectado && !_caixas.containsKey(nova);
       _caixaSelecionada = null;
     });
     if (_dbConectado) _carregarLayout(nova);
+  }
+
+  /// Preenche a gôndola a partir do cache do serviço, se ela já tiver sido
+  /// lida. Síncrono: é o que permite o carrossel trocar de estrutura dentro do
+  /// mesmo frame do toque, sem passar pelo banco.
+  ///
+  /// Deve ser chamado de dentro de um setState.
+  bool _semearDoCache(int gondolaNum) {
+    final cache = TursoService().layoutEmCache(gondolaNum);
+    if (cache == null) return false;
+    _aplicarLayout(gondolaNum, cache);
+    return true;
+  }
+
+  /// Aplica as linhas do banco à cena: as caixas e, junto, o mapa de cores e
+  /// nomes que vem nas próprias linhas. Deve ser chamado de dentro de setState.
+  void _aplicarLayout(int gondolaNum, List<CaixaLayout> layouts) {
+    _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
+    if (gondolaNum == _gondolaAtual) {
+      _hexDoLayout   = {for (final l in layouts) l.produtoCodigo: l.corHex};
+      _nomesDoLayout = {for (final l in layouts) l.produtoCodigo: l.produtoNome};
+      _recomputarCatalogoDerivado();
+      _carregandoLayout = false;
+    }
   }
 
   // Caixas gravadas na era do octógono podem cair fora do hexágono novo
@@ -1509,10 +1584,7 @@ class _GondolaPageState extends State<GondolaPage> {
   Future<void> _carregarLayout(int gondolaNum) async {
     final layouts = await TursoService().fetchLayout(gondolaNum);
     if (!mounted) return;
-    setState(() {
-      _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
-      if (_gondolaAtual == gondolaNum) _carregandoLayout = false;
-    });
+    setState(() => _aplicarLayout(gondolaNum, layouts));
   }
 
   void _onTapAndar(int andar, double x, double z) {
@@ -1588,14 +1660,16 @@ class _GondolaPageState extends State<GondolaPage> {
         ? selecionada
         : _caixaEm(_faceSelecionada!, _andarSelecionado!);
     if (caixa == null) return null;
-    final matches = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
-    if (matches.isNotEmpty) return matches.first;
-    // Produto fora do catálogo carregado: mostra ao menos o código.
+    final doCatalogo = _produtoPorCodigo[caixa.produtoId];
+    if (doCatalogo != null) return doCatalogo;
+    // Produto fora do catálogo carregado (ou catálogo ainda a caminho): usa o
+    // nome e a cor que vieram na própria linha do layout, caindo no código só
+    // se nem isso houver.
     return Produto(
       codigo:    caixa.produtoId,
-      nome:      caixa.produtoId,
+      nome:      _nomesDoLayout[caixa.produtoId] ?? caixa.produtoId,
       categoria: '',
-      corHex:    '#888888',
+      corHex:    _hexDoLayout[caixa.produtoId] ?? '#888888',
     );
   }
 
@@ -1606,9 +1680,9 @@ class _GondolaPageState extends State<GondolaPage> {
     required int faceOuColuna,
     required int andarOuNivel,
   }) async {
-    final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
-    final produtoNome =
-        produto.isNotEmpty ? produto.first.nome : produtoCodigo;
+    final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
+        _nomesDoLayout[produtoCodigo] ??
+        produtoCodigo;
     await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
@@ -1722,26 +1796,34 @@ class _GondolaPageState extends State<GondolaPage> {
 
     setState(() => _salvando = true);
 
-    final produtoMap = {for (final p in _produtos) p.codigo: p};
+    // Nome e cor vêm do catálogo quando ele já chegou; senão, do que a própria
+    // linha já tinha no banco. Essa segunda fonte importa porque o catálogo
+    // agora carrega depois da cena: salvar dentro dessa janela sem ela gravaria
+    // o código no lugar do nome e cinza no lugar da cor.
     final itens = _caixasAtuais.map((c) {
-      final produto = produtoMap[c.produtoId];
+      final produto = _produtoPorCodigo[c.produtoId];
       return CaixaLayout(
         gondolaNum:    _gondolaAtual,
         andar:         c.andar,
         produtoCodigo: c.produtoId,
-        produtoNome:   produto?.nome ?? c.produtoId,
+        produtoNome:   produto?.nome ?? _nomesDoLayout[c.produtoId] ?? c.produtoId,
         posX:          c.x,
         posZ:          c.z,
-        corHex:        produto?.corHex ?? '#888888',
+        corHex:        produto?.corHex ?? _hexDoLayout[c.produtoId] ?? '#888888',
       );
     }).toList();
 
-    // Produtos que estavam no layout persistido e saíram nesta edição: os
+    // Produtos que estavam no layout PERSISTIDO e saíram nesta edição: os
     // endereços ZERADOS deles nesta gôndola são apagados junto (quantidades
     // > 0 são estoque contado e só somem pela lixeira do dialog).
-    final antes = (await TursoService().fetchLayout(_gondolaAtual))
-        .map((c) => c.produtoCodigo)
-        .toSet();
+    //
+    // Tem de ser o layout persistido, não `_caixasAtuais`: este último é a
+    // edição em curso, e comparado consigo mesmo nunca acusaria remoção
+    // nenhuma. O cache do serviço guarda exatamente as linhas persistidas, daí
+    // dar para pular a releitura quando ele está quente.
+    final persistido = TursoService().layoutEmCache(_gondolaAtual) ??
+        await TursoService().fetchLayout(_gondolaAtual);
+    final antes = persistido.map((c) => c.produtoCodigo).toSet();
 
     final ok = await TursoService().salvarLayout(_gondolaAtual, itens);
     if (ok) {
@@ -1778,12 +1860,10 @@ class _GondolaPageState extends State<GondolaPage> {
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: Duration(seconds: ok ? 2 : 6),
     ));
-    if (ok) {
-      // Descarta os layouts em memória e recarrega tudo do banco recém-
-      // sincronizado (edições não salvas são substituídas).
-      _caixas.clear();
-      _inicializar();
-    }
+    // A recarga pós-sync NÃO é feita aqui: sincronizar() incrementa
+    // dataRevision, e o listener _aoAtualizarDados já descarta os layouts em
+    // memória e recarrega tudo (edições não salvas são substituídas). Chamar
+    // _inicializar também, como antes, fazia cada consulta rodar duas vezes.
   }
 
   Future<void> _buscarProduto(Produto produto) async {
@@ -1862,19 +1942,23 @@ class _GondolaPageState extends State<GondolaPage> {
     final andar     = encontrado.andar.clamp(0, 2);
     final andarNome = ['Base', 'Meio', 'Topo'][andar];
     final face      = faceFromPos(encontrado.posX, encontrado.posZ);
-    final caixasNovas = layouts.map(_caixaDoLayout).toList();
-    CaixaColocada? caixaEncontrada;
-    for (final c in caixasNovas) {
-      if (c.produtoId == produto.codigo &&
-          c.andar == andar &&
-          faceFromPos(c.x, c.z) == face) {
-        caixaEncontrada = c;
-        break;
-      }
-    }
     setState(() {
-      _caixas[encontrado.gondolaNum] = caixasNovas;
-      _carregandoLayout = false;
+      // Via _aplicarLayout para as cores/nomes da linha entrarem junto — sem
+      // isso, saltar direto da busca para outra gôndola deixaria a cena com o
+      // mapa de cores da anterior.
+      _aplicarLayout(encontrado.gondolaNum, layouts);
+      // A caixa destacada tem de ser a MESMA instância que foi para _caixas:
+      // CaixaColocada não sobrescreve ==, e _produtoNoEnderecoSelecionado
+      // confere a seleção com `_caixasAtuais.contains(...)`.
+      CaixaColocada? caixaEncontrada;
+      for (final c in _caixas[encontrado.gondolaNum] ?? const <CaixaColocada>[]) {
+        if (c.produtoId == produto.codigo &&
+            c.andar == andar &&
+            faceFromPos(c.x, c.z) == face) {
+          caixaEncontrada = c;
+          break;
+        }
+      }
       _destacadoCodigo  = produto.codigo;
       _faceSelecionada  = face;
       _andarSelecionado = andar;
@@ -2279,10 +2363,17 @@ class _GondolaPageState extends State<GondolaPage> {
               _sugestoes1           = [];
               _ctrl1.clear();
             }),
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl1.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
+
+  /// True quando não há sugestão a mostrar só porque o catálogo ainda não
+  /// chegou — e não porque a busca realmente não deu resultado.
+  bool _catalogoAindaChegando(String texto) =>
+      _carregandoProdutos && _dbConectado && texto.length >= 2;
 
   // ── Conteúdo Expander 2 ────────────────────────────────────────────────────
 
@@ -2304,7 +2395,9 @@ class _GondolaPageState extends State<GondolaPage> {
               _ctrl2.clear();
               _buscarProduto(p);
             },
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl2.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
@@ -2356,6 +2449,40 @@ class _CampoAutocomplete extends StatelessWidget {
 }
 
 // ── Lista de sugestões ────────────────────────────────────────────────────────
+
+/// Aviso no lugar da lista de sugestões enquanto o catálogo ainda está sendo
+/// carregado.
+///
+/// O catálogo passou a chegar DEPOIS da cena (a cena não depende dele para
+/// pintar). Nessa janela, quem digitasse no autocomplete veria uma lista vazia
+/// — indistinguível de "produto não existe". Isto diz que é só esperar.
+class _AvisoCatalogoCarregando extends StatelessWidget {
+  const _AvisoCatalogoCarregando();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161b22),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF2a3441)),
+      ),
+      child: Row(children: [
+        const SizedBox(
+          width: 12,
+          height: 12,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Color(0xFF8a9aa8)),
+        ),
+        const SizedBox(width: 10),
+        const Text('Carregando catálogo...',
+            style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 12)),
+      ]),
+    );
+  }
+}
 
 class _SugestoesList extends StatelessWidget {
   final List<Produto>            sugestoes;
@@ -2724,14 +2851,31 @@ class _EstantePageState extends State<EstantePage> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  List<Produto> get _catalogoAtual =>
-      _produtos.isNotEmpty ? _produtos : _catalogoMock;
+  // Ver a nota do gêmeo em _GondolaPageState: com banco conectado o catálogo
+  // chega depois da cena, e o mock nessa janela pintaria códigos falsos.
+  List<Produto> get _catalogoAtual => _produtos.isNotEmpty
+      ? _produtos
+      : (_dbConectado ? const <Produto>[] : _catalogoMock);
 
   List<CaixaColocadaEstante> get _caixasAtuais =>
       _caixas[_estanteAtual] ?? const [];
 
-  Map<String, Color> get _corPorProduto =>
-      {for (final p in _catalogoAtual) p.codigo: p.cor};
+  // Cor e nome vindos das próprias linhas de estante_layout — ver o gêmeo em
+  // _GondolaPageState.
+  Map<String, String> _hexDoLayout   = const {};
+  Map<String, String> _nomesDoLayout = const {};
+
+  Map<String, Color>   _corPorProduto    = const {};
+  Map<String, Produto> _produtoPorCodigo = const {};
+
+  void _recomputarCatalogoDerivado() {
+    final catalogo = _catalogoAtual;
+    _corPorProduto = mesclarCores(
+      {for (final e in _hexDoLayout.entries) e.key: corDeHex(e.value)},
+      catalogo,
+    );
+    _produtoPorCodigo = {for (final p in catalogo) p.codigo: p};
+  }
 
   List<Produto> _filtrarProdutos(String query) {
     if (query.length < 2) return [];
@@ -2777,30 +2921,42 @@ class _EstantePageState extends State<EstantePage> {
     final conectado = TursoService().isConnected;
     setState(() => _dbConectado = conectado);
 
-    if (conectado) {
-      final layoutFuture = _carregarLayout(_estanteAtual);
-      final desatualizadosFuture = _carregarDesatualizados();
-      final produtos = await TursoService().fetchProdutos();
-      if (!mounted) return;
-      setState(() {
-        _produtos           = produtos;
-        _carregandoProdutos = false;
-      });
-      await Future.wait([layoutFuture, desatualizadosFuture]);
-    } else {
+    if (!conectado) {
       setState(() {
         _produtos           = [];
         _carregandoProdutos = false;
+        _recomputarCatalogoDerivado();
       });
+      return;
     }
+
+    // Só o layout é esperado — ver a nota do gêmeo em _GondolaPageState.
+    await _carregarLayout(_estanteAtual);
+    unawaited(_carregarDesatualizados());
+    unawaited(_carregarCatalogo());
+  }
+
+  Future<void> _carregarCatalogo() async {
+    final produtos = await TursoService().fetchProdutos();
+    if (!mounted) return;
+    setState(() {
+      _produtos           = produtos;
+      _carregandoProdutos = false;
+      _recomputarCatalogoDerivado();
+      if (_ctrl1.text.length >= 2) _sugestoes1 = _filtrarProdutos(_ctrl1.text);
+      if (_ctrl2.text.length >= 2) _sugestoes2 = _filtrarProdutos(_ctrl2.text);
+    });
   }
 
   // Recarrega a cena quando uma sincronização (carga inicial em segundo plano
-  // ou botão Sincronizar) traz dados novos, sem travar a abertura.
+  // ou botão Sincronizar) traz dados novos, sem travar a abertura. É o ÚNICO
+  // caminho de recarga pós-sync — ver a nota do gêmeo em _GondolaPageState.
   void _aoAtualizarDados() {
     if (!mounted) return;
+    _caixas.removeWhere((k, _) => k != _estanteAtual);
     _carregarLayout(_estanteAtual);
-    _carregarDesatualizados(forceRefresh: true);
+    unawaited(_carregarDesatualizados(forceRefresh: true));
+    unawaited(_carregarCatalogo());
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -2834,7 +2990,9 @@ class _EstantePageState extends State<EstantePage> {
       _estanteAtual     = nova;
       // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
       // a barra de progresso só aparece na primeira visita à estante.
-      _carregandoLayout = _dbConectado && !_caixas.containsKey(nova);
+      final semeou = _semearDoCache(nova);
+      _carregandoLayout =
+          !semeou && _dbConectado && !_caixas.containsKey(nova);
       // Células mudam de geometria entre estantes: seleção antiga não vale.
       _colunaSelecionada = null;
       _nivelSelecionado  = null;
@@ -2843,20 +3001,38 @@ class _EstantePageState extends State<EstantePage> {
     if (_dbConectado) _carregarLayout(nova);
   }
 
+  /// Preenche a estante a partir do cache do serviço, se ela já tiver sido
+  /// lida. Ver o gêmeo em _GondolaPageState. Chamar de dentro de setState.
+  bool _semearDoCache(int estanteNum) {
+    final cache = TursoService().layoutEstanteEmCache(estanteNum);
+    if (cache == null) return false;
+    _aplicarLayout(estanteNum, cache);
+    return true;
+  }
+
+  /// Aplica as linhas do banco à cena, junto com as cores e nomes que vêm
+  /// nelas. Chamar de dentro de setState.
+  void _aplicarLayout(int estanteNum, List<CaixaLayoutEstante> layouts) {
+    _caixas[estanteNum] = layouts
+        .map((l) => CaixaColocadaEstante(
+              coluna:    l.coluna,
+              nivel:     l.nivel,
+              slot:      l.slot,
+              produtoId: l.produtoCodigo,
+            ))
+        .toList();
+    if (estanteNum == _estanteAtual) {
+      _hexDoLayout   = {for (final l in layouts) l.produtoCodigo: l.corHex};
+      _nomesDoLayout = {for (final l in layouts) l.produtoCodigo: l.produtoNome};
+      _recomputarCatalogoDerivado();
+      _carregandoLayout = false;
+    }
+  }
+
   Future<void> _carregarLayout(int estanteNum) async {
     final layouts = await TursoService().fetchLayoutEstante(estanteNum);
     if (!mounted) return;
-    setState(() {
-      _caixas[estanteNum] = layouts
-          .map((l) => CaixaColocadaEstante(
-                coluna:    l.coluna,
-                nivel:     l.nivel,
-                slot:      l.slot,
-                produtoId: l.produtoCodigo,
-              ))
-          .toList();
-      if (_estanteAtual == estanteNum) _carregandoLayout = false;
-    });
+    setState(() => _aplicarLayout(estanteNum, layouts));
   }
 
   ({int maxSlots, double xMin, double wCaixa, double gap}) _geometriaCelula(
@@ -2995,14 +3171,15 @@ class _EstantePageState extends State<EstantePage> {
         c.slot   == _slotSelecionado);
     if (matches.isEmpty) return null;
     final caixa = matches.first;
-    final produtos = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
-    if (produtos.isNotEmpty) return produtos.first;
-    // Produto fora do catálogo carregado: mostra ao menos o código.
+    final doCatalogo = _produtoPorCodigo[caixa.produtoId];
+    if (doCatalogo != null) return doCatalogo;
+    // Produto fora do catálogo carregado (ou catálogo ainda a caminho): usa o
+    // nome e a cor que vieram na própria linha do layout.
     return Produto(
       codigo:    caixa.produtoId,
-      nome:      caixa.produtoId,
+      nome:      _nomesDoLayout[caixa.produtoId] ?? caixa.produtoId,
       categoria: '',
-      corHex:    '#888888',
+      corHex:    _hexDoLayout[caixa.produtoId] ?? '#888888',
     );
   }
 
@@ -3029,9 +3206,9 @@ class _EstantePageState extends State<EstantePage> {
     required int faceOuColuna,
     required int andarOuNivel,
   }) async {
-    final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
-    final produtoNome =
-        produto.isNotEmpty ? produto.first.nome : produtoCodigo;
+    final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
+        _nomesDoLayout[produtoCodigo] ??
+        produtoCodigo;
     await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
@@ -3198,26 +3375,29 @@ class _EstantePageState extends State<EstantePage> {
 
     setState(() => _salvando = true);
 
-    final produtoMap = {for (final p in _produtos) p.codigo: p};
+    // Nome e cor do catálogo quando já chegou; senão, do que a linha já tinha.
+    // Ver a nota do gêmeo em _GondolaPageState._salvarLayout.
     final itens = _caixasAtuais.map((c) {
-      final produto = produtoMap[c.produtoId];
+      final produto = _produtoPorCodigo[c.produtoId];
       return CaixaLayoutEstante(
         estanteNum:    _estanteAtual,
         coluna:        c.coluna,
         nivel:         c.nivel,
         slot:          c.slot,
         produtoCodigo: c.produtoId,
-        produtoNome:   produto?.nome ?? c.produtoId,
-        corHex:        produto?.corHex ?? '#888888',
+        produtoNome:   produto?.nome ?? _nomesDoLayout[c.produtoId] ?? c.produtoId,
+        corHex:        produto?.corHex ?? _hexDoLayout[c.produtoId] ?? '#888888',
       );
     }).toList();
 
-    // Produtos que estavam no layout persistido e saíram nesta edição: os
+    // Produtos que estavam no layout PERSISTIDO e saíram nesta edição: os
     // endereços ZERADOS deles nesta estante são apagados junto (quantidades
-    // > 0 são estoque contado e só somem pela lixeira do dialog).
-    final antes = (await TursoService().fetchLayoutEstante(_estanteAtual))
-        .map((c) => c.produtoCodigo)
-        .toSet();
+    // > 0 são estoque contado e só somem pela lixeira do dialog). Tem de ser o
+    // persistido, não `_caixasAtuais` — ver a nota do gêmeo em
+    // _GondolaPageState._salvarLayout.
+    final persistido = TursoService().layoutEstanteEmCache(_estanteAtual) ??
+        await TursoService().fetchLayoutEstante(_estanteAtual);
+    final antes = persistido.map((c) => c.produtoCodigo).toSet();
 
     final ok = await TursoService().salvarLayoutEstante(_estanteAtual, itens);
     if (ok) {
@@ -3255,12 +3435,9 @@ class _EstantePageState extends State<EstantePage> {
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: Duration(seconds: ok ? 2 : 6),
     ));
-    if (ok) {
-      // Descarta os layouts em memória e recarrega tudo do banco recém-
-      // sincronizado (edições não salvas são substituídas).
-      _caixas.clear();
-      _inicializar();
-    }
+    // A recarga pós-sync é feita só pelo listener _aoAtualizarDados (disparado
+    // pelo dataRevision que sincronizar() incrementa) — ver a nota do gêmeo em
+    // _GondolaPageState._sincronizar.
   }
 
   Future<void> _buscarProduto(Produto produto) async {
@@ -3322,15 +3499,10 @@ class _EstantePageState extends State<EstantePage> {
 
     _highlightTimer?.cancel();
     setState(() {
-      _caixas[encontrado.estanteNum] = layouts
-          .map((l) => CaixaColocadaEstante(
-                coluna:    l.coluna,
-                nivel:     l.nivel,
-                slot:      l.slot,
-                produtoId: l.produtoCodigo,
-              ))
-          .toList();
-      _carregandoLayout  = false;
+      // Via _aplicarLayout para as cores/nomes da linha entrarem junto — sem
+      // isso, saltar da busca para outra estante deixaria a cena com o mapa de
+      // cores da anterior.
+      _aplicarLayout(encontrado.estanteNum, layouts);
       _destacadoCodigo   = produto.codigo;
       _colunaSelecionada = encontrado.coluna
           .clamp(0, numColunasPara(encontrado.estanteNum) - 1);
@@ -3824,10 +3996,17 @@ class _EstantePageState extends State<EstantePage> {
               _sugestoes1           = [];
               _ctrl1.clear();
             }),
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl1.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
+
+  /// True quando não há sugestão a mostrar só porque o catálogo ainda não
+  /// chegou — e não porque a busca realmente não deu resultado.
+  bool _catalogoAindaChegando(String texto) =>
+      _carregandoProdutos && _dbConectado && texto.length >= 2;
 
   // ── Conteúdo Expander 2 ────────────────────────────────────────────────────
 
@@ -3849,7 +4028,9 @@ class _EstantePageState extends State<EstantePage> {
               _ctrl2.clear();
               _buscarProduto(p);
             },
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl2.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }

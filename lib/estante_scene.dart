@@ -56,26 +56,35 @@ class EstanteGeometry {
   static double alturaNivel(int estanteNum) =>
       alturaTotal / numNiveisTotal(estanteNum);
 
-  static List<CelulaEstante> celulasPara(int estanteNum) {
-    final lista       = <CelulaEstante>[];
-    final nivProduto   = niveisProdutoPara(estanteNum);
-    final alturaNiv    = alturaNivel(estanteNum);
-    for (var col = 0; col < numColunas; col++) {
-      final xMin =
-          -larguraTotal / 2 + espessura * (col + 1) + larguraColuna * col;
-      final xMax = xMin + larguraColuna;
-      for (var niv = 0; niv < nivProduto; niv++) {
-        lista.add(CelulaEstante(
-          coluna: col,
-          nivel:  niv,
-          yTop:   espessura + alturaNiv * niv + espessura,
-          xMin:   xMin,
-          xMax:   xMax,
-        ));
-      }
-    }
-    return lista;
-  }
+  // A grade de células é função pura do número da estante (numColunas é
+  // constante de compilação e niveisProdutoPara só compara faixas de número),
+  // então dá para memoizar. Sem isso, `build` chamava celulasPara UMA VEZ POR
+  // CAIXA — cada chamada realocando a grade inteira antes do firstWhere — e
+  // _drawLabels e _hitTest realocavam de novo a cada invocação.
+  static final Map<int, List<CelulaEstante>> _memoCelulas = {};
+
+  static List<CelulaEstante> celulasPara(int estanteNum) =>
+      _memoCelulas.putIfAbsent(estanteNum, () {
+        final lista        = <CelulaEstante>[];
+        final nivProduto   = niveisProdutoPara(estanteNum);
+        final alturaNiv    = alturaNivel(estanteNum);
+        for (var col = 0; col < numColunas; col++) {
+          final xMin =
+              -larguraTotal / 2 + espessura * (col + 1) + larguraColuna * col;
+          final xMax = xMin + larguraColuna;
+          for (var niv = 0; niv < nivProduto; niv++) {
+            lista.add(CelulaEstante(
+              coluna: col,
+              nivel:  niv,
+              yTop:   espessura + alturaNiv * niv + espessura,
+              xMin:   xMin,
+              xMax:   xMax,
+            ));
+          }
+        }
+        // Congelada: a lista agora é compartilhada entre todos os chamadores.
+        return List<CelulaEstante>.unmodifiable(lista);
+      });
 
   static int slotsPorCelula(CelulaEstante c) =>
       (c.largura / (wCaixa + gap)).floor();
@@ -466,12 +475,19 @@ class _EstanteSceneState extends State<EstanteScene>
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
+    // Índice (coluna, nível) → célula montado UMA vez: era um firstWhere linear
+    // sobre a grade inteira por caixa desenhada.
+    final celulas = <(int, int), CelulaEstante>{
+      for (final c in EstanteGeometry.celulasPara(widget.estanteAtual))
+        (c.coluna, c.nivel): c,
+    };
     for (final caixa in widget.caixas) {
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final celula = EstanteGeometry.celulasPara(widget.estanteAtual).firstWhere(
-        (c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel,
-      );
+      // Caixa em endereço que não existe mais nesta estante (layout antigo):
+      // antes o firstWhere estourava; agora simplesmente não desenha.
+      final celula = celulas[(caixa.coluna, caixa.nivel)];
+      if (celula == null) continue;
       final chave = chaveEnderecoEstoque(
         produtoCodigo: caixa.produtoId,
         localTipo:     'estante',
