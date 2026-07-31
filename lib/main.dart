@@ -127,16 +127,13 @@ class _LojaPageState extends State<LojaPage> {
 
   bool _sincronizando = false;
 
-  // Bonecos caminhando pelo mapa (0 = desligado, 1 ou 2): preferência do
-  // usuário, persistida junto com as demais.
-  int _bonecos = 0;
-
   @override
   void initState() {
     super.initState();
-    PreferenciasMapa.lerBonecos().then((n) {
-      if (mounted) setState(() => _bonecos = n);
-    });
+    // Bonecos caminhando pelo mapa (0 = desligado, 1 ou 2): quem escolhe a
+    // quantidade é a tela de Configuração; aqui só carregamos o valor salvo e
+    // deixamos o notifier de PreferenciasMapa reconstruir a cena.
+    PreferenciasMapa.lerBonecos();
     _searchFocus.addListener(() {
       if (!_searchFocus.hasFocus) {
         setState(() {
@@ -527,15 +524,6 @@ class _LojaPageState extends State<LojaPage> {
     );
   }
 
-  // ── Bonecos ────────────────────────────────────────────────────────────────
-
-  /// Um toque cicla desligado → 1 boneco → 2 bonecos → desligado.
-  void _ciclarBonecos() {
-    final n = (_bonecos + 1) % (PreferenciasMapa.maxBonecos + 1);
-    setState(() => _bonecos = n);
-    PreferenciasMapa.salvarBonecos(n);
-  }
-
   void _limparBusca() {
     _debounce?.cancel();
     _searchCtrl.clear();
@@ -564,14 +552,19 @@ class _LojaPageState extends State<LojaPage> {
       body: Stack(
         children: [
           // ── Cena 3D (fundo) ─────────────────────────────────────────────
-          LojaScene(
-            selecionadoIdx:       _selecionadoIdx,
-            onSelecionado:        _onSelecionado,
-            onVerDetalhes:        _verDetalhes,
-            focarEm:              _focarEm,
-            modoConferencia:      _modoConferencia,
-            contagemConferencia:  _contagemPorIdx,
-            bonecos:              _bonecos,
+          // A quantidade de bonecos vem da tela de Configuração: o notifier
+          // reconstrói só a cena quando o usuário troca a opção por lá.
+          ValueListenableBuilder<int>(
+            valueListenable: PreferenciasMapa.bonecos,
+            builder: (_, bonecos, __) => LojaScene(
+              selecionadoIdx:       _selecionadoIdx,
+              onSelecionado:        _onSelecionado,
+              onVerDetalhes:        _verDetalhes,
+              focarEm:              _focarEm,
+              modoConferencia:      _modoConferencia,
+              contagemConferencia:  _contagemPorIdx,
+              bonecos:              bonecos,
+            ),
           ),
 
           // ── HUD superior: busca + legenda + título ───────────────────────
@@ -604,11 +597,6 @@ class _LojaPageState extends State<LojaPage> {
                         _SyncButton(
                           sincronizando: _sincronizando,
                           onTap: _sincronizar,
-                        ),
-                        const SizedBox(width: 10),
-                        _BonecosToggle(
-                          quantidade: _bonecos,
-                          onTap:      _ciclarBonecos,
                         ),
                         const SizedBox(width: 10),
                         _ModoConferenciaToggle(
@@ -814,68 +802,6 @@ class _SyncButton extends StatelessWidget {
                 ),
               )
             : const Icon(Icons.sync, color: Color(0xFF8a877f), size: 20),
-      ),
-    );
-  }
-}
-
-// ── _BonecosToggle ──────────────────────────────────────────────────────────
-// Liga/desliga os bonecos que caminham pelo mapa e escolhe quantos: um toque
-// cicla desligado → 1 → 2 → desligado, e o número aparece no cantinho.
-
-class _BonecosToggle extends StatelessWidget {
-  final int          quantidade;
-  final VoidCallback onTap;
-
-  const _BonecosToggle({required this.quantidade, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    const camda = Color(0xFFe87722);
-    final ativo = quantidade > 0;
-
-    return Tooltip(
-      message: ativo
-          ? '$quantidade boneco(s) no mapa — toque para trocar'
-          : 'Bonecos no mapa desligados',
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          height: 46,
-          width:  46,
-          decoration: BoxDecoration(
-            color: ativo
-                ? camda.withValues(alpha: 0.18)
-                : const Color(0xEE141518),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: ativo ? camda : Colors.white.withValues(alpha: 0.10),
-            ),
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Icon(
-                ativo ? Icons.directions_walk : Icons.person_off_outlined,
-                color: ativo ? camda : const Color(0xFF8a877f),
-                size:  20,
-              ),
-              if (ativo)
-                Positioned(
-                  right: 4,
-                  bottom: 3,
-                  child: Text(
-                    '$quantidade',
-                    style: const TextStyle(
-                      color:      camda,
-                      fontSize:   10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
       ),
     );
   }
