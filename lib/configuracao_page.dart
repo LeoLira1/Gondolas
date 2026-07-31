@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'loja_scene.dart' show PreferenciasMapa;
 import 'palete_registry.dart';
 import 'turso_service.dart';
 
@@ -26,11 +27,17 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   List<Palete> _paletes = const [];
   bool _salvandoPalete  = false;
 
+  // Bonecos caminhando pelo mapa da loja: 0 (desligado), 1 ou 2.
+  int _bonecos = PreferenciasMapa.bonecos.value;
+
   @override
   void initState() {
     super.initState();
     _carregarCredenciais();
     _carregarPaletes();
+    PreferenciasMapa.lerBonecos().then((n) {
+      if (mounted) setState(() => _bonecos = n);
+    });
   }
 
   @override
@@ -351,6 +358,15 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         _testeOk     = false;
       });
     }
+  }
+
+  // ── Mapa da loja ───────────────────────────────────────────────────────────
+
+  void _alterarBonecos(int quantidade) {
+    setState(() => _bonecos = quantidade);
+    // O mapa escuta PreferenciasMapa.bonecos, então a cena já reflete a escolha
+    // quando o usuário voltar para ela.
+    PreferenciasMapa.salvarBonecos(quantidade);
   }
 
   @override
@@ -701,6 +717,67 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               ),
             ),
 
+            // ── Mapa da loja ──────────────────────────────────────────────
+            // Os bonecos que caminham pelos corredores são enfeite: ficam aqui
+            // (e não num botão do mapa) para não roubar espaço da barra de
+            // busca, que é o que se usa o tempo todo naquela tela.
+            const SizedBox(height: 28),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF0d1117),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF232f3a)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Personagens no mapa',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Bonecos caminhando pelos corredores do mapa da '
+                          'loja. Desligue se preferir a cena parada ou se o '
+                          'aparelho estiver lento.',
+                          style: TextStyle(
+                              color: Color(0xFF8a9aa8),
+                              fontSize: 11,
+                              height: 1.4),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+                    child: Row(children: [
+                      for (var n = 0; n <= PreferenciasMapa.maxBonecos; n++)
+                        Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                                right: n == PreferenciasMapa.maxBonecos ? 0 : 8),
+                            child: _OpcaoBonecos(
+                              quantidade:  n,
+                              selecionado: _bonecos == n,
+                              onTap:       () => _alterarBonecos(n),
+                            ),
+                          ),
+                        ),
+                    ]),
+                  ),
+                ],
+              ),
+            ),
+
             if (_statusTeste != null) ...[
               const SizedBox(height: 20),
               Container(
@@ -727,6 +804,68 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── _OpcaoBonecos ───────────────────────────────────────────────────────────
+// Uma das três opções de personagens no mapa: nenhum, 1 ou 2.
+
+class _OpcaoBonecos extends StatelessWidget {
+  final int          quantidade;
+  final bool         selecionado;
+  final VoidCallback onTap;
+
+  const _OpcaoBonecos({
+    required this.quantidade,
+    required this.selecionado,
+    required this.onTap,
+  });
+
+  String get _rotulo => switch (quantidade) {
+        0 => 'Nenhum',
+        1 => '1 pessoa',
+        _ => '$quantidade pessoas',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    const camda = Color(0xFFe87722);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selecionado
+              ? camda.withValues(alpha: 0.16)
+              : const Color(0xFF141a20),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selecionado ? camda : const Color(0xFF232f3a),
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              quantidade == 0
+                  ? Icons.person_off_outlined
+                  : Icons.directions_walk,
+              size:  18,
+              color: selecionado ? camda : const Color(0xFF8a9aa8),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _rotulo,
+              style: TextStyle(
+                color: selecionado ? camda : const Color(0xFF8a9aa8),
+                fontSize: 11,
+                fontWeight: selecionado ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
           ],
         ),
       ),

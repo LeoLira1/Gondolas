@@ -145,19 +145,33 @@ final List<RotaBoneco> rotasLoja = [
 
 /// Preferência do mapa: quantos bonecos caminham pela cena. Guardada no mesmo
 /// SharedPreferences das outras preferências do app.
+///
+/// [bonecos] espelha o valor salvo para que o mapa reaja na hora: quem escolhe
+/// a quantidade é a tela de Configuração, que pode estar duas telas acima do
+/// mapa na pilha de navegação — sem o notifier o mapa só veria a mudança ao ser
+/// reconstruído do zero.
 class PreferenciasMapa {
   static const String keyBonecos = 'mapa_bonecos';
   static const int    maxBonecos = 2;
   static const int    padraoBonecos = 1;
 
+  /// Começa em 0 para o mapa abrir sem bonecos e só criá-los depois que a
+  /// preferência salva chegar — evita o flash de um boneco surgindo e sumindo
+  /// para quem os desligou.
+  static final ValueNotifier<int> bonecos = ValueNotifier<int>(0);
+
   static Future<int> lerBonecos() async {
     final prefs = await SharedPreferences.getInstance();
-    return (prefs.getInt(keyBonecos) ?? padraoBonecos).clamp(0, maxBonecos);
+    final n = (prefs.getInt(keyBonecos) ?? padraoBonecos).clamp(0, maxBonecos);
+    bonecos.value = n;
+    return n;
   }
 
   static Future<void> salvarBonecos(int quantidade) async {
+    final n = quantidade.clamp(0, maxBonecos);
+    bonecos.value = n;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(keyBonecos, quantidade.clamp(0, maxBonecos));
+    await prefs.setInt(keyBonecos, n);
   }
 }
 
