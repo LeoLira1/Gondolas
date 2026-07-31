@@ -349,6 +349,49 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     return ok;
   }
 
+  /// Sai do dialog sem gravar. Se houver edição pendente, confirma antes —
+  /// o botão é grande e fica ao lado das ações de gravação, então um toque
+  /// errado não pode jogar a contagem fora em silêncio.
+  Future<void> _onVoltar() async {
+    if (!_linhas.any((l) => l.dirty)) {
+      Navigator.pop(context);
+      return;
+    }
+    final descartar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Descartar alterações?',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600)),
+        content: const Text(
+          'Você alterou quantidades e ainda não salvou. Se voltar agora, '
+          'essas alterações serão perdidas.',
+          style: TextStyle(color: Color(0xFFb0ada8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Continuar contando'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8b1a1a),
+                foregroundColor: Colors.white),
+            child: const Text('Descartar'),
+          ),
+        ],
+      ),
+    );
+    if (descartar != true || !mounted) return;
+    Navigator.pop(context);
+  }
+
   Future<void> _onSalvar() async {
     if (!_linhas.any((l) => l.dirty)) {
       Navigator.pop(context);
@@ -488,23 +531,59 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
               ),
       ),
       actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      actionsOverflowButtonSpacing: 6,
-      actions: _carregando
-          ? null
-          : [
-              TextButton(
-                onPressed: _salvando ? null : () => Navigator.pop(context),
-                child: const Text('Cancelar'),
-              ),
+      actions: _carregando ? null : [_buildAcoes()],
+    );
+  }
+
+  /// Rodapé de ações: "Voltar" ocupa toda a coluna da esquerda, com alvo alto
+  /// (92) e afastado das ações de gravação, que ficam empilhadas à direita.
+  /// O antigo "Cancelar" era um TextButton pequeno colado no "Salvar" — fácil
+  /// de errar no celular e perder a contagem.
+  Widget _buildAcoes() {
+    return Row(
+      // O rodapé fica sob altura não limitada (OverflowBar do AlertDialog),
+      // então nada de `stretch`: a altura do Voltar é fixada pra casar com a
+      // pilha Salvar + Concluir da direita (40 + 8 + 44).
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          flex: 4,
+          child: OutlinedButton.icon(
+            onPressed: _salvando ? null : _onVoltar,
+            icon: const Icon(Icons.arrow_back, size: 18),
+            label: const Text('Voltar'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFb0ada8),
+              side: const BorderSide(color: Color(0xFF3a4450)),
+              minimumSize: const Size(0, 92),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          flex: 5,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               OutlinedButton(
                 onPressed: _salvando ? null : _onSalvar,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
                 child: const Text('Salvar'),
               ),
+              const SizedBox(height: 8),
               ElevatedButton(
                 onPressed: _salvando ? null : _onConcluirContagem,
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2e6b46),
-                    foregroundColor: Colors.white),
+                  backgroundColor: const Color(0xFF2e6b46),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
                 child: _salvando
                     ? const SizedBox(
                         width: 14,
@@ -512,9 +591,13 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white),
                       )
-                    : const Text('Concluir contagem'),
+                    : const Text('Concluir contagem',
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
             ],
+          ),
+        ),
+      ],
     );
   }
 
