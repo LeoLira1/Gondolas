@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data' show Float32List;
 import 'package:flutter/material.dart';
 import 'models.dart' show faceFromPos, chaveEnderecoEstoque, corConferenciaCiano;
 import 'scene_gestures.dart';
@@ -88,6 +89,127 @@ class Face {
   double light = 1.0;
 
   Face(this.verts, this.color);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ProjecaoCamera — projeção em perspectiva + sombreamento, compartilhados
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Direção da luz das cenas: sempre a mesma, para o sombreamento de qualquer
+/// geometria (faces do cenário, bonecos) combinar entre si.
+final Vec3 luzCena = const Vec3(5, 10, 7).normalized;
+
+/// Sombreamento difuso de uma normal já normalizada.
+double sombrearFace(Vec3 normal) => sombrearNormal(normal.x, normal.y, normal.z);
+
+/// Mesma conta de [sombrearFace] a partir de uma normal crua (não precisa vir
+/// normalizada) — evita alocar um Vec3 por face nos caminhos quentes.
+double sombrearNormal(double nx, double ny, double nz) {
+  final len = math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (len < 1e-10) return 1.0;
+  final d = (nx * luzCena.x + ny * luzCena.y + nz * luzCena.z) / len;
+  return 0.35 + 0.65 * d.clamp(0.0, 1.0);
+}
+
+/// Câmera resolvida para uma [Size]: base ortonormal, projeção e recorte no
+/// near plane. Montada uma vez por paint e reusada por tudo que precisa
+/// projetar (faces do cenário, rótulos, bonecos), para não haver duas contas
+/// de projeção que possam divergir.
+class ProjecaoCamera {
+  static const double fovY = 45.0 * math.pi / 180.0;
+  static const double near = 0.1;
+
+  final Vec3   eye, fwd, right, up;
+  final double tanH, aspect, larguraPx, alturaPx;
+
+  const ProjecaoCamera._(this.eye, this.fwd, this.right, this.up, this.tanH,
+      this.aspect, this.larguraPx, this.alturaPx);
+
+  factory ProjecaoCamera(Camera camera, Size size) {
+    final eye   = camera.position;
+    final fwd   = (camera.target - eye).normalized;
+    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up    = right.cross(fwd).normalized;
+    return ProjecaoCamera._(
+      eye, fwd, right, up,
+      math.tan(fovY / 2),
+      size.width / size.height,
+      size.width, size.height,
+    );
+  }
+
+  /// Distância do ponto ao plano da câmera (o "z" da profundidade).
+  double profundidade(Vec3 v) => (v - eye).dot(fwd);
+
+  Offset paraTela(Vec3 v) {
+    final d  = v - eye;
+    final cz = d.dot(fwd);
+    final cx = d.dot(right) / (cz * tanH * aspect);
+    final cy = d.dot(up)    / (cz * tanH);
+    return Offset((cx + 1) / 2 * larguraPx, (1 - cy) / 2 * alturaPx);
+  }
+
+  /// Projeção com teste de near plane: null quando o ponto está atrás dela.
+  (Offset, double)? projetar(Vec3 v) {
+    final cz = profundidade(v);
+    if (cz <= near) return null;
+    return (paraTela(v), cz);
+  }
+
+  /// Versão sem alocação: escreve x/y de tela em [saida]`[i*2]`/`[i*2+1]` e
+  /// devolve a profundidade. Usada onde há muitos vértices por frame.
+  double projetarEm(double x, double y, double z, Float32List saida, int i) {
+    final dx = x - eye.x, dy = y - eye.y, dz = z - eye.z;
+    final cz = dx * fwd.x + dy * fwd.y + dz * fwd.z;
+    if (cz <= near) return cz;
+    final cx = (dx * right.x + dy * right.y + dz * right.z) / (cz * tanH * aspect);
+    final cy = (dx * up.x    + dy * up.y    + dz * up.z)    / (cz * tanH);
+    saida[i * 2]     = (cx + 1) / 2 * larguraPx;
+    saida[i * 2 + 1] = (1 - cy) / 2 * alturaPx;
+    return cz;
+  }
+
+  /// Projeta as faces no lugar, preenchendo `proj`, `depth` e `light`.
+  ///
+  /// O recorte Sutherland-Hodgman no near plane corrige o sumiço de faces
+  /// quando um vértice cruza para trás da câmera.
+  void projetarFaces(List<Face> faces) {
+    for (final f in faces) {
+      final clipped = _recortarNear(f.verts);
+      if (clipped.length < 3) {
+        f.proj  = const [];
+        f.depth = -1e9;
+        continue;
+      }
+      f.proj  = clipped.map(paraTela).toList();
+      f.depth = clipped.fold(0.0, (s, v) => s + profundidade(v)) / clipped.length;
+      if (f.verts.length >= 3) {
+        final n = (f.verts[1] - f.verts[0]).cross(f.verts[2] - f.verts[0]);
+        f.light = sombrearNormal(n.x, n.y, n.z);
+      }
+    }
+  }
+
+  List<Vec3> _recortarNear(List<Vec3> verts) {
+    final out = <Vec3>[];
+    final len = verts.length;
+    for (var i = 0; i < len; i++) {
+      final a  = verts[i];
+      final b  = verts[(i + 1) % len];
+      final da = profundidade(a);
+      final db = profundidade(b);
+      if (da >= near) out.add(a);
+      if ((da >= near) != (db >= near)) {
+        final t = (near - da) / (db - da);
+        out.add(Vec3(
+          a.x + (b.x - a.x) * t,
+          a.y + (b.y - a.y) * t,
+          a.z + (b.z - a.z) * t,
+        ));
+      }
+    }
+    return out;
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

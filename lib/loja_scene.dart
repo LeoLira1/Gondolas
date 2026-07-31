@@ -2,10 +2,14 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'boneco_loja.dart'
+    show BonecoLoja, BonecoRenderer, PaletaBoneco, RotaBoneco;
 import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
 import 'expositor_monitor_scene.dart' show expositorMonitorLoja;
 import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
-import 'gondola_scene.dart' show Vec3, Camera, Face, faceAngle;
+import 'gondola_scene.dart'
+    show Vec3, Camera, Face, ProjecaoCamera, faceAngle;
 import 'models.dart'
     show colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
          ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
@@ -109,6 +113,68 @@ const List<ItemLoja> itensLoja = [
       x: 0.45, z: 10.6, w: 0.55, d: 4.4),
 ];
 
+// ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
+
+/// Altura do boneco = altura da gôndola, ajustável num lugar só: mudar
+/// [LojaGeometry.gondolaR] reescala a gôndola e o boneco juntos.
+const double alturaBoneco = LojaGeometry.alturaGondola;
+
+/// Rotas de caminhada — dado, não código espalhado. Todas passam só pelos
+/// corredores: os verticais x = 4, x = 6, x = 1.6 e x = 8.4 (as colunas de
+/// gôndolas ficam em x = 3, 5 e 7, com raio 0.62; as estantes de parede em
+/// x ≤ 1.35 e x ≥ 9.1) e os horizontais z = 2.8 (antes da primeira fileira,
+/// em z = 4), z = 5 (entre as fileiras z = 4 e z = 6) e z ≈ 13 (entre a
+/// última fileira, em z = 12, e a parede da entrada).
+final List<RotaBoneco> rotasLoja = [
+  // Funcionário: sobe e desce o corredor central da loja, atravessando pela
+  // faixa livre entre as fileiras z = 4 e z = 6.
+  RotaBoneco(const [
+    (x: 4.0, z: 5.00),
+    (x: 4.0, z: 12.85),
+    (x: 6.0, z: 12.85),
+    (x: 6.0, z: 5.00),
+  ]),
+  // Cliente: volta grande pelas laterais, por fora das gôndolas.
+  RotaBoneco(const [
+    (x: 8.4, z: 2.80),
+    (x: 8.4, z: 13.30),
+    (x: 1.6, z: 13.30),
+    (x: 1.6, z: 2.80),
+  ]),
+];
+
+/// Preferência do mapa: quantos bonecos caminham pela cena. Guardada no mesmo
+/// SharedPreferences das outras preferências do app.
+class PreferenciasMapa {
+  static const String keyBonecos = 'mapa_bonecos';
+  static const int    maxBonecos = 2;
+  static const int    padraoBonecos = 1;
+
+  static Future<int> lerBonecos() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getInt(keyBonecos) ?? padraoBonecos).clamp(0, maxBonecos);
+  }
+
+  static Future<void> salvarBonecos(int quantidade) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(keyBonecos, quantidade.clamp(0, maxBonecos));
+  }
+}
+
+/// Cria os bonecos do mapa: 1 = só o funcionário, 2 = funcionário + cliente.
+List<BonecoLoja> criarBonecosLoja(int quantidade) => [
+      for (var i = 0; i < quantidade.clamp(0, rotasLoja.length); i++)
+        BonecoLoja(
+          altura: alturaBoneco,
+          rota:   rotasLoja[i],
+          paleta: i == 0 ? PaletaBoneco.funcionario : PaletaBoneco.cliente,
+          // O cliente anda um pouco mais devagar que o funcionário; o começo
+          // deslocado evita os dois saírem do mesmo canto no mesmo passo.
+          velocidade: alturaBoneco * (i == 0 ? 1.0 : 0.85),
+          inicio:     rotasLoja[i].perimetro * (i * 0.37),
+        ),
+    ];
+
 // Catálogo mock — substituir por query Turso quando disponível
 const List<ProdutoLoja> catalogoLojaFake = [
   ProdutoLoja(nome: 'CHINCHA P/ARREIO 2 ARGOLAS PASFIL C099', tipo: 'gondola', numero: 11, nivel: 'Andar Base', produtoCodigo: 'C099'),
@@ -138,6 +204,25 @@ const Color _corPisoRejunte = Color(0x14000000);
 
 class LojaGeometry {
   static const double gondolaR      = 0.62;
+
+  /// Silhueta da gôndola no mapa: (raio, y do centro, altura) de cada
+  /// prateleira, na escala da cena de detalhe.
+  static const List<(double, double, double)> gondolaPrateleiras = [
+    (3.4, 0.675, 0.35),
+    (2.4, 2.15,  0.30),
+    (1.5, 3.43,  0.26),
+  ];
+
+  /// Fator que leva a gôndola da cena de detalhe para o tamanho do mapa.
+  static const double gondolaEscala = gondolaR / 3.4;
+
+  /// Altura total da gôndola no mapa: topo da prateleira mais alta de
+  /// [gondolaPrateleiras] (indexar lista não é expressão constante em Dart,
+  /// então os números aparecem aqui de novo — um teste garante que os dois
+  /// continuem batendo). É daqui que sai a altura do boneco, então mudar
+  /// [gondolaR] reescala a gôndola e o boneco juntos.
+  static const double alturaGondola = (3.43 + 0.26 / 2) * gondolaEscala;
+
   static const double _estanteH     = 0.85;
   static const double _paredeH      = 0.90;
   static const double _paredeEsp    = 0.18;
@@ -181,12 +266,25 @@ class LojaGeometry {
     return faces;
   }
 
+  static List<Face>? _cacheFaces;
+  static (int?, double, bool, Map<int, int>)? _cacheChave;
+
+  /// As faces do cenário são geometria fixa: só mudam quando muda a seleção, o
+  /// pulso do destaque ou o Modo Conferência. Com os bonecos animando, o mapa
+  /// repinta 60×/s — remontar a lista inteira a cada frame seria lixo puro
+  /// para o GC, então o resultado fica memoizado. O painter só sobrescreve
+  /// `proj`/`depth`/`light` de cada face, que são recalculados todo paint.
   static List<Face> buildFaces(
     int? selecionadoIdx,
     double pulseT, {
     bool modoConferencia = false,
-    Set<int> idxConferencia = const {},
+    Map<int, int> contagemConferencia = const {},
   }) {
+    final chave = (selecionadoIdx, pulseT, modoConferencia, contagemConferencia);
+    final cache = _cacheFaces;
+    if (cache != null && _cacheChave == chave) return cache;
+
+    final idxConferencia = contagemConferencia.keys.toSet();
     final faces = <Face>[];
 
     // Paredes perimetrais
@@ -240,6 +338,8 @@ class LojaGeometry {
       }
     }
 
+    _cacheChave = chave;
+    _cacheFaces = faces;
     return faces;
   }
 
@@ -257,9 +357,8 @@ class LojaGeometry {
     // 3-shelf silhouette scaled to match gondolaR footprint.
     // Uses 6-sided prisms (no feet, no borda) to keep face count low
     // while 12 gondolas render simultaneously on the map.
-    const scale = gondolaR / 3.4;
-    const shelves = [(3.4, 0.675, 0.35), (2.4, 2.15, 0.30), (1.5, 3.43, 0.26)];
-    for (final (r, yc, h) in shelves) {
+    const scale = gondolaEscala;
+    for (final (r, yc, h) in gondolaPrateleiras) {
       _prism6(faces, cx: item.x, cz: item.z,
               r: r * scale,
               y0: (yc - h / 2) * scale, y1: (yc + h / 2) * scale, cor: cor);
@@ -444,8 +543,11 @@ class LojaPainter extends CustomPainter {
   // pendentes nela, pra desenhar o badge "G9 · 3" sem nenhuma query no paint.
   final bool          modoConferencia;
   final Map<int, int> contagemConferencia;
-
-  static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
+  // Bonecos caminhando pelo piso. O estado deles muda fora do painter (no
+  // ticker da cena); é o `repaint:` do construtor que dispara o redesenho,
+  // sem reconstruir a árvore de widgets.
+  final List<BonecoLoja> bonecos;
+  final BonecoRenderer?  bonecoRenderer;
 
   LojaPainter(
     this.camera, {
@@ -453,84 +555,38 @@ class LojaPainter extends CustomPainter {
     this.pulseT = 0,
     this.modoConferencia = false,
     this.contagemConferencia = const {},
-  });
+    this.bonecos = const [],
+    this.bonecoRenderer,
+    Listenable? repaint,
+  }) : super(repaint: repaint);
 
   @override
   void paint(Canvas canvas, Size size) {
+    final proj = ProjecaoCamera(camera, size);
+
     canvas.drawRect(Offset.zero & size, Paint()..color = _corBg);
     final piso = LojaGeometry.piso;
-    _project(piso, size);
+    proj.projetarFaces(piso);
     _drawPiso(canvas, piso);
+
+    // Sombras logo depois do piso e antes de qualquer objeto.
+    final render = bonecoRenderer;
+    if (render != null) {
+      for (final b in bonecos) {
+        render.desenharSombra(canvas, b, proj);
+      }
+    }
+
     final faces = LojaGeometry.buildFaces(
       selecionadoIdx,
       pulseT,
       modoConferencia: modoConferencia,
-      idxConferencia: contagemConferencia.keys.toSet(),
+      contagemConferencia: contagemConferencia,
     );
-    _project(faces, size);
+    proj.projetarFaces(faces);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
-    _draw(canvas, faces);
-    _drawLabels(canvas, size);
-  }
-
-  // Sutherland-Hodgman near-plane clipping fixes the disappearing-face bug
-  // that occurred when any vertex crossed behind the camera near plane.
-  void _project(List<Face> faces, Size size) {
-    final eye    = camera.position;
-    final fwd    = (camera.target - eye).normalized;
-    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up     = right.cross(fwd).normalized;
-    const fovY   = 45.0 * math.pi / 180.0;
-    const near   = 0.1;
-    final tanH   = math.tan(fovY / 2);
-    final aspect = size.width / size.height;
-    final w = size.width, h = size.height;
-
-    Offset toScreen(Vec3 v) {
-      final d  = v - eye;
-      final cz = d.dot(fwd);
-      final cx = d.dot(right) / (cz * tanH * aspect);
-      final cy = d.dot(up)    / (cz * tanH);
-      return Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h);
-    }
-
-    List<Vec3> clipNear(List<Vec3> verts) {
-      final out = <Vec3>[];
-      final len = verts.length;
-      for (var i = 0; i < len; i++) {
-        final a = verts[i];
-        final b = verts[(i + 1) % len];
-        final da = (a - eye).dot(fwd);
-        final db = (b - eye).dot(fwd);
-        if (da >= near) out.add(a);
-        if ((da >= near) != (db >= near)) {
-          final t = (near - da) / (db - da);
-          out.add(Vec3(
-            a.x + (b.x - a.x) * t,
-            a.y + (b.y - a.y) * t,
-            a.z + (b.z - a.z) * t,
-          ));
-        }
-      }
-      return out;
-    }
-
-    for (final f in faces) {
-      final clipped = clipNear(f.verts);
-      if (clipped.length < 3) {
-        f.proj  = const [];
-        f.depth = -1e9;
-        continue;
-      }
-      f.proj  = clipped.map(toScreen).toList();
-      f.depth = clipped.fold(0.0, (s, v) => s + (v - eye).dot(fwd)) / clipped.length;
-      if (f.verts.length >= 3) {
-        final n = (f.verts[1] - f.verts[0])
-            .cross(f.verts[2] - f.verts[0])
-            .normalized;
-        f.light = 0.35 + 0.65 * n.dot(_lightDir).clamp(0.0, 1.0);
-      }
-    }
+    _draw(canvas, faces, proj);
+    _drawLabels(canvas, proj);
   }
 
   // Piso: preenchimento chapado (sem sombreamento, pra manter o claro do
@@ -554,15 +610,35 @@ class LojaPainter extends CustomPainter {
       ..strokeWidth = 0.8);
   }
 
-  void _draw(Canvas canvas, List<Face> faces) {
+  // Fila de profundidade: as faces do cenário já vêm ordenadas do mais longe
+  // para o mais perto, e cada boneco entra nessa fila como UM objeto só, pelo
+  // centroide na cintura. Ordenar as peças dele soltas o faria atravessar
+  // gôndola; as faces internas do boneco são ordenadas entre si lá dentro.
+  void _draw(Canvas canvas, List<Face> faces, ProjecaoCamera proj) {
     final fill   = Paint();
     final stroke = Paint()
       ..color       = const Color(0x44000000)
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 0.6;
 
+    final render = bonecoRenderer;
+    // Profundidade de cada boneco: calculada uma vez por paint, do mais longe
+    // para o mais perto (mesma ordem das faces).
+    final pendente = render == null
+        ? const <BonecoLoja>[]
+        : (bonecos.toList()..sort((a, b) =>
+            render.profundidade(b, proj).compareTo(render.profundidade(a, proj))));
+    final profBoneco = [
+      for (final b in pendente) render!.profundidade(b, proj),
+    ];
+    var proximo = 0;
+
     for (final f in faces) {
       if (f.proj.isEmpty) continue;
+      while (proximo < pendente.length && profBoneco[proximo] > f.depth) {
+        render!.desenhar(canvas, pendente[proximo], proj);
+        proximo++;
+      }
       final path = Path()..moveTo(f.proj[0].dx, f.proj[0].dy);
       for (var i = 1; i < f.proj.length; i++) {
         path.lineTo(f.proj[i].dx, f.proj[i].dy);
@@ -572,27 +648,16 @@ class LojaPainter extends CustomPainter {
       canvas.drawPath(path, fill);
       canvas.drawPath(path, stroke);
     }
+
+    while (proximo < pendente.length) {
+      render!.desenhar(canvas, pendente[proximo], proj);
+      proximo++;
+    }
   }
 
-  void _drawLabels(Canvas canvas, Size size) {
-    final eye    = camera.position;
-    final fwd    = (camera.target - eye).normalized;
-    final right  = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up     = right.cross(fwd).normalized;
-    const fovY   = 45.0 * math.pi / 180.0;
-    const near   = 0.1;
-    final tanH   = math.tan(fovY / 2);
-    final aspect = size.width / size.height;
-    final w = size.width, h = size.height;
-
-    (Offset, double)? project(Vec3 v) {
-      final d  = v - eye;
-      final cz = d.dot(fwd);
-      if (cz <= near) return null;
-      final cx = d.dot(right) / (cz * tanH * aspect);
-      final cy = d.dot(up)    / (cz * tanH);
-      return (Offset((cx + 1) / 2 * w, (1 - cy) / 2 * h), cz);
-    }
+  void _drawLabels(Canvas canvas, ProjecaoCamera proj) {
+    final eye = proj.eye;
+    (Offset, double)? project(Vec3 v) => proj.projetar(v);
 
     const camda   = Color(0xFFe87722);
     const bgColor = Color(0xC70b0c0e);
@@ -774,6 +839,7 @@ class LojaPainter extends CustomPainter {
       old.selecionadoIdx      != selecionadoIdx       ||
       old.modoConferencia     != modoConferencia      ||
       !mapEquals(old.contagemConferencia, contagemConferencia) ||
+      old.bonecos.length      != bonecos.length      ||
       (old.pulseT - pulseT).abs() > 0.001;
 }
 
@@ -790,6 +856,8 @@ class LojaScene extends StatefulWidget {
   // produtos pendentes ali, usado tanto pro destaque quanto pro badge.
   final bool          modoConferencia;
   final Map<int, int> contagemConferencia;
+  /// Quantos bonecos caminham pelo mapa: 0 (desligado), 1 ou 2.
+  final int           bonecos;
 
   const LojaScene({
     super.key,
@@ -799,6 +867,7 @@ class LojaScene extends StatefulWidget {
     this.focarEm,
     this.modoConferencia = false,
     this.contagemConferencia = const {},
+    this.bonecos = 0,
   });
 
   @override
@@ -823,16 +892,33 @@ class _LojaSceneState extends State<LojaScene>
   Vec3?  _animFrom, _animTo, _lastFocarEm;
   double _animP = 0;
 
+  // Bonecos: o estado deles muda a cada frame e o painter escuta _repaint —
+  // assim só a pintura acontece, sem reconstruir a árvore de widgets.
+  final ValueNotifier<double> _repaint = ValueNotifier<double>(0);
+  final BonecoRenderer        _bonecoRenderer = BonecoRenderer();
+  List<BonecoLoja>            _bonecos = const [];
+  Duration                    _ultimoTick = Duration.zero;
+
+  // O mapa era estático e só redesenhava no toque; com os bonecos ele repinta
+  // pra sempre, então o ticker precisa parar quando ninguém está vendo.
+  // Background: AppLifecycleListener. Tela do mapa fora de foco (outra rota
+  // por cima): o TickerMode do próprio TickerProviderStateMixin já silencia.
+  late final AppLifecycleListener _lifecycle;
+  bool _emPrimeiroPlano = true;
+
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker(_onTick)..start();
+    _ticker = createTicker(_onTick);
+    _lifecycle = AppLifecycleListener(onStateChange: _onLifecycle);
+    _sincronizarBonecos();
     if (widget.focarEm != null) {
       _lastFocarEm = widget.focarEm;
       _animFrom    = _camera.target;
       _animTo      = widget.focarEm!;
       _animP       = 0;
     }
+    _avaliarTicker();
   }
 
   @override
@@ -848,17 +934,59 @@ class _LojaSceneState extends State<LojaScene>
         _animP       = 0;
       }
     }
+    if (old.bonecos != widget.bonecos) _sincronizarBonecos();
+    _avaliarTicker();
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _ticker.dispose();
+    _repaint.dispose();
     super.dispose();
   }
 
-  void _onTick(Duration _) {
+  void _sincronizarBonecos() {
+    _bonecos = criarBonecosLoja(widget.bonecos);
+  }
+
+  void _onLifecycle(AppLifecycleState estado) {
+    _emPrimeiroPlano = estado == AppLifecycleState.resumed;
+    _avaliarTicker();
+  }
+
+  /// O ticker só roda quando há algo se movendo E o app está em primeiro
+  /// plano.
+  void _avaliarTicker() {
+    final precisa = _emPrimeiroPlano &&
+        (_bonecos.isNotEmpty ||
+         _animTo != null ||
+         widget.selecionadoIdx != null ||
+         widget.modoConferencia);
+    if (precisa && !_ticker.isActive) {
+      _ultimoTick = Duration.zero; // start() zera o elapsed
+      _ticker.start();
+    } else if (!precisa && _ticker.isActive) {
+      _ticker.stop();
+    }
+  }
+
+  void _onTick(Duration elapsed) {
     if (!mounted) return;
     bool dirty = false;
+
+    // dt real, limitado: depois de uma pausa longa o boneco continua de onde
+    // parou em vez de teleportar.
+    final dt = ((elapsed - _ultimoTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    _ultimoTick = elapsed;
+
+    if (_bonecos.isNotEmpty) {
+      for (final b in _bonecos) {
+        b.avancar(dt);
+      }
+      // Repinta sem setState: a árvore de widgets fica parada.
+      _repaint.value = elapsed.inMicroseconds / 1e6;
+    }
 
     if (widget.selecionadoIdx != null || widget.modoConferencia) {
       _pulseT += 0.04;
@@ -883,7 +1011,13 @@ class _LojaSceneState extends State<LojaScene>
       dirty = true;
     }
 
-    if (dirty) setState(() {});
+    if (dirty) {
+      setState(() {});
+    } else if (_bonecos.isEmpty) {
+      // Nada mais se mexendo (a animação de foco acabou ou o gesto assumiu a
+      // câmera): o mapa volta a ser estático e o ticker para.
+      _avaliarTicker();
+    }
   }
 
   // ── Gestures ──────────────────────────────────────────────────────────────
@@ -1051,6 +1185,9 @@ class _LojaSceneState extends State<LojaScene>
             pulseT:               _pulseT,
             modoConferencia:      widget.modoConferencia,
             contagemConferencia:  widget.contagemConferencia,
+            bonecos:              _bonecos,
+            bonecoRenderer:       _bonecoRenderer,
+            repaint:              _repaint,
           ),
           child: const SizedBox.expand(),
         ),
