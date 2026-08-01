@@ -390,15 +390,16 @@ void main() {
     expect(faces.map((f) => f.color).toSet(),
         {corBalcaoCorpo, corBalcaoTampo});
 
-    // O comprimento corre em Z: o balcão vai de z 4,18 a 12,13, alinhado com a
-    // primeira e a última fileira de gôndolas.
+    // O comprimento corre em Z e o balcão ENCOSTA na parede da entrada: a ponta
+    // de z alto bate na face interna dela, sem fresta, e os 7,95 m correm dali
+    // para dentro da loja.
     final xs = faces.expand((f) => f.verts).map((v) => v.x);
     final ys = faces.expand((f) => f.verts).map((v) => v.y);
     final zs = faces.expand((f) => f.verts).map((v) => v.z);
     expect(xs.reduce(math.min), closeTo(1.15, 1e-9));
     expect(xs.reduce(math.max), closeTo(1.75, 1e-9));
-    expect(zs.reduce(math.min), closeTo(4.175, 1e-9));
-    expect(zs.reduce(math.max), closeTo(12.125, 1e-9));
+    expect(zs.reduce(math.max), closeTo(lojaH - 0.18, 1e-9));
+    expect(zs.reduce(math.max) - zs.reduce(math.min), closeTo(7.95, 1e-9));
 
     // Mais baixo que as demais estruturas do mapa: é esse degrau de altura que
     // faz o balcão ler como balcão, e não como mais uma estante.
