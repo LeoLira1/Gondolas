@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'balcao_scene.dart' show balcaoLoja;
 import 'boneco_loja.dart'
     show BonecoLoja, BonecoRenderer, PaletaBoneco, RotaBoneco;
 import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
@@ -11,7 +12,7 @@ import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, ProjecaoCamera, faceAngle;
 import 'models.dart'
-    show colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
+    show balcaoNum, colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
          ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
          expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum;
 import 'scene_gestures.dart';
@@ -111,6 +112,11 @@ const List<ItemLoja> itensLoja = [
   // (E13). Posição aproximada — ajuste fino em x/z/d conforme a loja real.
   ItemLoja(tipo: 'estante', numero: estanteParedeMin,
       x: 0.45, z: 10.6, w: 0.55, d: 4.4),
+  // Balcão de Atendimento: peça comprida no corredor da parede esquerda, entre
+  // a Estante Parede e a coluna de gôndolas 8–12. Vai de z 4,18 a 12,13 —
+  // alinhado com a primeira e a última fileira de gôndolas.
+  ItemLoja(tipo: 'estante', numero: balcaoNum,
+      x: 1.45, z: 8.15, w: 0.60, d: 7.95),
 ];
 
 // ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
@@ -120,11 +126,16 @@ const List<ItemLoja> itensLoja = [
 const double alturaBoneco = LojaGeometry.alturaGondola;
 
 /// Rotas de caminhada — dado, não código espalhado. Todas passam só pelos
-/// corredores: os verticais x = 4, x = 6, x = 1.6 e x = 8.4 (as colunas de
-/// gôndolas ficam em x = 3, 5 e 7, com raio 0.62; as estantes de parede em
-/// x ≤ 1.35 e x ≥ 9.1) e os horizontais z = 2.8 (antes da primeira fileira,
-/// em z = 4), z = 5 (entre as fileiras z = 4 e z = 6) e z ≈ 13 (entre a
-/// última fileira, em z = 12, e a parede da entrada).
+/// corredores: os verticais x = 4, x = 6, x = 2.05 e x = 8.4 e os horizontais
+/// z = 2.8 (antes da primeira fileira, em z = 4), z = 5 (entre as fileiras
+/// z = 4 e z = 6) e z ≈ 13 (entre a última fileira, em z = 12, e a parede da
+/// entrada).
+///
+/// As colunas de gôndolas ficam em x = 3, 5 e 7, com raio 0.62; as estantes de
+/// parede em x ≤ 1.35 e x ≥ 9.1. O corredor da esquerda é o mais apertado dos
+/// quatro: o Balcão de Atendimento ocupa x 1.15–1.75 ao longo de quase toda a
+/// parede esquerda, então a perna de volta corre em x = 2.05 — o meio da folga
+/// entre a borda do balcão (x 1.75) e a das gôndolas 8–12 (x 2.38).
 final List<RotaBoneco> rotasLoja = [
   // Funcionário: sobe e desce o corredor central da loja, atravessando pela
   // faixa livre entre as fileiras z = 4 e z = 6.
@@ -136,10 +147,10 @@ final List<RotaBoneco> rotasLoja = [
   ]),
   // Cliente: volta grande pelas laterais, por fora das gôndolas.
   RotaBoneco(const [
-    (x: 8.4, z: 2.80),
-    (x: 8.4, z: 13.30),
-    (x: 1.6, z: 13.30),
-    (x: 1.6, z: 2.80),
+    (x: 8.4,  z: 2.80),
+    (x: 8.4,  z: 13.30),
+    (x: 2.05, z: 13.30),
+    (x: 2.05, z: 2.80),
   ]),
 ];
 
@@ -345,6 +356,8 @@ class LojaGeometry {
         expositorNelloreLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else if (item.numero == expositorMonitorNum) {
         expositorMonitorLoja(faces, item.x, item.z, item.w, item.d, cor);
+      } else if (item.numero == balcaoNum) {
+        balcaoLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else if (ehEstanteParede(item.numero)) {
         _estanteParede(faces, item, cor);
       } else {
@@ -760,12 +773,14 @@ class LojaPainter extends CustomPainter {
     for (final item in itensLoja) {
       // Sem badges A–E nas EDR-300 (a 8 e a tripla da 6), nos expositores
       // (MagnoJet/Nellore/Monitor) nem na Estante Parede (os rótulos deles
-      // são próprios e só fazem sentido na cena de detalhe).
+      // são próprios e só fazem sentido na cena de detalhe). O balcão fica
+      // fora por outro motivo: ele não tem nível nenhum.
       if (item.tipo != 'estante' ||
           ehEstanteEdr300(item.numero) ||
           item.numero == expositorMagnojetNum ||
           item.numero == expositorNelloreNum ||
           item.numero == expositorMonitorNum ||
+          item.numero == balcaoNum ||
           ehEstanteParede(item.numero)) {
         continue;
       }
@@ -1138,6 +1153,14 @@ class _LojaSceneState extends State<LojaScene>
 
     for (var i = 0; i < itensLoja.length; i++) {
       final item = itensLoja[i];
+      // O balcão é a única estrutura do mapa sem cena de detalhe: ele não tem
+      // níveis nem endereços, e um toque duplo nele cairia no `else` de
+      // _abrirEstrutura, abrindo uma EstantePage para a "estante 21" — uma
+      // cena genérica vazia, com o carrossel parado num número que não existe
+      // em ordemNavegacaoEstantes. Enquanto não houver cena própria, ele entra
+      // no mapa como peça puramente visual e não é selecionável; o raio passa
+      // reto e acerta o que estiver atrás.
+      if (item.numero == balcaoNum) continue;
       final double hw, hd, h;
       if (item.tipo == 'gondola') {
         hw = LojaGeometry.gondolaR + margem;
