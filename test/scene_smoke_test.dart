@@ -382,7 +382,13 @@ void main() {
   test('balcão: perfil em T, dois recortes e mais baixo que as estantes', () {
     final balcao = itensLoja.firstWhere((it) => it.numero == balcaoNum);
     final faces = <Face>[];
-    balcaoLoja(faces, balcao.x, balcao.z, balcao.w, balcao.d, Colors.green);
+    balcaoLoja(faces, balcao.x, balcao.z, balcao.w, balcao.d, corBalcaoCorpo,
+        corTampo: corBalcaoTampo);
+
+    // Peça de duas cores: corpo verde e tampo de mármore marrom. É a única
+    // estrutura do mapa que não é chapada numa cor só.
+    expect(faces.map((f) => f.color).toSet(),
+        {corBalcaoCorpo, corBalcaoTampo});
 
     // O comprimento corre em Z: o balcão vai de z 4,18 a 12,13, alinhado com a
     // primeira e a última fileira de gôndolas.

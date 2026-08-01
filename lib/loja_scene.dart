@@ -3,7 +3,8 @@ import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'balcao_scene.dart' show balcaoLoja;
+import 'balcao_scene.dart'
+    show balcaoLoja, corBalcaoCorpo, corBalcaoTampo;
 import 'boneco_loja.dart'
     show BonecoLoja, BonecoRenderer, PaletaBoneco, RotaBoneco;
 import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
@@ -311,6 +312,8 @@ class LojaGeometry {
 
     final idxConferencia = contagemConferencia.keys.toSet();
     final faces = <Face>[];
+    // O pulso do destaque é o mesmo para todas as estruturas neste frame.
+    final pulse = (0.35 + 0.25 * math.sin(pulseT * 2.2)).clamp(0.0, 1.0);
 
     // Paredes perimetrais
     _wallBox(faces, 0, _paredeEsp, 0, lojaH);
@@ -324,25 +327,27 @@ class LojaGeometry {
       final isSel  = selecionadoIdx == i;
       final hasSel = selecionadoIdx != null;
 
-      final Color cor;
-      if (modoConferencia) {
+      // Destaque, apagado e Modo Conferência são a MESMA transformação para
+      // qualquer cor base da estrutura. Escrita como função da base porque o
+      // balcão tem duas (corpo verde e tampo de mármore) e as duas precisam
+      // apagar e pulsar juntas — o resto das estruturas chama uma vez só.
+      Color aplicar(Color base) {
         // Modo Conferência (Fase 3) substitui o esquema de seleção normal:
         // ciano pulsante nas estruturas com pendentes, apagado nas demais.
-        if (idxConferencia.contains(i)) {
-          final pulse = (0.35 + 0.25 * math.sin(pulseT * 2.2)).clamp(0.0, 1.0);
-          cor = Color.lerp(corConferenciaCiano, Colors.white, pulse * 0.3)!;
-        } else {
-          cor = _corApagado;
+        if (modoConferencia) {
+          if (!idxConferencia.contains(i)) return _corApagado;
+          return Color.lerp(corConferenciaCiano, Colors.white, pulse * 0.3)!;
         }
-      } else if (!hasSel) {
-        cor = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
-      } else if (isSel) {
-        final base  = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
-        final pulse = (0.35 + 0.25 * math.sin(pulseT * 2.2)).clamp(0.0, 1.0);
-        cor = Color.lerp(base, Colors.white, pulse * 0.35)!;
-      } else {
-        cor = _corApagado;
+        if (!hasSel) return base;
+        if (!isSel)  return _corApagado;
+        return Color.lerp(base, Colors.white, pulse * 0.35)!;
       }
+
+      final cor = aplicar(item.tipo == 'gondola'
+          ? corGondolaLoja
+          : item.numero == balcaoNum
+              ? corBalcaoCorpo
+              : corEstanteLoja);
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
@@ -357,7 +362,8 @@ class LojaGeometry {
       } else if (item.numero == expositorMonitorNum) {
         expositorMonitorLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else if (item.numero == balcaoNum) {
-        balcaoLoja(faces, item.x, item.z, item.w, item.d, cor);
+        balcaoLoja(faces, item.x, item.z, item.w, item.d, cor,
+            corTampo: aplicar(corBalcaoTampo));
       } else if (ehEstanteParede(item.numero)) {
         _estanteParede(faces, item, cor);
       } else {

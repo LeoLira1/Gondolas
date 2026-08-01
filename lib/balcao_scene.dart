@@ -16,9 +16,17 @@ import 'gondola_scene.dart' show Face, Vec3;
 // comprimento. Chamada no switch de tipos em buildFaces da LojaGeometry:
 //
 //   } else if (item.numero == balcaoNum) {
-//     balcaoLoja(faces, item.x, item.z, item.w, item.d, cor);
+//     balcaoLoja(faces, item.x, item.z, item.w, item.d, cor,
+//         corTampo: aplicar(corBalcaoTampo));
 //   }
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Cores do balcão: a marcenaria do corpo é verde e o tampo é de mármore
+/// marrom — é uma peça de duas cores, diferente de todas as outras estruturas
+/// do mapa. O verde é mais fechado que o das gôndolas ([corGondolaLoja]) para
+/// as duas coisas não se confundirem à distância.
+const Color corBalcaoCorpo = Color(0xFF1f9350);
+const Color corBalcaoTampo = Color(0xFF8a6a52);
 
 /// Espessura do corpo, em metros — as coordenadas X/Z do mapa são as reais da
 /// loja (só o Y é comprimido), então as medidas do plano entram direto.
@@ -34,11 +42,16 @@ const double _recorteRebaixo = 0.43;
 /// Desenha o balcão com o comprimento correndo em **Z** (ele é paralelo à
 /// parede esquerda): [w] é a espessura em X — a profundidade do tampo — e [d]
 /// o comprimento.
+///
+/// [cor] pinta o corpo e [corTampo] o mármore. As duas chegam já transformadas
+/// (destaque, apagado, Modo Conferência) por quem chama, para o balcão inteiro
+/// reagir junto com o resto do mapa.
 void balcaoLoja(
   List<Face> faces,
   double cx, double cz, double w, double d,
-  Color cor,
-) {
+  Color cor, {
+  required Color corTampo,
+}) {
   final hw = w / 2, hd = d / 2;
 
   // Altura no mapa. As demais estruturas usam LojaGeometry._estanteH (0,85)
@@ -85,6 +98,6 @@ void balcaoLoja(
     final topoCorpo = rebaixado ? corpoH * (1 - _recorteRebaixo) : corpoH;
     box(corpoX0, corpoX1, 0, topoCorpo, bordas[i], bordas[i + 1], cor);
     box(cx - hw, cx + hw, topoCorpo, topoCorpo + tampoT,
-        bordas[i], bordas[i + 1], cor);
+        bordas[i], bordas[i + 1], corTampo);
   }
 }
