@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
+import 'package:gondola_camda/balcao_scene.dart';
 import 'package:gondola_camda/estante_edr300_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
@@ -376,6 +377,50 @@ void main() {
     );
     expect(itensLoja.any((it) => it.tipo == 'estante' && it.numero == 3), isFalse);
     expect(itensLoja.any((it) => it.tipo == 'estante' && it.numero == 4), isFalse);
+  });
+
+  test('balcão: perfil em T, dois recortes e mais baixo que as estantes', () {
+    final balcao = itensLoja.firstWhere((it) => it.numero == balcaoNum);
+    final faces = <Face>[];
+    balcaoLoja(faces, balcao.x, balcao.z, balcao.w, balcao.d, corBalcaoCorpo,
+        corTampo: corBalcaoTampo);
+
+    // Peça de duas cores: corpo verde e tampo de mármore marrom. É a única
+    // estrutura do mapa que não é chapada numa cor só.
+    expect(faces.map((f) => f.color).toSet(),
+        {corBalcaoCorpo, corBalcaoTampo});
+
+    // O comprimento corre em Z: o balcão vai de z 4,18 a 12,13, alinhado com a
+    // primeira e a última fileira de gôndolas.
+    final xs = faces.expand((f) => f.verts).map((v) => v.x);
+    final ys = faces.expand((f) => f.verts).map((v) => v.y);
+    final zs = faces.expand((f) => f.verts).map((v) => v.z);
+    expect(xs.reduce(math.min), closeTo(1.15, 1e-9));
+    expect(xs.reduce(math.max), closeTo(1.75, 1e-9));
+    expect(zs.reduce(math.min), closeTo(4.175, 1e-9));
+    expect(zs.reduce(math.max), closeTo(12.125, 1e-9));
+
+    // Mais baixo que as demais estruturas do mapa: é esse degrau de altura que
+    // faz o balcão ler como balcão, e não como mais uma estante.
+    expect(ys.reduce(math.max), lessThan(0.85));
+
+    // Silhueta da vista de frente: só cinco alturas aparecem — o piso, o topo
+    // do corpo (cheio e rebaixado) e o topo do tampo (idem). Se o rebaixo do
+    // recorte sumisse, sobrariam três.
+    final alturas = ys.map((y) => (y * 1e4).round() / 1e4).toSet().toList()
+      ..sort();
+    expect(alturas.length, 5);
+    // O corpo rebaixado fica a 57% do cheio (o recorte come 43% dele).
+    expect(alturas[1] / alturas[3], closeTo(0.57, 1e-3));
+    // O tampo tem a mesma espessura nos dois casos e acompanha o rebaixo.
+    expect(alturas[2] - alturas[1], closeTo(alturas[4] - alturas[3], 1e-9));
+
+    // Corpo mais fino que o tampo: quem toca o piso são só os 18 cm do corpo,
+    // e o tampo (0,60 m) avança 21 cm para cada lado — o "T" visto de frente.
+    final xsNoPiso =
+        faces.expand((f) => f.verts).where((v) => v.y == 0).map((v) => v.x);
+    expect(xsNoPiso.reduce(math.max) - xsNoPiso.reduce(math.min),
+        closeTo(0.18, 1e-9));
   });
 
   testWidgets('EstanteParedeScene renderiza sem exceções', (tester) async {

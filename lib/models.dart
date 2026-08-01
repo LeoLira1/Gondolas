@@ -109,6 +109,14 @@ const int expositorMonitorNum     = 20;
 const int colunasExpositorMonitor = 5;
 const int niveisExpositorMonitor  = 4;
 
+// O Balcão de Atendimento (7,95 m × 1,10 m, encostado no corredor da parede
+// esquerda) ganha número na mesma sequência das estruturas só para o mapa
+// saber desenhá-lo: ele NÃO tem endereços de produto e por isso fica fora de
+// ordemNavegacaoEstantes, de niveisProdutoPara e de numColunasPara. O número
+// 21 está reservado a ele de qualquer forma, para não ser reaproveitado por
+// uma estante futura que sim teria endereços.
+const int balcaoNum = 21;
+
 // A Estante Parede é uma peça física única (prateleiras verdes flutuantes
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
 // como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
