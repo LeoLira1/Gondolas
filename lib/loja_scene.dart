@@ -114,10 +114,13 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: estanteParedeMin,
       x: 0.45, z: 10.6, w: 0.55, d: 4.4),
   // Balcão de Atendimento: peça comprida no corredor da parede esquerda, entre
-  // a Estante Parede e a coluna de gôndolas 8–12. Vai de z 4,18 a 12,13 —
-  // alinhado com a primeira e a última fileira de gôndolas.
+  // a Estante Parede e a coluna de gôndolas 8–12. ENCOSTA na parede da entrada
+  // (z = lojaH) e corre os 7,95 m dali para dentro — vai de z 5,87 a 13,82. O z
+  // é derivado da parede em vez de escrito à mão para não reabrir fresta ali se
+  // a espessura da parede mudar.
   ItemLoja(tipo: 'estante', numero: balcaoNum,
-      x: 1.45, z: 8.15, w: 0.60, d: 7.95),
+      x: 1.45, z: lojaH - LojaGeometry._paredeEsp - 7.95 / 2,
+      w: 0.60, d: 7.95),
 ];
 
 // ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
