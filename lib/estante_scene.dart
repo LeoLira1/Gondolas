@@ -287,7 +287,7 @@ class EstantePainter extends CustomPainter {
     final rimPaint = Paint()
       ..color       = camda
       ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.6;
 
     for (final celula in EstanteGeometry.celulasPara(estanteAtual)) {
       final xCenter = (celula.xMin + celula.xMax) / 2;
@@ -295,7 +295,7 @@ class EstantePainter extends CustomPainter {
       if (hit == null) continue;
 
       final (screen, cz) = hit;
-      final fontSize = 28.0 * (6.0 / cz).clamp(0.5, 1.8);
+      final fontSize = 19.0 * (6.0 / cz).clamp(0.5, 1.5);
 
       final row    = nNiveis - 1 - celula.nivel;
       final letter = letraDoIndice(letraOffset + row * nColunas + celula.coluna);
