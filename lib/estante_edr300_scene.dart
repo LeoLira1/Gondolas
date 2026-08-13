@@ -342,7 +342,7 @@ class Edr300Painter extends CustomPainter {
     final rimPaint = Paint()
       ..color       = camda
       ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.6;
 
     // Um badge por módulo × prateleira, com letras contínuas por módulo de
     // cima pra baixo (mesma régua de letraEstanteCelula): solo A–F; tripla
@@ -354,7 +354,7 @@ class Edr300Painter extends CustomPainter {
         if (hit == null) continue;
 
         final (screen, cz) = hit;
-        final fontSize = 22.0 * (3.0 / cz).clamp(0.5, 1.8);
+        final fontSize = 15.0 * (3.0 / cz).clamp(0.5, 1.5);
         final radius   = fontSize * 0.72;
 
         canvas.drawCircle(screen, radius, bgPaint);

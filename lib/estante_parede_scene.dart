@@ -301,7 +301,7 @@ class EstanteParedePainter extends CustomPainter {
     final rimPaint = Paint()
       ..color       = camda
       ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.6;
 
     // Endereço numérico contínuo por célula (1..72, coluna a coluna).
     for (final celula in EstanteParedeGeometry.celulas()) {
@@ -310,7 +310,7 @@ class EstanteParedePainter extends CustomPainter {
       if (hit == null) continue;
 
       final (screen, cz) = hit;
-      final fontSize = 22.0 * (5.0 / cz).clamp(0.5, 1.8);
+      final fontSize = 15.0 * (5.0 / cz).clamp(0.5, 1.5);
 
       final letter = letraEstanteCelula(estanteAtual, celula.coluna, celula.nivel);
       final tp = TextPainter(
