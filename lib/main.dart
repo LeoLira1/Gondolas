@@ -9,6 +9,8 @@ import 'estoque_localizado_service.dart';
 import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
 import 'expositor_nellore_scene.dart';
+import 'galpao_page.dart';
+import 'galpao_scene.dart' show corCamda;
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
@@ -273,7 +275,13 @@ class _LojaPageState extends State<LojaPage> {
             andar:         _produtoSelecionado!.andar,
           )
         : null;
-    if (tipo == 'gondola') {
+    if (tipo == localTipoGalpao) {
+      // O galpão não tem maquete no mapa da loja (é outro prédio): a busca
+      // leva direto à tela dele, isolando a rua e marcando a posição.
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => GalpaoPage(posicaoInicial: numero),
+      ));
+    } else if (tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
           gondolaInicial:   numero,
@@ -323,6 +331,19 @@ class _LojaPageState extends State<LojaPage> {
       _conferencia           = resultado;
       _carregandoConferencia = false;
     });
+  }
+
+  /// Abre o galpão já com o Modo Conferência ligado — o galpão é outro prédio,
+  /// então os pendentes que moram lá (herbicida, adubo, óleo) não têm retângulo
+  /// para acender no mapa da loja: o atalho do banner é o que liga uma rota à
+  /// outra.
+  Future<void> _abrirGalpaoEmConferencia() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const GalpaoPage(conferenciaAoAbrir: true),
+    ));
+    // Confirmações feitas no app de contagem enquanto o galpão estava aberto
+    // valem para os dois prédios — o mesmo recarregar de _abrirEstrutura.
+    if (mounted && _modoConferencia) _carregarConferencia();
   }
 
   /// Estruturas com pendentes que não têm maquete no mapa (paletes, estante 5).
@@ -580,34 +601,46 @@ class _LojaPageState extends State<LojaPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Linha: campo de busca + legenda + toggle conferência
+                    // O campo de busca fica SOZINHO na linha, ocupando a
+                    // largura toda. Ele dividia a linha com três botões de
+                    // 46 px e a legenda, e num celular sobrava tão pouco que
+                    // o nome do produto não cabia — os nomes cadastrados são
+                    // longos ('HERBICIDA BORAL 500 SC 20L'), então é a busca
+                    // que precisa do espaço, não os botões.
+                    _SearchBox(
+                      controller:    _searchCtrl,
+                      focusNode:     _searchFocus,
+                      sugestoes:     _sugestoes,
+                      showSugestoes: _showSugestoes,
+                      buscando:      _buscando,
+                      semResultados: _semResultados,
+                      onChanged:     _onSearchChanged,
+                      onSelecionar:  _selecionarProduto,
+                      onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
+                    ),
+                    const SizedBox(height: 8),
+                    // Segunda linha: ações e legenda. Sincronizar, galpão e
+                    // conferência à esquerda; a legenda encostada à direita.
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: _SearchBox(
-                            controller:    _searchCtrl,
-                            focusNode:     _searchFocus,
-                            sugestoes:     _sugestoes,
-                            showSugestoes: _showSugestoes,
-                            buscando:      _buscando,
-                            semResultados: _semResultados,
-                            onChanged:     _onSearchChanged,
-                            onSelecionar:  _selecionarProduto,
-                            onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
                         _SyncButton(
                           sincronizando: _sincronizando,
                           onTap: _sincronizar,
+                        ),
+                        const SizedBox(width: 10),
+                        _GalpaoButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const GalpaoPage()),
+                          ),
                         ),
                         const SizedBox(width: 10),
                         _ModoConferenciaToggle(
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
                         ),
-                        const SizedBox(width: 10),
+                        const Spacer(),
                         const _LegendRow(),
                       ],
                     ),
@@ -622,6 +655,7 @@ class _LojaPageState extends State<LojaPage> {
                           onVerSemEndereco: _mostrarSemEndereco,
                           foraDoMapa: _estruturasForaDoMapa,
                           onVerForaDoMapa: _mostrarForaDoMapa,
+                          onVerGalpao: _abrirGalpaoEmConferencia,
                         ),
                       ),
                     // Título / dica
@@ -811,6 +845,35 @@ class _SyncButton extends StatelessWidget {
   }
 }
 
+// ── _GalpaoButton ────────────────────────────────────────────────────────────
+
+/// Porta de entrada do mapa do galpão. Fica na barra do mapa da loja, e não
+/// como uma estrutura desenhada nele, porque o galpão é outro prédio — não
+/// uma peça a mais do salão.
+class _GalpaoButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _GalpaoButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color:        const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: const Icon(Icons.warehouse_outlined,
+            color: Color(0xFF8a877f), size: 20),
+      ),
+    );
+  }
+}
+
 // ── _ModoConferenciaToggle ──────────────────────────────────────────────────
 
 class _ModoConferenciaToggle extends StatelessWidget {
@@ -858,6 +921,9 @@ class _BannerConferencia extends StatelessWidget {
   // estante 5): não têm retângulo pra piscar, então ganham um atalho próprio.
   final List<EstruturaConferencia> foraDoMapa;
   final VoidCallback               onVerForaDoMapa;
+  // Pendentes com rack no galpão: outro prédio, outro mapa — atalho próprio,
+  // que abre o galpão já em Modo Conferência.
+  final VoidCallback               onVerGalpao;
 
   const _BannerConferencia({
     required this.carregando,
@@ -866,17 +932,23 @@ class _BannerConferencia extends StatelessWidget {
     required this.onVerSemEndereco,
     this.foraDoMapa = const [],
     required this.onVerForaDoMapa,
+    required this.onVerGalpao,
   });
 
   @override
   Widget build(BuildContext context) {
-    final r     = resultado;
-    final vazio = !carregando && (r == null || r.vazioHoje);
+    final r = resultado;
+    // "Nada hoje" agora exige os dois prédios vazios: com o galpão no app, um
+    // dia só de herbicida e adubo tem conferência de verdade, ainda que nenhuma
+    // estrutura da loja acenda.
+    final vazio = !carregando && (r == null || (r.vazioHoje && r.galpaoVazioHoje));
     final temSemEndereco = r != null && r.semEndereco.isNotEmpty;
     final temFiltrados   = r != null && r.totalFiltradosDeposito > 0;
     final filtradosTexto =
         temFiltrados ? ' · ${r.totalFiltradosDeposito} depósito (filtrados)' : '';
     final temForaDoMapa  = !carregando && foraDoMapa.isNotEmpty;
+    final noGalpao       = r == null ? 0 : r.totalProdutosGalpao;
+    final temGalpao      = !carregando && noGalpao > 0;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -903,14 +975,44 @@ class _BannerConferencia extends StatelessWidget {
                   child: Text(
                     vazio
                         ? 'Nenhuma conferência pendente hoje 🎉$filtradosTexto'
-                        : 'Conferência do dia: ${r!.totalProdutos} produto(s) · '
-                          '${r.totalEstruturas} estrutura(s)'
-                          '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
-                          '$filtradosTexto',
+                        : r!.vazioHoje
+                            // Nenhuma estrutura da loja acesa, mas o galpão
+                            // tem racks a conferir: o chip ao lado é o caminho.
+                            ? 'Nada a conferir na loja hoje — a conferência é '
+                              'no galpão$filtradosTexto'
+                            : 'Conferência do dia: ${r.totalProdutos} produto(s) · '
+                              '${r.totalEstruturas} estrutura(s)'
+                              '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
+                              '$filtradosTexto',
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
         ),
+        if (temGalpao) ...[
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onVerGalpao,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: corConferenciaCiano.withValues(alpha: 0.16),
+                border: Border.all(
+                    color: corConferenciaCiano.withValues(alpha: 0.6)),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.warehouse_outlined,
+                    size: 12, color: corConferenciaCiano),
+                const SizedBox(width: 4),
+                Text(
+                  '$noGalpao no galpão',
+                  style: const TextStyle(
+                      color: corConferenciaCiano, fontSize: 11),
+                ),
+              ]),
+            ),
+          ),
+        ],
         if (temForaDoMapa) ...[
           const SizedBox(width: 8),
           GestureDetector(
@@ -1070,7 +1172,7 @@ class _SearchBox extends StatelessWidget {
                                           const SizedBox(width: 5),
                                           Flexible(
                                             child: Text(
-                                              '${p.tipo == 'gondola' ? 'Gôndola' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
+                                              '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
                                               ' nº ${p.numero} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
@@ -1188,19 +1290,30 @@ class _LocationCard extends StatelessWidget {
 
     final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
     final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
-    final cor     = tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+    final ehGalpaoAqui = tipo == localTipoGalpao;
+    final cor = tipo == 'gondola'
+        ? corGondolaLoja
+        : ehGalpaoAqui
+            ? corCamda
+            : corEstanteLoja;
+    // No galpão o número JÁ é o endereço (1–78, único no galpão inteiro), sem
+    // letra na frente — é assim que a etiqueta física está no chão.
     final prefixo = tipo == 'gondola'
         ? 'G'
-        : ehPaleteAqui
-            ? 'P'
-            : 'E';
+        : ehGalpaoAqui
+            ? ''
+            : ehPaleteAqui
+                ? 'P'
+                : 'E';
     final tipoLabel = tipo == 'gondola'
         ? 'Gôndola'
-        : ehPaleteAqui
-            ? 'Palete'
-            : ehParede
-                ? 'Estante Parede'
-                : 'Estante';
+        : ehGalpaoAqui
+            ? 'Galpão'
+            : ehPaleteAqui
+                ? 'Palete'
+                : ehParede
+                    ? 'Estante Parede'
+                    : 'Estante';
     // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
     // resultado da busca quando há produto selecionado.
     final numeroTitulo = ehParede

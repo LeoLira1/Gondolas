@@ -1,4 +1,5 @@
 import 'package:libsql_dart/libsql_dart.dart';
+import 'galpao_config.dart';
 import 'models.dart' show estantesRemovidas;
 import 'turso_service.dart';
 
@@ -6,11 +7,19 @@ import 'turso_service.dart';
 // Filtro de categorias de depósito (Fase 3.1)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// O mapa 3D representa só a LOJA (gôndolas/estantes de equipamentos e itens
-// de balcão) — produtos destas categorias moram no DEPÓSITO e nunca terão
-// endereço cadastrado, então só inflariam a lista "sem endereço". Ficam de
-// fora do Modo Conferência por completo (nem estrutura, nem sem endereço),
-// mas continuam contados à parte pro total bater com o dashboard.
+// O mapa 3D da LOJA representa gôndolas/estantes de equipamentos e itens de
+// balcão — produtos destas categorias moram no GALPÃO e nunca terão endereço
+// de loja cadastrado, então só inflariam a lista "sem endereço". Ficam de
+// fora do Modo Conferência DA LOJA por completo (nem estrutura, nem sem
+// endereço), mas continuam contados à parte pro total bater com o dashboard.
+//
+// ⚠️ O filtro vale só para o lado da LOJA. O cruzamento com o galpão é feito
+// com TODOS os pendentes do dia, sem filtro nenhum: é justamente nos racks
+// do galpão que herbicida, adubo e óleo têm endereço, e filtrá-los ali
+// apagaria o Modo Conferência do galpão inteiro. Um pendente de categoria de
+// depósito só continua "oculto" (contado em
+// [ModoConferenciaResultado.totalFiltradosDeposito]) quando também não tem
+// rack no galpão — aí não há mesmo onde mostrá-lo.
 //
 // Edite esta lista livremente — é o único lugar que precisa mudar.
 const List<String> categoriasExcluidasKeywords = [
@@ -93,16 +102,39 @@ class EstruturaConferencia {
   Set<String> get codigos => itens.map((i) => i.codigo).toSet();
 }
 
+/// Uma posição do galpão (1–78) que guarda pendentes de hoje.
+///
+/// O irmão de [EstruturaConferencia] do outro lado da rua: lá a chave é
+/// tipo + número da estrutura da loja, aqui é o número global da posição de
+/// chão. Não guarda nível de propósito — o rack pendente pode estar em
+/// qualquer altura da pilha, e a pilha desce quando alguém esvazia um nível
+/// (ver galpao_config.dart). Quem acende é o CÓDIGO do produto, então a cena
+/// reencontra o rack certo mesmo depois de uma renumeração.
+class PosicaoConferencia {
+  final int posicao; // 1–78
+  final List<ItemPendente> itens;
+
+  const PosicaoConferencia({
+    required this.posicao,
+    required this.itens,
+  });
+
+  Set<String> get codigos => itens.map((i) => i.codigo).toSet();
+}
+
 /// Resultado pronto do cruzamento entre os pendentes de contagem_itens e os
-/// layouts (gôndola/estante): estruturas do mapa que precisam de conferência
-/// hoje + itens cujo código não aparece em nenhum layout cadastrado.
+/// endereços cadastrados: estruturas da loja (gôndola/estante) e posições do
+/// galpão que precisam de conferência hoje + itens cujo código não aparece em
+/// endereço nenhum.
 class ModoConferenciaResultado {
   final Map<String, EstruturaConferencia> estruturas; // chave '$tipo:$numero'
+  // Posições do galpão com pendentes, por número global (1–78).
+  final Map<int, PosicaoConferencia> galpao;
   final List<ItemPendente> semEndereco;
   final int totalProdutos; // pendentes únicos de hoje relevantes à loja
-  // Pendentes de categorias de depósito (ver categoriasExcluidasKeywords),
-  // ocultos do Modo Conferência — contados à parte pro total bater com o
-  // dashboard (totalProdutos + totalFiltradosDeposito = pendentes do dia).
+  // Pendentes de categorias de depósito (ver categoriasExcluidasKeywords) que
+  // também não têm rack no galpão: não há onde mostrá-los, então ficam
+  // ocultos e contados à parte pro total bater com o dashboard.
   final int totalFiltradosDeposito;
 
   const ModoConferenciaResultado({
@@ -110,10 +142,12 @@ class ModoConferenciaResultado {
     required this.semEndereco,
     required this.totalProdutos,
     required this.totalFiltradosDeposito,
+    this.galpao = const {},
   });
 
   static const vazio = ModoConferenciaResultado(
     estruturas: {},
+    galpao: {},
     semEndereco: [],
     totalProdutos: 0,
     totalFiltradosDeposito: 0,
@@ -121,6 +155,97 @@ class ModoConferenciaResultado {
 
   int get totalEstruturas => estruturas.length;
   bool get vazioHoje => totalProdutos == 0;
+
+  // ── Lado do galpão ─────────────────────────────────────────────────────────
+
+  /// Quantas posições de chão acendem no galpão hoje.
+  int get totalPosicoesGalpao => galpao.length;
+
+  /// Códigos pendentes com rack no galpão — é o conjunto que a cena consulta
+  /// para decidir qual cubo fica ciano.
+  Set<String> get codigosGalpao => {
+        for (final p in galpao.values) ...p.codigos,
+      };
+
+  /// Produtos distintos pendentes no galpão. Distintos, não a soma dos itens
+  /// das posições: o mesmo produto pode estar em vários racks e contaria
+  /// várias vezes.
+  int get totalProdutosGalpao => codigosGalpao.length;
+
+  bool get galpaoVazioHoje => galpao.isEmpty;
+}
+
+/// Cruza os pendentes do dia com os endereços já lidos do banco.
+///
+/// Pura de propósito: é aqui que vive a regra de qual balde recebe cada
+/// pendente (estrutura da loja, posição do galpão, sem endereço, filtrado), e
+/// é o que os testes exercitam sem precisar de banco. [pendentes] são TODOS
+/// os pendentes do dia, inclusive as categorias de depósito — o filtro delas
+/// é aplicado aqui, e só do lado da loja.
+ModoConferenciaResultado montarConferencia({
+  required List<ItemPendente> pendentes,
+  required Map<String, Set<int>> gondolasPorCodigo,
+  required Map<String, Set<int>> estantesPorCodigo,
+  required Map<String, Set<int>> galpaoPorCodigo,
+}) {
+  final estruturas    = <String, List<ItemPendente>>{};
+  final posicoes      = <int, List<ItemPendente>>{};
+  final semEndereco   = <ItemPendente>[];
+  var totalLoja       = 0;
+  var filtradosDeposito = 0;
+
+  for (final item in pendentes) {
+    // O galpão vale para todo pendente, filtrado ou não: é o prédio onde as
+    // categorias de depósito moram.
+    final noGalpao = galpaoPorCodigo[item.codigo] ?? const <int>{};
+    for (final numero in noGalpao) {
+      posicoes.putIfAbsent(numero, () => []).add(item);
+    }
+
+    if (ehCategoriaDeDeposito(item)) {
+      // Sem rack no galpão o item não tem onde aparecer — segue oculto, como
+      // antes de o galpão existir no app.
+      if (noGalpao.isEmpty) filtradosDeposito++;
+      continue;
+    }
+
+    totalLoja++;
+    final gondolas = gondolasPorCodigo[item.codigo] ?? const <int>{};
+    final estantes = estantesPorCodigo[item.codigo] ?? const <int>{};
+    if (gondolas.isEmpty && estantes.isEmpty) {
+      // "Sem endereço" é sem endereço NENHUM: com rack no galpão o item já
+      // tem para onde mandar quem vai conferir.
+      if (noGalpao.isEmpty) semEndereco.add(item);
+      continue;
+    }
+    for (final g in gondolas) {
+      estruturas.putIfAbsent('gondola:$g', () => []).add(item);
+    }
+    for (final e in estantes) {
+      estruturas.putIfAbsent('estante:$e', () => []).add(item);
+    }
+  }
+
+  return ModoConferenciaResultado(
+    estruturas: {
+      for (final entry in estruturas.entries)
+        entry.key: EstruturaConferencia(
+          tipo:   entry.key.split(':')[0],
+          numero: int.parse(entry.key.split(':')[1]),
+          itens:  entry.value,
+        ),
+    },
+    galpao: {
+      for (final entry in posicoes.entries)
+        entry.key: PosicaoConferencia(
+          posicao: entry.key,
+          itens:   entry.value,
+        ),
+    },
+    semEndereco:            semEndereco,
+    totalProdutos:          totalLoja,
+    totalFiltradosDeposito: filtradosDeposito,
+  );
 }
 
 class ModoConferenciaService {
@@ -138,78 +263,39 @@ class ModoConferenciaService {
     return TursoService().client;
   }
 
-  /// Busca os pendentes de contagem_itens e cruza com gondola_layout e
-  /// estante_layout numa única passada — 3 queries no total (ou poucas mais,
-  /// se o lote de códigos precisar ser quebrado), nunca uma por estrutura.
+  /// Busca os pendentes de contagem_itens e cruza com gondola_layout,
+  /// estante_layout e galpao_racks numa única passada — 4 queries no total (ou
+  /// poucas mais, se o lote de códigos precisar ser quebrado), nunca uma por
+  /// estrutura.
+  ///
+  /// As consultas da loja recebem só os códigos que podem ter endereço lá (o
+  /// filtro de categorias de depósito), e a do galpão recebe TODOS — ver a
+  /// nota no topo do arquivo. O cruzamento em si é de [montarConferencia].
   Future<ModoConferenciaResultado> buscarConferenciaDoDia() async {
     final client = await _conexao();
     if (client == null) return ModoConferenciaResultado.vazio;
 
     try {
-      final todosPendentes = await _buscarPendentes(client);
-      if (todosPendentes.isEmpty) return ModoConferenciaResultado.vazio;
+      final pendentes = await _buscarPendentes(client);
+      if (pendentes.isEmpty) return ModoConferenciaResultado.vazio;
 
-      // Filtro de categorias de depósito (Fase 3.1): aplicado logo após
-      // buscar os pendentes, ANTES do cruzamento com os layouts — esses
-      // itens nunca terão endereço no mapa da loja. Contados à parte pro
-      // total do banner continuar reconciliável com o dashboard.
-      final pendentes = <ItemPendente>[];
-      var filtradosDeposito = 0;
-      for (final item in todosPendentes) {
-        if (ehCategoriaDeDeposito(item)) {
-          filtradosDeposito++;
-        } else {
-          pendentes.add(item);
-        }
-      }
+      final codigosTodos = pendentes.map((p) => p.codigo).toList();
+      final codigosLoja = [
+        for (final item in pendentes)
+          if (!ehCategoriaDeDeposito(item)) item.codigo,
+      ];
 
-      if (pendentes.isEmpty) {
-        return ModoConferenciaResultado(
-          estruturas: const {},
-          semEndereco: const [],
-          totalProdutos: 0,
-          totalFiltradosDeposito: filtradosDeposito,
-        );
-      }
-
-      final codigos = pendentes.map((p) => p.codigo).toList();
       final resultados = await Future.wait([
-        _buscarEnderecosGondola(client, codigos),
-        _buscarEnderecosEstante(client, codigos),
+        _buscarEnderecosGondola(client, codigosLoja),
+        _buscarEnderecosEstante(client, codigosLoja),
+        _buscarEnderecosGalpao(client, codigosTodos),
       ]);
-      final gondolasPorCodigo = resultados[0];
-      final estantesPorCodigo = resultados[1];
 
-      final estruturas = <String, List<ItemPendente>>{};
-      final semEndereco = <ItemPendente>[];
-
-      for (final item in pendentes) {
-        final gondolas = gondolasPorCodigo[item.codigo] ?? const <int>{};
-        final estantes = estantesPorCodigo[item.codigo] ?? const <int>{};
-        if (gondolas.isEmpty && estantes.isEmpty) {
-          semEndereco.add(item);
-          continue;
-        }
-        for (final g in gondolas) {
-          estruturas.putIfAbsent('gondola:$g', () => []).add(item);
-        }
-        for (final e in estantes) {
-          estruturas.putIfAbsent('estante:$e', () => []).add(item);
-        }
-      }
-
-      return ModoConferenciaResultado(
-        estruturas: {
-          for (final entry in estruturas.entries)
-            entry.key: EstruturaConferencia(
-              tipo:   entry.key.split(':')[0],
-              numero: int.parse(entry.key.split(':')[1]),
-              itens:  entry.value,
-            ),
-        },
-        semEndereco:  semEndereco,
-        totalProdutos: pendentes.length,
-        totalFiltradosDeposito: filtradosDeposito,
+      return montarConferencia(
+        pendentes:         pendentes,
+        gondolasPorCodigo: resultados[0],
+        estantesPorCodigo: resultados[1],
+        galpaoPorCodigo:   resultados[2],
       );
     } catch (_) {
       return ModoConferenciaResultado.vazio;
@@ -281,6 +367,41 @@ class ModoConferenciaService {
         final estante = r['estante_num']    as int?    ?? 0;
         if (codigo.isEmpty) continue;
         mapa.putIfAbsent(codigo, () => <int>{}).add(estante);
+      }
+    }
+    return mapa;
+  }
+
+  /// Posições do galpão (1–78) que têm rack de cada código.
+  ///
+  /// Lê galpao_racks — a ocupação, autoridade do galpão — e não o espelho em
+  /// estoque_localizado: o espelho é derivado dela (ver GalpaoService) e pode
+  /// estar um passo atrás. A ORDEM na pilha não é consultada de propósito: ela
+  /// muda quando alguém esvazia um nível abaixo, e o que a cena precisa saber é
+  /// qual posição acende.
+  Future<Map<String, Set<int>>> _buscarEnderecosGalpao(
+      LibsqlClient client, List<String> codigos) async {
+    final mapa = <String, Set<int>>{};
+    for (var i = 0; i < codigos.length; i += _maxCodigosPorConsulta) {
+      final fim = (i + _maxCodigosPorConsulta < codigos.length)
+          ? i + _maxCodigosPorConsulta
+          : codigos.length;
+      final lote = codigos.sublist(i, fim);
+      final placeholders = List.filled(lote.length, '?').join(', ');
+      final stmt = await client.prepare(
+        'SELECT DISTINCT produto_codigo, posicao FROM galpao_racks '
+        'WHERE produto_codigo IN ($placeholders)',
+      );
+      final rows = await stmt.query(positional: lote);
+      for (final dynamic row in rows as List<dynamic>) {
+        final r       = row as Map<String, dynamic>;
+        final codigo  = r['produto_codigo'] as String? ?? '';
+        final posicao = r['posicao']        as int?    ?? 0;
+        if (codigo.isEmpty) continue;
+        // Linha órfã (posição que saiu da planta) é ignorada, como a cena e o
+        // carregarPilhas fazem — badge numa posição inexistente não desenha.
+        if (GalpaoConfig.porNumero(posicao) == null) continue;
+        mapa.putIfAbsent(codigo, () => <int>{}).add(posicao);
       }
     }
     return mapa;

@@ -3,7 +3,7 @@ import 'models.dart';
 import 'turso_service.dart';
 
 /// Uma linha de estoque_localizado: quantidade de um produto num endereço
-/// físico (gôndola ou estante).
+/// físico (gôndola, estante ou galpão).
 class EnderecoLocalizado {
   final int?    id; // null enquanto não gravado em estoque_localizado
   final String  produtoCodigo;
@@ -26,12 +26,21 @@ class EnderecoLocalizado {
   });
 
   bool get ehGondola => localTipo == 'gondola';
+  bool get ehGalpao  => localTipo == localTipoGalpao;
 
   /// Código compacto usado no log e na observação do inventário cíclico,
-  /// ex: 'G9·F3·A2' (gôndola) ou 'E3·H' (estante).
+  /// ex: 'G9·F3·A2' (gôndola), 'E3·H' (estante) ou 'GALPAO·52·N3'.
+  ///
+  /// No galpão o nível vai junto por ser um REGISTRO HISTÓRICO — o que estava
+  /// naquele endereço no instante da contagem —, não uma referência a ser
+  /// resolvida depois. Endereço do galpão que se pretende reabrir é sempre
+  /// (posição, ordem) lido da tabela, nunca este texto: a ordem muda sozinha
+  /// quando um rack abaixo sai.
   String get enderecoCompacto => ehGondola
       ? 'G$localNum·F$faceOuColuna·A${andarOuNivel + 1}'
-      : 'E$localNum·${letraEstanteCelula(localNum, faceOuColuna, andarOuNivel)}';
+      : ehGalpao
+          ? 'GALPAO·$localNum·N$andarOuNivel'
+          : 'E$localNum·${letraEstanteCelula(localNum, faceOuColuna, andarOuNivel)}';
 
   bool mesmoEndereco(EnderecoLocalizado o) =>
       localTipo == o.localTipo &&
