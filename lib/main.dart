@@ -9,6 +9,7 @@ import 'estoque_localizado_service.dart';
 import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
 import 'expositor_nellore_scene.dart';
+import 'galpao_page.dart';
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
@@ -603,6 +604,13 @@ class _LojaPageState extends State<LojaPage> {
                           onTap: _sincronizar,
                         ),
                         const SizedBox(width: 10),
+                        _GalpaoButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const GalpaoPage()),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
                         _ModoConferenciaToggle(
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
@@ -806,6 +814,35 @@ class _SyncButton extends StatelessWidget {
                 ),
               )
             : const Icon(Icons.sync, color: Color(0xFF8a877f), size: 20),
+      ),
+    );
+  }
+}
+
+// ── _GalpaoButton ────────────────────────────────────────────────────────────
+
+/// Porta de entrada do mapa do galpão. Fica na barra do mapa da loja, e não
+/// como uma estrutura desenhada nele, porque o galpão é outro prédio — não
+/// uma peça a mais do salão.
+class _GalpaoButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _GalpaoButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color:        const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: const Icon(Icons.warehouse_outlined,
+            color: Color(0xFF8a877f), size: 20),
       ),
     );
   }

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "claude/gondola-3d-flutter-prototype-9637uw"
+      - "claude/dreamy-hopper-k1q8ac"
       - "claude/new-session-n5jyhk"
       - "claude/turso-direct-libsql-dart-vw93za"
   workflow_dispatch:

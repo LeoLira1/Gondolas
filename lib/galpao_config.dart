@@ -246,6 +246,29 @@ class GalpaoConfig {
     return index[numero];
   }
 
+  static Map<int, List<PosicaoGalpao>>? _cachePorRua;
+
+  /// Posições de uma rua ordenadas pela COORDENADA do eixo, do menor para o
+  /// maior valor — lista vazia se a rua não existe.
+  ///
+  /// É a ordem geométrica, e ela não coincide com a ordem dos números nas ruas
+  /// numeradas de trás para frente (ver [RuaGalpao.primeiroNoFim]). Quem
+  /// desenha ou faz hit-test precisa da ordem geométrica; quem lista endereços
+  /// para uma pessoa quer a numérica ([posicoes]). Memoizada pelo mesmo motivo
+  /// de [posicoes]: é pedida a cada frame.
+  static List<PosicaoGalpao> posicoesDaRua(int numeroRua) {
+    final index = _cachePorRua ??= {
+      for (final rua in ruas)
+        rua.numero: List.unmodifiable(
+          posicoes.where((p) => p.rua.numero == rua.numero).toList()
+            ..sort((a, b) => rua.eixo == EixoRua.z
+                ? a.z.compareTo(b.z)
+                : a.x.compareTo(b.x)),
+        ),
+    };
+    return index[numeroRua] ?? const <PosicaoGalpao>[];
+  }
+
   /// Rua a que um número de posição pertence, ou null se fora de 1–78.
   static RuaGalpao? ruaDe(int numeroPosicao) {
     for (final r in ruas) {
