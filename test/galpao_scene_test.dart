@@ -202,6 +202,113 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('toque e seleção', () {
+    // Tamanho da superfície padrão dos widget tests; a cena preenche tudo.
+    const tela = Size(800, 600);
+
+    /// Ponto de tela do centro do rack/vaga de [ordem] na posição [numero],
+    /// pela mesma câmera de enquadramento que a cena usa ao abrir.
+    Offset centroNaTela(int numero, int ordem) {
+      final camera = GalpaoScene.enquadrar(tela);
+      final p = GalpaoConfig.porNumero(numero)!;
+      final y = (GalpaoConfig.yBase(ordem) + GalpaoConfig.yTopo(ordem)) / 2;
+      return _projecao(camera, tela)(Vec3(p.x, y, p.z))!;
+    }
+
+    testWidgets('toque no contorno de vaga devolve a próxima ordem livre',
+        (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: GalpaoScene(onTapEndereco: toques.add)),
+      ));
+
+      await tester.tapAt(centroNaTela(1, 1));
+      await tester.pump();
+
+      expect(toques, [
+        const ToqueGalpao(posicao: 1, ordem: 1, ocupado: false),
+      ]);
+    });
+
+    testWidgets('toque num rack ocupado devolve o rack, não a vaga',
+        (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: GalpaoScene(
+            pilhas: {1: _pilha(1, GalpaoConfig.niveisMax)},
+            onTapEndereco: toques.add,
+          ),
+        ),
+      ));
+
+      // Pilha cheia: o topo é o rack de ordem 4, sem contorno em cima.
+      await tester.tapAt(centroNaTela(1, GalpaoConfig.niveisMax));
+      await tester.pump();
+
+      expect(toques, [
+        const ToqueGalpao(
+            posicao: 1, ordem: GalpaoConfig.niveisMax, ocupado: true),
+      ]);
+    });
+
+    testWidgets('toque no nada desfaz a seleção (callback null)',
+        (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: GalpaoScene(onTapEndereco: toques.add)),
+      ));
+
+      await tester.tapAt(const Offset(6, 6)); // canto: só fundo
+      await tester.pump();
+
+      expect(toques, [null]);
+    });
+
+    testWidgets('arrasto não vira seleção', (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: GalpaoScene(onTapEndereco: toques.add)),
+      ));
+
+      final dedo = await tester.startGesture(centroNaTela(1, 1));
+      await dedo.moveBy(const Offset(30, 0)); // além dos 9 px do galpão
+      await dedo.up();
+      await tester.pump();
+
+      expect(toques, isEmpty);
+    });
+
+    testWidgets('segurar mais de 600 ms não vira seleção', (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: GalpaoScene(onTapEndereco: toques.add)),
+      ));
+
+      // O relógio dos eventos de ponteiro não anda com o pump: o timestamp
+      // do soltar precisa ser explícito para simular a espera.
+      final dedo = await tester.startGesture(centroNaTela(1, 1));
+      await dedo.up(timeStamp: const Duration(milliseconds: 900));
+      await tester.pump();
+
+      expect(toques, isEmpty);
+    });
+
+    testWidgets('cena com seleção pinta o destaque sem exceção',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: GalpaoScene(
+            pilhas: {52: _pilha(52, 2)},
+            selecionado: (posicao: 52, ordem: 2),
+          ),
+        ),
+      ));
+      expect(tester.takeException(), isNull);
+    });
+  });
+
 }
 
 /// Projeção de tela equivalente à da cena, para conferir o enquadramento sem

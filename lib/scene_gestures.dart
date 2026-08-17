@@ -107,6 +107,19 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
   /// fica num lugar só para ser fácil de calibrar depois.
   static const double dragThreshold = 12.0;
 
+  /// Limiar efetivo DESTA cena. O padrão é [dragThreshold]; uma cena pode
+  /// apertar (o galpão usa 9.0, porque os alvos lá são cubos grandes e o
+  /// custo de um arrasto virar seleção é maior que o de exigir o dedo firme).
+  double get limiarDeArrasto => dragThreshold;
+
+  /// Duração máxima de um toque, ou null para não limitar (o padrão das
+  /// cenas). Segurar o dedo além disso deixa de ser toque mesmo sem mover:
+  /// é alguém pensando com o dedo na tela, não selecionando.
+  Duration? get duracaoMaximaDoToque => null;
+
+  /// Instante em que o primeiro dedo do gesto atual encostou.
+  Duration? _inicioDoToque;
+
   /// Variação de escala tolerada antes de considerar que houve pinça.
   static const double _scaleThreshold = 0.02;
 
@@ -129,8 +142,9 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
     _dedos.add(e.pointer);
     if (_dedos.length == 1) {
       // Começo real de um toque: nada do gesto anterior sobrevive até aqui.
-      pontoDoToque = e.position;
-      _isDragging  = false;
+      pontoDoToque  = e.position;
+      _isDragging   = false;
+      _inicioDoToque = e.timeStamp;
     }
   }
 
@@ -141,10 +155,17 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
     _dedos.remove(e.pointer);
     if (_dedos.isNotEmpty) return false;
 
-    final ehToque = !_isDragging && pontoDoToque != null;
-    _isDragging   = false;
-    gestureOrigin = null;
-    _pointers     = 0;
+    final limite  = duracaoMaximaDoToque;
+    final inicio  = _inicioDoToque;
+    final noTempo = limite == null ||
+        inicio == null ||
+        e.timeStamp - inicio <= limite;
+
+    final ehToque = !_isDragging && pontoDoToque != null && noTempo;
+    _isDragging    = false;
+    gestureOrigin  = null;
+    _pointers      = 0;
+    _inicioDoToque = null;
     return ehToque;
   }
 
@@ -183,7 +204,7 @@ mixin SceneGestureGuard<T extends StatefulWidget> on State<T> {
   void markDragIfMoved(ScaleUpdateDetails d) {
     final origin = gestureOrigin;
     if (origin == null) return;
-    if ((d.focalPoint - origin).distance > dragThreshold ||
+    if ((d.focalPoint - origin).distance > limiarDeArrasto ||
         (d.scale - 1.0).abs() > _scaleThreshold) {
       _isDragging = true;
     }

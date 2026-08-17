@@ -51,6 +51,33 @@ class RackGalpao {
   });
 }
 
+/// Resultado de um toque na cena: o endereço tocado, com o que havia nele.
+///
+/// [ordem] é a ordem na pilha (1 = chão) — nas pilhas cheias só há racks, e
+/// numa posição com vaga o toque no contorno devolve a PRÓXIMA ordem livre,
+/// que é onde uma carga nova entraria (produto novo sempre entra no topo).
+class ToqueGalpao {
+  final int  posicao;  // 1–78
+  final int  ordem;    // 1–GalpaoConfig.niveisMax
+  final bool ocupado;
+
+  const ToqueGalpao({
+    required this.posicao,
+    required this.ordem,
+    required this.ocupado,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is ToqueGalpao &&
+      other.posicao == posicao &&
+      other.ordem == ordem &&
+      other.ocupado == ocupado;
+
+  @override
+  int get hashCode => Object.hash(posicao, ordem, ocupado);
+}
+
 // ── Cores ────────────────────────────────────────────────────────────────────
 
 const Color corCamda        = Color(0xFFe87722);
@@ -133,11 +160,15 @@ class GalpaoPainter extends CustomPainter {
 
   final bool mostrarEtiquetas;
 
+  /// Endereço selecionado (posição + ordem), ou null sem seleção.
+  final ({int posicao, int ordem})? selecionado;
+
   GalpaoPainter(
     this.camera, {
     this.pilhas           = const {},
     this.corPorProduto    = const {},
     this.mostrarEtiquetas = true,
+    this.selecionado,
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
@@ -151,16 +182,31 @@ class GalpaoPainter extends CustomPainter {
 
     final proj = ProjecaoCamera(camera, size);
     _desenharPiso(canvas, proj);
+    // Etiquetas ANTES dos cubos: elas são pintura no chão, então um rack mais
+    // perto da câmera deve cobri-las — como as faixas pintadas de um
+    // estacionamento. Com o galpão cheio, desenhá-las por cima virava uma
+    // nuvem de números flutuando sobre os racks.
+    if (mostrarEtiquetas) _desenharEtiquetas(canvas, proj);
 
     final preenchimento = Paint()..style = PaintingStyle.fill;
     final contorno = Paint()
       ..color       = _corContorno
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 0.6;
+    final contornoSel = Paint()
+      ..color       = corCamda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
     final vazio = Paint()
       ..color       = _corVazio
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 1.0;
+    final vazioSel = Paint()
+      ..color       = corCamda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    final sel = selecionado;
 
     for (final rua in ruasPorProfundidade(proj.eye)) {
       final coordOlho = rua.eixo == EixoRua.z ? proj.eye.z : proj.eye.x;
@@ -171,11 +217,17 @@ class GalpaoPainter extends CustomPainter {
         // alto é o mais próximo dela.
         for (var k = 0; k < pilha.length; k++) {
           final rack = pilha[k];
+          final isSel = sel != null &&
+              sel.posicao == posicao.numero &&
+              sel.ordem == k + 1;
+          final cor = corPorProduto[rack.produtoCodigo] ?? _corRack;
           _desenharCubo(
             canvas, proj, posicao, k + 1,
-            cor: corPorProduto[rack.produtoCodigo] ?? _corRack,
+            // Seleção: clareia o cubo e troca o contorno pelo laranja CAMDA —
+            // a cor do produto continua legível por baixo do destaque.
+            cor: isSel ? Color.lerp(cor, Colors.white, 0.30)! : cor,
             preenchimento: preenchimento,
-            contorno: contorno,
+            contorno: isSel ? contornoSel : contorno,
             // Rack com outro em cima tem o topo escondido — não desenhar
             // também evita disputa de pintura entre as duas faces coladas.
             desenharTopo: k == pilha.length - 1,
@@ -186,12 +238,15 @@ class GalpaoPainter extends CustomPainter {
         // cabe carga nova, e em que nível ela entraria (sempre no topo da
         // pilha — rack flutuando com vazio embaixo não existe no galpão).
         if (pilha.length < GalpaoConfig.niveisMax) {
-          _desenharVazio(canvas, proj, posicao, pilha.length + 1, vazio);
+          final proxima = pilha.length + 1;
+          final isSel = sel != null &&
+              sel.posicao == posicao.numero &&
+              sel.ordem == proxima;
+          _desenharVazio(canvas, proj, posicao, proxima,
+              isSel ? vazioSel : vazio);
         }
       }
     }
-
-    if (mostrarEtiquetas) _desenharEtiquetas(canvas, proj);
   }
 
   // ── Piso ───────────────────────────────────────────────────────────────────
@@ -463,6 +518,7 @@ class GalpaoPainter extends CustomPainter {
       old.camera.target.x     != camera.target.x ||
       old.camera.target.z     != camera.target.z ||
       old.mostrarEtiquetas    != mostrarEtiquetas ||
+      old.selecionado         != selecionado      ||
       !identical(old.pilhas, pilhas)             ||
       !identical(old.corPorProduto, corPorProduto);
 }
@@ -474,11 +530,20 @@ class GalpaoScene extends StatefulWidget {
   final Map<String, Color>         corPorProduto;
   final bool                       mostrarEtiquetas;
 
+  /// Endereço selecionado, destacado em laranja na cena.
+  final ({int posicao, int ordem})? selecionado;
+
+  /// Toque num endereço (cubo sólido ou contorno de vaga), ou null quando o
+  /// toque caiu fora de qualquer alvo — é o gesto de desfazer a seleção.
+  final ValueChanged<ToqueGalpao?>? onTapEndereco;
+
   const GalpaoScene({
     super.key,
     this.pilhas           = const {},
     this.corPorProduto    = const {},
     this.mostrarEtiquetas = true,
+    this.selecionado,
+    this.onTapEndereco,
   });
 
   /// Câmera isométrica que enquadra o galpão inteiro numa tela de [size].
@@ -553,6 +618,17 @@ class _GalpaoSceneState extends State<GalpaoScene>
 
   final _painterKey = GlobalKey();
 
+  // Toque vs. arrasto, mais apertado que o padrão das outras cenas: os alvos
+  // aqui são cubos de mais de 1 m — não precisam de tolerância de mira — e o
+  // gesto dominante da tela é girar a câmera, então o custo de um arrasto
+  // curto virar seleção é maior que o de exigir o dedo firme. Segurar mais de
+  // 600 ms também deixa de ser toque: é alguém pensando com o dedo na tela.
+  @override
+  double get limiarDeArrasto => 9.0;
+
+  @override
+  Duration? get duracaoMaximaDoToque => const Duration(milliseconds: 600);
+
   /// Limites de zoom e de deslocamento, em metros. O pan é preso ao envelope
   /// do galpão com uma folga: sem isso um arrasto longo joga o galpão para
   /// fora da tela e não há como voltar.
@@ -619,6 +695,95 @@ class _GalpaoSceneState extends State<GalpaoScene>
     }
   }
 
+  // ── Hit-test ──────────────────────────────────────────────────────────────
+
+  void _tryHitTest(Offset toqueGlobal) {
+    final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    final camera = _camera;
+    if (rb == null || camera == null) return;
+    widget.onTapEndereco?.call(_hitTest(
+        camera, rb.globalToLocal(toqueGlobal), rb.size));
+  }
+
+  /// Endereço sob o toque, ou null se o raio não acerta cubo nem contorno.
+  ///
+  /// Os alvos são os racks ocupados E o contorno da próxima vaga de cada
+  /// pilha incompleta — o vazio é desenhado, então é tocável (é assim que se
+  /// vai lançar carga na etapa 4). Ganha o alvo de menor t, o mais próximo da
+  /// câmera; como o contorno da vaga fica sempre ACIMA dos racks da própria
+  /// pilha, ele nunca rouba o toque de um cubo da mesma posição.
+  ///
+  /// ⚠️ Etapa 5 (filtro por rua): este é o lugar onde a lista de candidatos
+  /// tem de ser reconstruída — o que estiver escondido sai DAQUI, não só do
+  /// desenho, senão um cubo invisível continua roubando o toque.
+  ToqueGalpao? _hitTest(Camera camera, Offset toque, Size size) {
+    final eye   = camera.position;
+    final fwd   = (camera.target - eye).normalized;
+    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up    = right.cross(fwd).normalized;
+    final tanH   = math.tan(ProjecaoCamera.fovY / 2);
+    final aspect = size.width / size.height;
+
+    final ndcX = 2 * toque.dx / size.width - 1;
+    final ndcY = 1 - 2 * toque.dy / size.height;
+    final dir  = (right * (ndcX * tanH * aspect) + up * (ndcY * tanH) + fwd)
+        .normalized;
+
+    ToqueGalpao? melhor;
+    var melhorT = double.infinity;
+
+    void considerar(PosicaoGalpao p, int ordem, bool ocupado) {
+      final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
+      final t = _rayAabb(eye, dir,
+          x0: p.x - hx, x1: p.x + hx,
+          y0: GalpaoConfig.yBase(ordem), y1: GalpaoConfig.yTopo(ordem),
+          z0: p.z - hz, z1: p.z + hz);
+      if (t != null && t < melhorT) {
+        melhorT = t;
+        melhor  = ToqueGalpao(
+            posicao: p.numero, ordem: ordem, ocupado: ocupado);
+      }
+    }
+
+    for (final p in GalpaoConfig.posicoes) {
+      final pilha = widget.pilhas[p.numero] ?? const <RackGalpao>[];
+      for (var k = 0; k < pilha.length; k++) {
+        considerar(p, k + 1, true);
+      }
+      if (pilha.length < GalpaoConfig.niveisMax) {
+        considerar(p, pilha.length + 1, false);
+      }
+    }
+    return melhor;
+  }
+
+  /// Distância até a entrada do raio na caixa alinhada aos eixos, ou null se
+  /// não acerta (método dos slabs — mesmo helper das outras cenas).
+  static double? _rayAabb(
+    Vec3 eye, Vec3 dir, {
+    required double x0, required double x1,
+    required double y0, required double y1,
+    required double z0, required double z1,
+  }) {
+    var tMin = 0.05;
+    var tMax = double.infinity;
+
+    bool slab(double origem, double d, double min, double max) {
+      if (d.abs() < 1e-9) return origem >= min && origem <= max;
+      var tA = (min - origem) / d;
+      var tB = (max - origem) / d;
+      if (tA > tB) (tA, tB) = (tB, tA);
+      if (tA > tMin) tMin = tA;
+      if (tB < tMax) tMax = tB;
+      return tMax >= tMin;
+    }
+
+    if (!slab(eye.x, dir.x, x0, x1)) return null;
+    if (!slab(eye.y, dir.y, y0, y1)) return null;
+    if (!slab(eye.z, dir.z, z0, z1)) return null;
+    return tMin;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -628,18 +793,24 @@ class _GalpaoSceneState extends State<GalpaoScene>
         // errado; é idempotente e não muda nada visível depois disso.
         final camera = _camera ??= GalpaoScene.enquadrar(constraints.biggest);
 
-        return GestureDetector(
-          onScaleStart:  _onScaleStart,
-          onScaleUpdate: _onScaleUpdate,
-          child: CustomPaint(
-            key: _painterKey,
-            painter: GalpaoPainter(
-              camera,
-              pilhas:           widget.pilhas,
-              corPorProduto:    widget.corPorProduto,
-              mostrarEtiquetas: widget.mostrarEtiquetas,
+        return Listener(
+          onPointerDown:   aoEncostarDedo,
+          onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryHitTest(pontoDoToque!); },
+          onPointerCancel: aoSoltarDedo,
+          child: GestureDetector(
+            onScaleStart:  _onScaleStart,
+            onScaleUpdate: _onScaleUpdate,
+            child: CustomPaint(
+              key: _painterKey,
+              painter: GalpaoPainter(
+                camera,
+                pilhas:           widget.pilhas,
+                corPorProduto:    widget.corPorProduto,
+                mostrarEtiquetas: widget.mostrarEtiquetas,
+                selecionado:      widget.selecionado,
+              ),
+              child: const SizedBox.expand(),
             ),
-            child: const SizedBox.expand(),
           ),
         );
       },
