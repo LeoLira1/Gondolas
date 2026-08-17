@@ -55,6 +55,59 @@ class _GalpaoPageState extends State<GalpaoPage> {
   DescidaPilha? _descida;
   int           _descidaSeq = 0;
 
+  /// Ruas visíveis: null = Todas. Isolar uma rua tira as outras do desenho E
+  /// da lista de alvos do toque (a cena reconstrói os alvos).
+  Set<int>? _ruasVisiveis;
+
+  final _irParaCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _irParaCtrl.dispose();
+    super.dispose();
+  }
+
+  void _filtrarRua(int? numeroRua) {
+    setState(() {
+      _ruasVisiveis = numeroRua == null ? null : {numeroRua};
+      // Seleção de uma rua que sumiu não pode continuar aberta: o painel
+      // mostraria um endereço que não está mais na tela.
+      final sel = _selecionado;
+      if (sel != null && _ruasVisiveis != null) {
+        final rua = GalpaoConfig.ruaDe(sel.posicao);
+        if (rua == null || !_ruasVisiveis!.contains(rua.numero)) {
+          _selecionado = null;
+        }
+      }
+    });
+  }
+
+  /// "Ir para o número": isola a rua da posição e marca o endereço — o rack
+  /// do topo se houver pilha, senão a vaga do chão.
+  void _irParaPosicao(String texto) {
+    final numero = int.tryParse(texto.trim());
+    final posicao = numero == null ? null : GalpaoConfig.porNumero(numero);
+    if (posicao == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Posição $texto não existe — são 1 a '
+            '${GalpaoConfig.totalPosicoes}.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+    final pilha = _pilhas[posicao.numero] ?? const <RackGalpao>[];
+    setState(() {
+      _ruasVisiveis = {posicao.rua.numero};
+      _selecionado = ToqueGalpao(
+        posicao: posicao.numero,
+        ordem:   pilha.isEmpty ? 1 : pilha.length,
+        ocupado: pilha.isNotEmpty,
+      );
+      _irParaCtrl.clear();
+    });
+    FocusScope.of(context).unfocus();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -135,6 +188,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                 : (posicao: sel.posicao, ordem: sel.ordem),
             onTapEndereco: _onTapEndereco,
             descida:       _descida,
+            ruasVisiveis:  _ruasVisiveis,
           ),
 
           Positioned(
@@ -175,7 +229,65 @@ class _GalpaoPageState extends State<GalpaoPage> {
                         ],
                       ),
                     ),
+                    // Ir para o número: digita 52, isola a rua e marca.
+                    SizedBox(
+                      width: 92,
+                      child: TextField(
+                        controller: _irParaCtrl,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.go,
+                        onSubmitted: _irParaPosicao,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'nº',
+                          hintStyle: const TextStyle(
+                              color: Color(0x44ffffff), fontSize: 13),
+                          prefixIcon: const Icon(Icons.my_location,
+                              color: Color(0xFF8a877f), size: 16),
+                          prefixIconConstraints: const BoxConstraints(
+                              minWidth: 30, minHeight: 30),
+                          filled: true,
+                          fillColor: const Color(0xEE141518),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.10)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.10)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                const BorderSide(color: corCamda, width: 1.4),
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
+                ),
+              ),
+            ),
+          ),
+
+          // ── Filtro por rua ──────────────────────────────────────────────
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 68),
+                child: _BarraDeRuas(
+                  visiveis: _ruasVisiveis,
+                  onSelecionar: _filtrarRua,
                 ),
               ),
             ),
@@ -240,6 +352,67 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 }
 
+// ── Barra de filtro por rua ──────────────────────────────────────────────────
+
+/// `Todas` + `R1`…`R7`. Isolar uma rua faz as outras sumirem da cena — e,
+/// junto com elas, da lista de alvos do toque.
+class _BarraDeRuas extends StatelessWidget {
+  final Set<int>?          visiveis;
+  final ValueChanged<int?> onSelecionar;
+
+  const _BarraDeRuas({required this.visiveis, required this.onSelecionar});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 34,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          _chip('Todas', visiveis == null, () => onSelecionar(null)),
+          for (final rua in GalpaoConfig.ruas)
+            _chip(
+              'R${rua.numero}',
+              visiveis != null && visiveis!.contains(rua.numero),
+              () => onSelecionar(rua.numero),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(String texto, bool ativo, VoidCallback onTap) => Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: ativo
+                  ? corCamda.withValues(alpha: 0.18)
+                  : const Color(0xEE141518),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(
+                color: ativo
+                    ? corCamda
+                    : Colors.white.withValues(alpha: 0.10),
+              ),
+            ),
+            child: Text(
+              texto,
+              style: TextStyle(
+                color:      ativo ? corCamda : const Color(0xFF8a877f),
+                fontSize:   12,
+                fontWeight: ativo ? FontWeight.bold : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
 // ── Painel do endereço ───────────────────────────────────────────────────────
 
 /// Painel inferior do endereço selecionado.
@@ -298,13 +471,19 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     setState(() => _resultados = buscarProdutosGalpao(q, widget.catalogo));
   }
 
-  void _selecionarProduto(Produto p, {double? quantidade}) {
+  /// [quantidadeLitros] é o que o banco guarda; o campo mostra a quantidade
+  /// na unidade de manuseio do produto (45 baldes = digita 45), então o
+  /// prefill dos recentes converte de volta antes de preencher.
+  void _selecionarProduto(Produto p, {double? quantidadeLitros}) {
     setState(() {
       _produtoSel = p;
       _resultados = const [];
       _buscaCtrl.clear();
-      if (quantidade != null) {
-        _qtdCtrl.text = formatarNumero(quantidade);
+      if (quantidadeLitros != null) {
+        final emUnidades = unidadeDoNome(p.nome) != null
+            ? quantidadeLitros / litrosPorUnidade
+            : quantidadeLitros;
+        _qtdCtrl.text = formatarNumero(emUnidades);
       }
     });
   }
@@ -314,11 +493,22 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     return q != null && q > 0 ? q : null;
   }
 
+  /// O que foi digitado convertido para litros — a conta que vai ao banco.
+  /// Produto sem unidade dedutível grava o número como digitado.
+  double? get _quantidadeEmLitros {
+    final digitada = _quantidadeDigitada;
+    final produto  = _produtoSel;
+    if (digitada == null || produto == null) return null;
+    return unidadeDoNome(produto.nome) != null
+        ? litrosDeUnidades(digitada)
+        : digitada;
+  }
+
   void _lancar() {
     final produto = _produtoSel;
-    final qtd     = _quantidadeDigitada;
-    if (produto == null || qtd == null) return;
-    widget.onLancar?.call(produto, qtd);
+    final litros  = _quantidadeEmLitros;
+    if (produto == null || litros == null) return;
+    widget.onLancar?.call(produto, litros);
   }
 
   Future<void> _confirmarEsvaziar() async {
@@ -610,7 +800,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                 for (final r in widget.recentes)
                   InkWell(
                     onTap: () => _selecionarProduto(r.produto,
-                        quantidade: r.quantidade),
+                        quantidadeLitros: r.quantidade),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -706,19 +896,21 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                     FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
                   ],
                   style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: _decoracaoCampo('Litros', null),
+                  // Digita-se o que se CONTA no galpão: baldes ou caixas.
+                  // Litros são derivados ao lado, nunca digitados — quem vê
+                  // 45 baldes lança 45.
+                  decoration: _decoracaoCampo(
+                      _rotuloUnidade(produto.nome), null),
                 ),
               ),
               const SizedBox(width: 10),
-              // Conversão ao vivo — a pessoa confere em baldes/caixas, não
-              // em litros.
+              // Conversão ao vivo para litros (o que o banco guarda).
               Expanded(
                 child: Text(
-                  _quantidadeDigitada == null
+                  _quantidadeEmLitros == null ||
+                          unidadeDoNome(produto.nome) == null
                       ? ''
-                      : quantidadeEmbalada(
-                              produto.nome, _quantidadeDigitada!) ??
-                          '',
+                      : '= ${formatarNumero(_quantidadeEmLitros!)} L',
                   style: const TextStyle(
                       color: Color(0xFF8a9aa8), fontSize: 12),
                 ),
@@ -729,7 +921,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: _quantidadeDigitada == null ? null : _lancar,
+              onPressed: _quantidadeEmLitros == null ? null : _lancar,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2e6b46),
                 padding: const EdgeInsets.symmetric(vertical: 11),
@@ -740,6 +932,15 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         ],
       ],
     );
+  }
+
+  /// Rótulo do campo de quantidade: a unidade em que se conta.
+  static String _rotuloUnidade(String nomeProduto) {
+    switch (unidadeDoNome(nomeProduto)) {
+      case 'balde': return 'Baldes';
+      case 'caixa': return 'Caixas';
+      default:      return 'Quantidade';
+    }
   }
 
   InputDecoration _decoracaoCampo(String hint, IconData? icone) =>

@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 
 import 'galpao_config.dart';
@@ -188,6 +189,10 @@ class GalpaoPainter extends CustomPainter {
   /// >= aPartirDe, desenhados [dy] metros acima do lugar final.
   final ({int posicao, int aPartirDe, double dy})? descida;
 
+  /// Ruas visíveis (filtro R1–R7), ou null para todas. As ruas fora do
+  /// conjunto somem por inteiro: cubos, contornos, números e rótulo.
+  final Set<int>? ruasVisiveis;
+
   GalpaoPainter(
     this.camera, {
     this.pilhas           = const {},
@@ -195,6 +200,7 @@ class GalpaoPainter extends CustomPainter {
     this.mostrarEtiquetas = true,
     this.selecionado,
     this.descida,
+    this.ruasVisiveis,
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
@@ -243,7 +249,7 @@ class GalpaoPainter extends CustomPainter {
             ? desc.dy
             : 0.0;
 
-    for (final rua in ruasPorProfundidade(proj.eye)) {
+    for (final rua in ruasPorProfundidade(proj.eye, visiveis: ruasVisiveis)) {
       final coordOlho = rua.eixo == EixoRua.z ? proj.eye.z : proj.eye.x;
       for (final posicao in ordemDeDesenho(rua, coordOlho)) {
         final pilha = pilhas[posicao.numero] ?? const <RackGalpao>[];
@@ -488,6 +494,9 @@ class GalpaoPainter extends CustomPainter {
         -40, -40, proj.larguraPx + 80, proj.alturaPx + 80);
 
     for (final p in GalpaoConfig.posicoes) {
+      if (ruasVisiveis != null && !ruasVisiveis!.contains(p.rua.numero)) {
+        continue;
+      }
       final (ex, ez) = p.pontoEtiqueta;
       final hit = proj.projetar(Vec3(ex, 0.02, ez));
       if (hit == null) continue;
@@ -515,6 +524,9 @@ class GalpaoPainter extends CustomPainter {
     // Nome da rua na ponta de menor coordenada, para orientar quem está
     // procurando um endereço.
     for (final rua in GalpaoConfig.ruas) {
+      if (ruasVisiveis != null && !ruasVisiveis!.contains(rua.numero)) {
+        continue;
+      }
       final posicoes = GalpaoConfig.posicoesDaRua(rua.numero);
       if (posicoes.isEmpty) continue;
       final ponta = posicoes.first;
@@ -561,6 +573,7 @@ class GalpaoPainter extends CustomPainter {
       old.mostrarEtiquetas    != mostrarEtiquetas ||
       old.selecionado         != selecionado      ||
       old.descida             != descida          ||
+      !setEquals(old.ruasVisiveis, ruasVisiveis)  ||
       !identical(old.pilhas, pilhas)             ||
       !identical(old.corPorProduto, corPorProduto);
 }
@@ -583,6 +596,9 @@ class GalpaoScene extends StatefulWidget {
   /// mudança do [DescidaPilha.id].
   final DescidaPilha? descida;
 
+  /// Ruas visíveis (filtro), ou null para todas.
+  final Set<int>? ruasVisiveis;
+
   const GalpaoScene({
     super.key,
     this.pilhas           = const {},
@@ -591,6 +607,7 @@ class GalpaoScene extends StatefulWidget {
     this.selecionado,
     this.onTapEndereco,
     this.descida,
+    this.ruasVisiveis,
   });
 
   /// Câmera isométrica que enquadra o galpão inteiro numa tela de [size].
@@ -672,6 +689,15 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// que criaria o ticker com a árvore já desativada.
   late final AnimationController _descidaCtrl;
 
+  /// Posições que podem receber toque AGORA — a lista de alvos do hit-test.
+  ///
+  /// ⚠️ Existe porque esconder no desenho não basta: se o hit-test varrer a
+  /// grade inteira, os cubos das ruas filtradas continuam roubando o toque e
+  /// o usuário seleciona uma posição de outra rua sem entender por quê. Por
+  /// isso ela é RECONSTRUÍDA a cada mudança de filtro (didUpdateWidget), e
+  /// não recalculada por conta própria dentro do _hitTest.
+  late List<PosicaoGalpao> _alvos;
+
   @override
   void initState() {
     super.initState();
@@ -679,11 +705,25 @@ class _GalpaoSceneState extends State<GalpaoScene>
       vsync:    this,
       duration: const Duration(milliseconds: 250),
     )..addListener(() => setState(() {}));
+    _reconstruirAlvos();
+  }
+
+  void _reconstruirAlvos() {
+    final visiveis = widget.ruasVisiveis;
+    _alvos = visiveis == null
+        ? GalpaoConfig.posicoes
+        : [
+            for (final p in GalpaoConfig.posicoes)
+              if (visiveis.contains(p.rua.numero)) p,
+          ];
   }
 
   @override
   void didUpdateWidget(GalpaoScene old) {
     super.didUpdateWidget(old);
+    if (!setEquals(old.ruasVisiveis, widget.ruasVisiveis)) {
+      _reconstruirAlvos();
+    }
     final d = widget.descida;
     if (d != null && d.id != old.descida?.id) {
       _descidaCtrl.forward(from: 0);
@@ -807,9 +847,8 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// A vaga continua ganhando quando é o único alvo da posição no caminho do
   /// raio (posição vazia, ou toque no contorno em área que não cobre rack).
   ///
-  /// ⚠️ Etapa 5 (filtro por rua): este é o lugar onde a lista de candidatos
-  /// tem de ser reconstruída — o que estiver escondido sai DAQUI, não só do
-  /// desenho, senão um cubo invisível continua roubando o toque.
+  /// Percorre [_alvos] — a lista reconstruída pelo filtro de rua —, nunca a
+  /// grade inteira: o que sumiu da tela não pode continuar recebendo toque.
   ToqueGalpao? _hitTest(Camera camera, Offset toque, Size size) {
     final eye   = camera.position;
     final fwd   = (camera.target - eye).normalized;
@@ -834,7 +873,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
     ToqueGalpao? melhor;
     var melhorT = double.infinity;
 
-    for (final p in GalpaoConfig.posicoes) {
+    for (final p in _alvos) {
       final pilha = widget.pilhas[p.numero] ?? const <RackGalpao>[];
 
       // Racks ocupados: menor t entre os da posição (o raio pode varar mais
@@ -920,6 +959,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
                 mostrarEtiquetas: widget.mostrarEtiquetas,
                 selecionado:      widget.selecionado,
                 descida:          _descidaDoFrame,
+                ruasVisiveis:     widget.ruasVisiveis,
               ),
               child: const SizedBox.expand(),
             ),

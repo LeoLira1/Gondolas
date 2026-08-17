@@ -32,21 +32,32 @@ double? litragemDoNome(String nomeProduto) {
   return double.tryParse(texto);
 }
 
+/// Litros de UMA unidade de manuseio — o balde É 20 L, e a caixa fecha
+/// 4 × 5 L = 20 L. Os dois casos convergem no mesmo fator.
+const double litrosPorUnidade = 20;
+
+/// Unidade de manuseio deduzida do nome: 'balde' (produto de 20 L), 'caixa'
+/// (produto de 5 L), ou null quando o nome não permite deduzir.
+///
+/// É nela que o galpão conta e lança: quem confere a carga vê 45 baldes e
+/// digita 45 — os litros são derivados, nunca digitados.
+String? unidadeDoNome(String nomeProduto) {
+  final litragem = litragemDoNome(nomeProduto);
+  if (litragem == 20) return 'balde';
+  if (litragem == 5) return 'caixa';
+  return null;
+}
+
+/// Unidades de manuseio convertidas para litros (o que o banco guarda).
+double litrosDeUnidades(double unidades) => unidades * litrosPorUnidade;
+
 /// Quantidade em litros convertida para a unidade de manuseio, pronta para a
 /// tela: '90 baldes', '12 caixas', '1 balde'. Null quando a litragem do nome
 /// não permite converter — aí a tela mostra o número cru.
 String? quantidadeEmbalada(String nomeProduto, double litros) {
-  final litragem = litragemDoNome(nomeProduto);
-  final String singular;
-  if (litragem == 20) {
-    singular = 'balde';
-  } else if (litragem == 5) {
-    singular = 'caixa';
-  } else {
-    return null;
-  }
-  // 20 L por unidade nos dois casos: o balde É 20 L, e a caixa fecha 4 × 5 L.
-  final unidades = litros / 20;
+  final singular = unidadeDoNome(nomeProduto);
+  if (singular == null) return null;
+  final unidades = litros / litrosPorUnidade;
   return '${formatarNumero(unidades)} '
       '${unidades == 1 ? singular : '${singular}s'}';
 }

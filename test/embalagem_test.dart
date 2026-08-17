@@ -56,6 +56,28 @@ void main() {
     });
   });
 
+  group('unidade de manuseio (o que se digita ao lançar)', () {
+    test('20 L é balde, 5 L é caixa, resto não tem unidade', () {
+      expect(unidadeDoNome('HERBICIDA BORAL 500 SC 20L'), 'balde');
+      expect(unidadeDoNome('HERBICIDA NORTOX 806 SL 5L'), 'caixa');
+      expect(unidadeDoNome('INSETICIDA LANNATE BR 1L'), isNull);
+      expect(unidadeDoNome('LUVA NITRILICA PAR'), isNull);
+    });
+
+    test('quem conta 45 baldes lança 45, e viram 900 L no banco', () {
+      // O caminho de ida: a tela digita unidades, o banco guarda litros.
+      expect(litrosDeUnidades(45), 900);
+      // E o de volta fecha o ciclo — 900 L exibidos são 45 baldes.
+      expect(quantidadeEmbalada('HERBICIDA BORAL 500 SC 20L', 900),
+          '45 baldes');
+    });
+
+    test('caixa de 5 L também fecha 20 L (4 unidades)', () {
+      expect(litrosDeUnidades(12), 240);
+      expect(quantidadeEmbalada('FUNGICIDA AZOX 5L', 240), '12 caixas');
+    });
+  });
+
   group('formatarNumero', () {
     test('inteiro sai sem casa decimal, fração sai com uma', () {
       expect(formatarNumero(90), '90');
