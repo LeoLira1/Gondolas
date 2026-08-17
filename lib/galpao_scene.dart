@@ -1,9 +1,10 @@
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show setEquals;
+import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 import 'package:flutter/material.dart';
 
 import 'galpao_config.dart';
 import 'gondola_scene.dart' show Vec3, Camera, ProjecaoCamera, luzCena;
+import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +112,14 @@ const Color _corRack        = Color(0xFF888888);
 const Color _corContorno    = Color(0x44000000);
 const Color _corRotuloRua   = Color(0x4DFFFFFF);
 
+// Modo Conferência: mesma dupla do mapa da loja — ciano nos racks pendentes,
+// cinza morto nos demais —, para quem vem da loja reconhecer a leitura sem
+// aprender outra convenção. O apagado é o _corApagado de loja_scene.dart, e o
+// contorno da vaga livre fica bem mais fraco: no modo conferência a vaga não é
+// destino de nada, só referência de onde a fileira está.
+const Color _corApagado     = Color(0xFF2d2e31);
+const Color _corVazioFraco  = Color(0x1FFFFFFF);
+
 /// Os 3 tons de um cubo: topo cheio, uma lateral média e a outra escura.
 /// Sem textura e sem especular — o galpão quer leitura de posição, não
 /// aparência de rack.
@@ -193,14 +202,29 @@ class GalpaoPainter extends CustomPainter {
   /// conjunto somem por inteiro: cubos, contornos, números e rótulo.
   final Set<int>? ruasVisiveis;
 
+  /// Modo Conferência: o galpão troca a cor de produto pela leitura de rota —
+  /// ciano nos racks que guardam pendente de hoje, apagado em todo o resto.
+  final bool modoConferencia;
+
+  /// Códigos pendentes hoje. É o CÓDIGO que decide qual cubo acende, não o
+  /// endereço: a pilha desce quando alguém esvazia um nível, e um destaque
+  /// preso a (posição, ordem) acenderia o rack errado depois disso.
+  final Set<String> codigosConferencia;
+
+  /// Posição (1–78) → nº de produtos pendentes ali, para o badge contador.
+  final Map<int, int> contagemConferencia;
+
   GalpaoPainter(
     this.camera, {
-    this.pilhas           = const {},
-    this.corPorProduto    = const {},
-    this.mostrarEtiquetas = true,
+    this.pilhas             = const {},
+    this.corPorProduto      = const {},
+    this.mostrarEtiquetas   = true,
     this.selecionado,
     this.descida,
     this.ruasVisiveis,
+    this.modoConferencia    = false,
+    this.codigosConferencia = const {},
+    this.contagemConferencia = const {},
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
@@ -230,7 +254,7 @@ class GalpaoPainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
     final vazio = Paint()
-      ..color       = _corVazio
+      ..color       = modoConferencia ? _corVazioFraco : _corVazio
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 1.0;
     final vazioSel = Paint()
@@ -261,7 +285,13 @@ class GalpaoPainter extends CustomPainter {
           final isSel = sel != null &&
               sel.posicao == posicao.numero &&
               sel.ordem == k + 1;
-          final cor = corPorProduto[rack.produtoCodigo] ?? _corRack;
+          // No Modo Conferência a cor de produto sai de cena: o que interessa
+          // é "este rack tem produto para conferir hoje, aquele não".
+          final cor = modoConferencia
+              ? (codigosConferencia.contains(rack.produtoCodigo)
+                  ? corConferenciaCiano
+                  : _corApagado)
+              : (corPorProduto[rack.produtoCodigo] ?? _corRack);
           _desenharCubo(
             canvas, proj, posicao, k + 1,
             // Seleção: clareia o cubo e troca o contorno pelo laranja CAMDA —
@@ -292,6 +322,11 @@ class GalpaoPainter extends CustomPainter {
         }
       }
     }
+
+    // Badges depois de TODOS os cubos: eles flutuam acima da pilha e não
+    // podem ser cobertos por um rack de uma rua mais próxima da câmera —
+    // ao contrário dos números do chão, que são pintura no piso.
+    if (modoConferencia) _desenharBadgesConferencia(canvas, proj);
   }
 
   // ── Piso ───────────────────────────────────────────────────────────────────
@@ -563,8 +598,80 @@ class GalpaoPainter extends CustomPainter {
     }
   }
 
+  // ── Badges do Modo Conferência ─────────────────────────────────────────────
+
+  /// Pílula ciana com `<posição> · <nº de pendentes>` acima de cada pilha que
+  /// precisa de conferência — o mesmo contador que o mapa da loja põe sobre a
+  /// gôndola, na mesma cor, para o galpão se ler como continuação da loja.
+  ///
+  /// Sem culling de ângulo (a pílula é informação, não geometria) e sempre
+  /// desenhada acima do TOPO da pilha: assim ela não some atrás do próprio
+  /// rack quando a câmera desce.
+  void _desenharBadgesConferencia(Canvas canvas, ProjecaoCamera proj) {
+    final margem = Rect.fromLTWH(
+        -60, -60, proj.larguraPx + 120, proj.alturaPx + 120);
+
+    // Coletadas primeiro e pintadas da mais longe para a mais perto: com duas
+    // posições vizinhas acesas, é a badge da frente que fica legível por cima.
+    final alvos = <({Offset tela, double cz, String texto})>[];
+    for (final entry in contagemConferencia.entries) {
+      final posicao = GalpaoConfig.porNumero(entry.key);
+      if (posicao == null) continue;
+      if (ruasVisiveis != null &&
+          !ruasVisiveis!.contains(posicao.rua.numero)) {
+        continue;
+      }
+      final pilha = pilhas[entry.key] ?? const <RackGalpao>[];
+      final altura = pilha.isEmpty ? 1 : pilha.length;
+      final hit = proj.projetar(
+          Vec3(posicao.x, GalpaoConfig.yTopo(altura) + 0.45, posicao.z));
+      if (hit == null) continue;
+      final (tela, cz) = hit;
+      if (!margem.contains(tela)) continue;
+      alvos.add((tela: tela, cz: cz, texto: '${entry.key} · ${entry.value}'));
+    }
+    alvos.sort((a, b) => b.cz.compareTo(a.cz));
+
+    for (final alvo in alvos) {
+      final fontSize = _tamanhoTexto(11.0, alvo.cz);
+      if (fontSize < _fonteMinima) continue;
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: alvo.texto,
+          style: TextStyle(
+            color:      const Color(0xFF04232a),
+            fontSize:   fontSize,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      final rect = Rect.fromCenter(
+        center: alvo.tela,
+        width:  tp.width  + fontSize,
+        height: tp.height + fontSize * 0.56,
+      );
+      final rrect =
+          RRect.fromRectAndRadius(rect, Radius.circular(rect.height / 2));
+      canvas.drawRRect(
+          rrect, Paint()..color = corConferenciaCiano.withValues(alpha: 0.94));
+      canvas.drawRRect(
+          rrect,
+          Paint()
+            ..color       = const Color(0xFF0b3a42)
+            ..style       = PaintingStyle.stroke
+            ..strokeWidth = 1.2);
+      tp.paint(canvas, alvo.tela - Offset(tp.width / 2, tp.height / 2));
+    }
+  }
+
   @override
   bool shouldRepaint(GalpaoPainter old) =>
+      old.modoConferencia     != modoConferencia ||
+      !setEquals(old.codigosConferencia, codigosConferencia) ||
+      !mapEquals(old.contagemConferencia, contagemConferencia) ||
       old.camera.rotY         != camera.rotY     ||
       old.camera.rotX         != camera.rotX     ||
       old.camera.dist         != camera.dist     ||
@@ -599,15 +706,28 @@ class GalpaoScene extends StatefulWidget {
   /// Ruas visíveis (filtro), ou null para todas.
   final Set<int>? ruasVisiveis;
 
+  /// Modo Conferência ligado: racks com pendente de hoje em ciano, resto
+  /// apagado, contador acima de cada pilha.
+  final bool modoConferencia;
+
+  /// Códigos pendentes hoje (ver [GalpaoPainter.codigosConferencia]).
+  final Set<String> codigosConferencia;
+
+  /// Posição → nº de produtos pendentes ali.
+  final Map<int, int> contagemConferencia;
+
   const GalpaoScene({
     super.key,
-    this.pilhas           = const {},
-    this.corPorProduto    = const {},
-    this.mostrarEtiquetas = true,
+    this.pilhas             = const {},
+    this.corPorProduto      = const {},
+    this.mostrarEtiquetas   = true,
     this.selecionado,
     this.onTapEndereco,
     this.descida,
     this.ruasVisiveis,
+    this.modoConferencia    = false,
+    this.codigosConferencia = const {},
+    this.contagemConferencia = const {},
   });
 
   /// Câmera isométrica que enquadra o galpão inteiro numa tela de [size].
@@ -954,12 +1074,15 @@ class _GalpaoSceneState extends State<GalpaoScene>
               key: _painterKey,
               painter: GalpaoPainter(
                 camera,
-                pilhas:           widget.pilhas,
-                corPorProduto:    widget.corPorProduto,
-                mostrarEtiquetas: widget.mostrarEtiquetas,
-                selecionado:      widget.selecionado,
-                descida:          _descidaDoFrame,
-                ruasVisiveis:     widget.ruasVisiveis,
+                pilhas:              widget.pilhas,
+                corPorProduto:       widget.corPorProduto,
+                mostrarEtiquetas:    widget.mostrarEtiquetas,
+                selecionado:         widget.selecionado,
+                descida:             _descidaDoFrame,
+                ruasVisiveis:        widget.ruasVisiveis,
+                modoConferencia:     widget.modoConferencia,
+                codigosConferencia:  widget.codigosConferencia,
+                contagemConferencia: widget.contagemConferencia,
               ),
               child: const SizedBox.expand(),
             ),

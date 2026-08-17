@@ -9,7 +9,8 @@ import 'galpao_config.dart';
 import 'galpao_pilhas.dart';
 import 'galpao_scene.dart';
 import 'galpao_service.dart';
-import 'models.dart' show Produto;
+import 'modo_conferencia_service.dart';
+import 'models.dart' show Produto, corConferenciaCiano;
 import 'turso_service.dart';
 
 /// Mapa 3D do galpão de racks.
@@ -29,11 +30,21 @@ class GalpaoPage extends StatefulWidget {
   /// a busca do mapa da loja entra quando o produto está no galpão.
   final int? posicaoInicial;
 
+  /// Abrir já com o Modo Conferência ligado — é por onde o banner do mapa da
+  /// loja entra quando há pendentes com rack no galpão.
+  final bool conferenciaAoAbrir;
+
+  /// Conferência do dia já pronta. Como [pilhasIniciais], informá-la desliga
+  /// as consultas ao banco (testes e uso offline).
+  final ModoConferenciaResultado? conferenciaInicial;
+
   const GalpaoPage({
     super.key,
     this.pilhasIniciais,
     this.catalogoInicial,
     this.posicaoInicial,
+    this.conferenciaAoAbrir = false,
+    this.conferenciaInicial,
   });
 
   @override
@@ -64,6 +75,14 @@ class _GalpaoPageState extends State<GalpaoPage> {
   static const int _maxRecentes = 4;
 
   ToqueGalpao? _selecionado;
+
+  // Modo Conferência: a mesma função do mapa da loja, aplicada aos racks —
+  // pendente de hoje acende em ciano, o resto do galpão apaga. A lista de
+  // pendentes é a MESMA (contagem_itens), então os dois prédios sempre falam
+  // do mesmo dia de contagem.
+  bool                      _modoConferencia       = false;
+  bool                      _carregandoConferencia = false;
+  ModoConferenciaResultado? _conferencia;
 
   DescidaPilha? _descida;
   int           _descidaSeq = 0;
@@ -126,6 +145,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// parâmetro (testes, uso offline) tudo fica em memória.
   bool get _persistindo => widget.pilhasIniciais == null;
 
+  /// True quando a conferência do dia vem do banco. Com resultado semeado por
+  /// parâmetro, o que veio é o que vale — nem o botão de atualizar consulta.
+  bool get _consultandoConferencia => widget.conferenciaInicial == null;
+
   bool _carregandoPilhas = false;
 
   @override
@@ -136,6 +159,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
       _aplicarCatalogo(semente);
     } else {
       _carregarCatalogo();
+    }
+    _conferencia = widget.conferenciaInicial;
+    if (widget.conferenciaAoAbrir) {
+      _modoConferencia = true;
+      if (_consultandoConferencia) unawaited(_carregarConferencia());
     }
     if (_persistindo) {
       _carregarPilhas();
@@ -151,6 +179,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
     if (!mounted || !_persistindo) return;
     _carregarPilhas();
     unawaited(_carregarCatalogo());
+    // Uma sincronização também traz as confirmações feitas no app de contagem:
+    // rack conferido no meio do caminho tem de apagar sem o usuário pedir.
+    if (_modoConferencia && _consultandoConferencia) {
+      unawaited(_carregarConferencia());
+    }
   }
 
   Future<void> _carregarPilhas() async {
@@ -204,6 +237,64 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   void _onTapEndereco(ToqueGalpao? toque) {
     setState(() => _selecionado = toque);
+  }
+
+  // ── Modo Conferência ───────────────────────────────────────────────────────
+
+  Future<void> _toggleConferencia() async {
+    if (_modoConferencia) {
+      setState(() {
+        _modoConferencia = false;
+        // O resultado é jogado fora junto: ligar de novo tem de ler o dia
+        // atual, não o de quando a tela abriu.
+        if (_consultandoConferencia) _conferencia = null;
+      });
+      return;
+    }
+    setState(() => _modoConferencia = true);
+    if (_consultandoConferencia) await _carregarConferencia();
+  }
+
+  Future<void> _carregarConferencia() async {
+    setState(() => _carregandoConferencia = true);
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    if (!mounted) return;
+    setState(() {
+      _conferencia           = resultado;
+      _carregandoConferencia = false;
+    });
+  }
+
+  /// Posição → nº de pendentes ali, pronto para o badge da cena. Vazio com o
+  /// modo desligado: é o que faz a cena voltar às cores de produto.
+  Map<int, int> get _contagemConferencia {
+    final resultado = _conferencia;
+    if (!_modoConferencia || resultado == null) return const {};
+    return {
+      for (final posicao in resultado.galpao.values)
+        posicao.posicao: posicao.itens.length,
+    };
+  }
+
+  /// Códigos que acendem em ciano (ver GalpaoPainter.codigosConferencia).
+  Set<String> get _codigosConferencia {
+    final resultado = _conferencia;
+    if (!_modoConferencia || resultado == null) return const {};
+    return resultado.codigosGalpao;
+  }
+
+  /// Ruas que têm posição pendente hoje. Vira um ponto ciano no chip da rua:
+  /// com o filtro isolando uma rua, os cubos acesos das outras desaparecem, e
+  /// sem essa marca não haveria como saber para qual rua ir.
+  Set<int> get _ruasComPendencia {
+    final contagem = _contagemConferencia;
+    if (contagem.isEmpty) return const {};
+    final ruas = <int>{};
+    for (final numero in contagem.keys) {
+      final rua = GalpaoConfig.ruaDe(numero);
+      if (rua != null) ruas.add(rua.numero);
+    }
+    return ruas;
   }
 
   /// Lança na tela primeiro e no banco em seguida (UI otimista): o galpão é
@@ -306,9 +397,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
             selecionado:   sel == null
                 ? null
                 : (posicao: sel.posicao, ordem: sel.ordem),
-            onTapEndereco: _onTapEndereco,
-            descida:       _descida,
-            ruasVisiveis:  _ruasVisiveis,
+            onTapEndereco:       _onTapEndereco,
+            descida:             _descida,
+            ruasVisiveis:        _ruasVisiveis,
+            modoConferencia:     _modoConferencia,
+            codigosConferencia:  _codigosConferencia,
+            contagemConferencia: _contagemConferencia,
           ),
 
           Positioned(
@@ -351,6 +445,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
                         ],
                       ),
                     ),
+                    _ToggleConferenciaGalpao(
+                      ativo: _modoConferencia,
+                      onTap: _toggleConferencia,
+                    ),
+                    const SizedBox(width: 10),
                     // Ir para o número: digita 52, isola a rua e marca.
                     SizedBox(
                       width: 92,
@@ -401,15 +500,33 @@ class _GalpaoPageState extends State<GalpaoPage> {
             ),
           ),
 
-          // ── Filtro por rua ──────────────────────────────────────────────
+          // ── Filtro por rua (+ banner da conferência, quando ligada) ─────
           Positioned(
             top: 0, left: 0, right: 0,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.only(top: 68),
-                child: _BarraDeRuas(
-                  visiveis: _ruasVisiveis,
-                  onSelecionar: _filtrarRua,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _BarraDeRuas(
+                      visiveis: _ruasVisiveis,
+                      onSelecionar: _filtrarRua,
+                      comPendencia: _ruasComPendencia,
+                    ),
+                    if (_modoConferencia)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        child: _BannerConferenciaGalpao(
+                          carregando: _carregandoConferencia,
+                          resultado:  _conferencia,
+                          onRefresh: _carregandoConferencia ||
+                                  !_consultandoConferencia
+                              ? null
+                              : _carregarConferencia,
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -431,6 +548,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   catalogo:            _catalogo,
                   recentes:            _recentes,
                   carregandoCatalogo:  _carregandoCatalogo,
+                  codigosConferencia:  _codigosConferencia,
                   onFechar: () => setState(() => _selecionado = null),
                   onLancar: (produto, quantidade) =>
                       _onLancar(sel.posicao, produto, quantidade),
@@ -457,8 +575,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
                 child: SafeArea(
                   top: false,
                   child: Text(
-                    'Toque num rack ou numa vaga para ver o endereço. '
-                    'Um dedo arrasta · dois dedos giram e dão zoom.',
+                    _modoConferencia
+                        ? 'Racks em ciano guardam produto para conferir hoje — '
+                          'toque num deles para ver o que contar.'
+                        : 'Toque num rack ou numa vaga para ver o endereço. '
+                          'Um dedo arrasta · dois dedos giram e dão zoom.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color:    Colors.white.withValues(alpha: 0.35),
@@ -482,7 +603,14 @@ class _BarraDeRuas extends StatelessWidget {
   final Set<int>?          visiveis;
   final ValueChanged<int?> onSelecionar;
 
-  const _BarraDeRuas({required this.visiveis, required this.onSelecionar});
+  /// Ruas com pendente de conferência hoje — ganham um ponto ciano no chip.
+  final Set<int>           comPendencia;
+
+  const _BarraDeRuas({
+    required this.visiveis,
+    required this.onSelecionar,
+    this.comPendencia = const {},
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -498,13 +626,16 @@ class _BarraDeRuas extends StatelessWidget {
               'R${rua.numero}',
               visiveis != null && visiveis!.contains(rua.numero),
               () => onSelecionar(rua.numero),
+              pendente: comPendencia.contains(rua.numero),
             ),
         ],
       ),
     );
   }
 
-  Widget _chip(String texto, bool ativo, VoidCallback onTap) => Padding(
+  Widget _chip(String texto, bool ativo, VoidCallback onTap,
+          {bool pendente = false}) =>
+      Padding(
         padding: const EdgeInsets.only(right: 6),
         child: GestureDetector(
           onTap: onTap,
@@ -522,13 +653,28 @@ class _BarraDeRuas extends StatelessWidget {
                     : Colors.white.withValues(alpha: 0.10),
               ),
             ),
-            child: Text(
-              texto,
-              style: TextStyle(
-                color:      ativo ? corCamda : const Color(0xFF8a877f),
-                fontSize:   12,
-                fontWeight: ativo ? FontWeight.bold : FontWeight.w500,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  texto,
+                  style: TextStyle(
+                    color:      ativo ? corCamda : const Color(0xFF8a877f),
+                    fontSize:   12,
+                    fontWeight: ativo ? FontWeight.bold : FontWeight.w500,
+                  ),
+                ),
+                if (pendente) ...[
+                  const SizedBox(width: 5),
+                  Container(
+                    width: 6, height: 6,
+                    decoration: const BoxDecoration(
+                      color: corConferenciaCiano,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -558,6 +704,11 @@ class PainelEnderecoGalpao extends StatefulWidget {
   final VoidCallback?              onEsvaziar;
   final VoidCallback?              onIrParaVaga;
 
+  /// Códigos pendentes de conferência hoje: o rack cujo produto está aqui
+  /// ganha a tarja ciana — quem tocou o cubo aceso precisa ver, no painel, que
+  /// foi por isso que ele acendeu.
+  final Set<String>                codigosConferencia;
+
   const PainelEnderecoGalpao({
     super.key,
     required this.toque,
@@ -569,6 +720,7 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.onLancar,
     this.onEsvaziar,
     this.onIrParaVaga,
+    this.codigosConferencia = const {},
   });
 
   @override
@@ -735,10 +887,38 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final embalada = quantidadeEmbalada(rack.produtoNome, rack.quantidade);
     final litros   = '${formatarNumero(rack.quantidade)} L';
     final temVaga  = pilha.length < GalpaoConfig.niveisMax;
+    final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (pendente) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: corConferenciaCiano.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                  color: corConferenciaCiano.withValues(alpha: 0.55)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.fact_check_outlined,
+                    size: 13, color: corConferenciaCiano),
+                SizedBox(width: 6),
+                Text(
+                  'Conferir hoje',
+                  style: TextStyle(
+                      color: corConferenciaCiano,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         Text(
           rack.produtoNome.isEmpty ? rack.produtoCodigo : rack.produtoNome,
           style: const TextStyle(
@@ -1091,6 +1271,108 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         isDense: true,
       );
+}
+
+// ── Modo Conferência: botão e banner ─────────────────────────────────────────
+
+/// Gêmeo do toggle do mapa da loja (main.dart), de propósito: é a MESMA função
+/// nos dois prédios, então tem o mesmo ícone, a mesma cor e o mesmo lugar na
+/// barra de cima. Quem aprendeu a acender a rota na loja não reaprende aqui.
+class _ToggleConferenciaGalpao extends StatelessWidget {
+  final bool         ativo;
+  final VoidCallback onTap;
+
+  const _ToggleConferenciaGalpao({required this.ativo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color: ativo
+              ? corConferenciaCiano.withValues(alpha: 0.18)
+              : const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: ativo
+                ? corConferenciaCiano
+                : Colors.white.withValues(alpha: 0.10),
+          ),
+        ),
+        child: Icon(
+          ativo ? Icons.fact_check : Icons.fact_check_outlined,
+          color: ativo ? corConferenciaCiano : const Color(0xFF8a877f),
+          size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+/// Banner da conferência do dia no galpão: quantos produtos e quantas posições
+/// acenderam.
+///
+/// Conta os PRODUTOS distintos com rack aqui, não os pendentes do dia inteiro:
+/// o total do dia é do banner da loja, e repeti-lo aqui só faria o usuário
+/// procurar no galpão o que está numa gôndola.
+class _BannerConferenciaGalpao extends StatelessWidget {
+  final bool                      carregando;
+  final ModoConferenciaResultado? resultado;
+  final VoidCallback?             onRefresh;
+
+  const _BannerConferenciaGalpao({
+    required this.carregando,
+    required this.resultado,
+    this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final r     = resultado;
+    final vazio = !carregando && (r == null || r.galpaoVazioHoje);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color:        const Color(0xE60d2226),
+        border:       Border.all(
+            color: corConferenciaCiano.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(
+          vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
+          color: corConferenciaCiano,
+          size:  15,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            carregando
+                ? 'Carregando conferência do dia…'
+                : vazio
+                    ? 'Nenhum pendente com rack no galpão hoje 🎉'
+                    : 'Conferência do dia: ${r!.totalProdutosGalpao} '
+                      'produto(s) em ${r.totalPosicoesGalpao} posição(ões)',
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+          ),
+        ),
+        if (onRefresh != null) ...[
+          const SizedBox(width: 4),
+          IconButton(
+            icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
+            onPressed: onRefresh,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            tooltip: 'Atualizar',
+          ),
+        ],
+      ]),
+    );
+  }
 }
 
 class _BotaoRedondo extends StatelessWidget {

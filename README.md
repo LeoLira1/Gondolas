@@ -30,6 +30,12 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   contar nos mesmos totais dos apps irmãos.
 - Quantidades são lançadas na unidade que se conta no chão — baldes (produto
   de 20 L) ou caixas (5 L × 4) — e gravadas em litros.
+- **Modo Conferência também no galpão**: o mesmo botão do mapa da loja acende
+  em ciano os racks que guardam pendente de hoje (`contagem_itens`), apaga o
+  resto e põe um contador `<posição> · <nº>` acima de cada pilha. O cruzamento
+  do galpão usa TODOS os pendentes, sem o filtro de categorias de depósito da
+  loja — herbicida, adubo e óleo têm endereço justamente aqui. O banner da
+  loja ganhou o atalho `N no galpão`, que abre o galpão já em conferência.
 
 ## Créditos
 

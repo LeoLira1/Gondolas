@@ -333,6 +333,19 @@ class _LojaPageState extends State<LojaPage> {
     });
   }
 
+  /// Abre o galpão já com o Modo Conferência ligado — o galpão é outro prédio,
+  /// então os pendentes que moram lá (herbicida, adubo, óleo) não têm retângulo
+  /// para acender no mapa da loja: o atalho do banner é o que liga uma rota à
+  /// outra.
+  Future<void> _abrirGalpaoEmConferencia() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const GalpaoPage(conferenciaAoAbrir: true),
+    ));
+    // Confirmações feitas no app de contagem enquanto o galpão estava aberto
+    // valem para os dois prédios — o mesmo recarregar de _abrirEstrutura.
+    if (mounted && _modoConferencia) _carregarConferencia();
+  }
+
   /// Estruturas com pendentes que não têm maquete no mapa (paletes, estante 5).
   /// O badge delas não tem retângulo onde pousar, então sumiriam do Modo
   /// Conferência sem sequer cair na lista "sem endereço" — elas TÊM endereço
@@ -642,6 +655,7 @@ class _LojaPageState extends State<LojaPage> {
                           onVerSemEndereco: _mostrarSemEndereco,
                           foraDoMapa: _estruturasForaDoMapa,
                           onVerForaDoMapa: _mostrarForaDoMapa,
+                          onVerGalpao: _abrirGalpaoEmConferencia,
                         ),
                       ),
                     // Título / dica
@@ -907,6 +921,9 @@ class _BannerConferencia extends StatelessWidget {
   // estante 5): não têm retângulo pra piscar, então ganham um atalho próprio.
   final List<EstruturaConferencia> foraDoMapa;
   final VoidCallback               onVerForaDoMapa;
+  // Pendentes com rack no galpão: outro prédio, outro mapa — atalho próprio,
+  // que abre o galpão já em Modo Conferência.
+  final VoidCallback               onVerGalpao;
 
   const _BannerConferencia({
     required this.carregando,
@@ -915,17 +932,23 @@ class _BannerConferencia extends StatelessWidget {
     required this.onVerSemEndereco,
     this.foraDoMapa = const [],
     required this.onVerForaDoMapa,
+    required this.onVerGalpao,
   });
 
   @override
   Widget build(BuildContext context) {
-    final r     = resultado;
-    final vazio = !carregando && (r == null || r.vazioHoje);
+    final r = resultado;
+    // "Nada hoje" agora exige os dois prédios vazios: com o galpão no app, um
+    // dia só de herbicida e adubo tem conferência de verdade, ainda que nenhuma
+    // estrutura da loja acenda.
+    final vazio = !carregando && (r == null || (r.vazioHoje && r.galpaoVazioHoje));
     final temSemEndereco = r != null && r.semEndereco.isNotEmpty;
     final temFiltrados   = r != null && r.totalFiltradosDeposito > 0;
     final filtradosTexto =
         temFiltrados ? ' · ${r.totalFiltradosDeposito} depósito (filtrados)' : '';
     final temForaDoMapa  = !carregando && foraDoMapa.isNotEmpty;
+    final noGalpao       = r == null ? 0 : r.totalProdutosGalpao;
+    final temGalpao      = !carregando && noGalpao > 0;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -952,14 +975,44 @@ class _BannerConferencia extends StatelessWidget {
                   child: Text(
                     vazio
                         ? 'Nenhuma conferência pendente hoje 🎉$filtradosTexto'
-                        : 'Conferência do dia: ${r!.totalProdutos} produto(s) · '
-                          '${r.totalEstruturas} estrutura(s)'
-                          '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
-                          '$filtradosTexto',
+                        : r!.vazioHoje
+                            // Nenhuma estrutura da loja acesa, mas o galpão
+                            // tem racks a conferir: o chip ao lado é o caminho.
+                            ? 'Nada a conferir na loja hoje — a conferência é '
+                              'no galpão$filtradosTexto'
+                            : 'Conferência do dia: ${r.totalProdutos} produto(s) · '
+                              '${r.totalEstruturas} estrutura(s)'
+                              '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
+                              '$filtradosTexto',
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
         ),
+        if (temGalpao) ...[
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onVerGalpao,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: corConferenciaCiano.withValues(alpha: 0.16),
+                border: Border.all(
+                    color: corConferenciaCiano.withValues(alpha: 0.6)),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.warehouse_outlined,
+                    size: 12, color: corConferenciaCiano),
+                const SizedBox(width: 4),
+                Text(
+                  '$noGalpao no galpão',
+                  style: const TextStyle(
+                      color: corConferenciaCiano, fontSize: 11),
+                ),
+              ]),
+            ),
+          ),
+        ],
         if (temForaDoMapa) ...[
           const SizedBox(width: 8),
           GestureDetector(
