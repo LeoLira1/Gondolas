@@ -429,6 +429,136 @@ void main() {
       expect(find.textContaining('carga nova entra como N1'), findsOneWidget);
     });
 
+    testWidgets(
+        'busca acende TODAS as posições do produto, em ruas diferentes',
+        (tester) async {
+      // O caso do galpão cheio de herbicida: a busca da loja devolve uma
+      // linha por endereço, mas quem abre o mapa quer ver os oito paletes de
+      // uma vez. Com o produto em duas ruas, isolar a rua da posição
+      // escolhida esconderia metade deles — então o filtro fica em 'Todas'.
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          posicaoInicial:  68,   // Rua 7
+          codigoDestacado: 'ARTYS',
+          pilhasIniciais: {
+            68: const [
+              RackGalpao(
+                  posicao: 68, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+            1: const [   // Rua 1, do outro lado do galpão
+              RackGalpao(
+                  posicao: 1, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+          },
+        ),
+      ));
+      await tester.pump();
+
+      // A faixa diz o que está aceso e em quantos lugares.
+      expect(find.textContaining('aceso em 2 posições'), findsOneWidget);
+      // E o filtro ficou em 'Todas': nenhuma rua foi isolada, então os dois
+      // paletes estão na tela ao mesmo tempo.
+      expect(_corDoChip(tester, 'Todas'), corCamda);
+      expect(_corDoChip(tester, 'R7'), isNot(corCamda));
+      // Os chips das duas ruas com o produto ganham o ponto laranja, para
+      // quem isolar uma rua depois saber onde estão as outras posições.
+      expect(_pontosLaranja(tester), 2);
+    });
+
+    testWidgets('produto todo numa rua só continua isolando a rua',
+        (tester) async {
+      // Sem posição em outra rua não há o que esconder — vale a mira antiga,
+      // que é mais fácil de ler.
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          posicaoInicial:  68,
+          codigoDestacado: 'ARTYS',
+          pilhasIniciais: {
+            68: const [
+              RackGalpao(
+                  posicao: 68, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+            70: const [   // também Rua 7
+              RackGalpao(
+                  posicao: 70, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+          },
+        ),
+      ));
+      await tester.pump();
+
+      expect(find.textContaining('aceso em 2 posições'), findsOneWidget);
+      expect(_corDoChip(tester, 'R7'), corCamda);
+      expect(_corDoChip(tester, 'Todas'), isNot(corCamda));
+      // Rua 7 é a única com o produto: um ponto laranja só.
+      expect(_pontosLaranja(tester), 1);
+      // A rua isolada de fato tira as outras da tela.
+      await tester.tapAt(centroNaTela(tester, 1, 1));
+      await tester.pump();
+      expect(find.text('1 · N1'), findsNothing);
+    });
+
+    testWidgets('fechar a faixa apaga o destaque', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          codigoDestacado: 'ARTYS',
+          pilhasIniciais: {
+            68: const [
+              RackGalpao(
+                  posicao: 68, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+          },
+        ),
+      ));
+      await tester.pump();
+
+      expect(find.textContaining('aceso em 1 posição'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pump();
+      expect(find.textContaining('aceso em'), findsNothing);
+    });
+
+    testWidgets('painel do rack acende as outras posições do mesmo produto',
+        (tester) async {
+      // O mesmo destaque, a partir de um rack que a pessoa já achou no mapa —
+      // sem ter de voltar à busca da loja.
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          pilhasIniciais: {
+            1: const [
+              RackGalpao(
+                  posicao: 1, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+            68: const [
+              RackGalpao(
+                  posicao: 68, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+          },
+        ),
+      ));
+      await tester.pump();
+
+      await tester.tapAt(centroNaTela(tester, 1, 1));
+      await tester.pump();
+      expect(find.text('Destacar 2 posições deste produto'), findsOneWidget);
+
+      await tester.tap(find.text('Destacar 2 posições deste produto'));
+      await tester.pump();
+      expect(find.textContaining('aceso em 2 posições'), findsOneWidget);
+      expect(find.text('Apagar destaque · 2 posições'), findsOneWidget);
+    });
+
     testWidgets('número fora de 1–78 avisa e não muda nada', (tester) async {
       await tester.pumpWidget(const MaterialApp(
           home: GalpaoPage(catalogoInicial: [])));
@@ -455,6 +585,22 @@ const _catalogoTeste = [
       codigo: 'LB001', nome: 'OLEO LUBRAX ESSENCIAL 20L',
       categoria: 'Lubrificantes', corHex: '#2e7d4f'),
 ];
+
+/// Cor do texto de um chip da barra de ruas — é como o filtro ativo se
+/// anuncia na tela (laranja CAMDA no chip ligado).
+Color? _corDoChip(WidgetTester tester, String texto) =>
+    tester.widget<Text>(find.text(texto)).style?.color;
+
+/// Quantos chips de rua estão com o ponto laranja do produto destacado.
+int _pontosLaranja(WidgetTester tester) => tester
+    .widgetList<Container>(find.byType(Container))
+    .where((c) {
+      final d = c.decoration;
+      return d is BoxDecoration &&
+          d.shape == BoxShape.circle &&
+          d.color == corCamda;
+    })
+    .length;
 
 Offset? _projetar(Camera camera, Size size, Vec3 v) {
   final olho   = camera.position;

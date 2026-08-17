@@ -277,9 +277,14 @@ class _LojaPageState extends State<LojaPage> {
         : null;
     if (tipo == localTipoGalpao) {
       // O galpão não tem maquete no mapa da loja (é outro prédio): a busca
-      // leva direto à tela dele, isolando a rua e marcando a posição.
+      // leva direto à tela dele, marcando a posição escolhida na lista e
+      // acendendo TODAS as posições do produto — ele quase nunca está num
+      // palete só, e a busca devolve uma linha por endereço.
       Navigator.push(context, MaterialPageRoute(
-        builder: (_) => GalpaoPage(posicaoInicial: numero),
+        builder: (_) => GalpaoPage(
+          posicaoInicial:  numero,
+          codigoDestacado: produto?.produtoCodigo,
+        ),
       ));
     } else if (tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(

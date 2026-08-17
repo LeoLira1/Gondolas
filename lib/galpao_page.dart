@@ -30,6 +30,13 @@ class GalpaoPage extends StatefulWidget {
   /// a busca do mapa da loja entra quando o produto está no galpão.
   final int? posicaoInicial;
 
+  /// Código do produto que veio da busca: TODAS as posições dele acendem em
+  /// laranja, não só [posicaoInicial]. O mesmo produto costuma ocupar vários
+  /// paletes em ruas diferentes, e a pergunta de quem buscou é "onde ele
+  /// está", no plural — igual às estantes, que já acendem todas as caixas do
+  /// produto procurado.
+  final String? codigoDestacado;
+
   /// Abrir já com o Modo Conferência ligado — é por onde o banner do mapa da
   /// loja entra quando há pendentes com rack no galpão.
   final bool conferenciaAoAbrir;
@@ -43,6 +50,7 @@ class GalpaoPage extends StatefulWidget {
     this.pilhasIniciais,
     this.catalogoInicial,
     this.posicaoInicial,
+    this.codigoDestacado,
     this.conferenciaAoAbrir = false,
     this.conferenciaInicial,
   });
@@ -75,6 +83,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
   static const int _maxRecentes = 4;
 
   ToqueGalpao? _selecionado;
+
+  /// Produto aceso no mapa inteiro (busca da loja ou o botão do painel).
+  /// Null = ninguém destacado, cores normais de produto.
+  String? _destacadoCodigo;
 
   // Modo Conferência: a mesma função do mapa da loja, aplicada aos racks —
   // pendente de hoje acende em ciano, o resto do galpão apaga. A lista de
@@ -154,6 +166,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
   @override
   void initState() {
     super.initState();
+    // Código vazio (rack gravado sem código) não destaca nada — senão o
+    // destaque casaria com todos os outros racks sem código.
+    final destaque = widget.codigoDestacado;
+    _destacadoCodigo =
+        destaque != null && destaque.isNotEmpty ? destaque : null;
     final semente = widget.catalogoInicial;
     if (semente != null) {
       _aplicarCatalogo(semente);
@@ -210,14 +227,69 @@ class _GalpaoPageState extends State<GalpaoPage> {
     final posicao = GalpaoConfig.porNumero(numero);
     if (posicao == null) return;
     final pilha = _pilhas[numero] ?? const <RackGalpao>[];
+    // Isolar a rua só faz sentido enquanto todas as posições do produto
+    // destacado estão nela. Espalhado por duas ruas, o filtro apagaria da
+    // tela exatamente as posições que a busca acabou de acender — quem
+    // procurou o herbicida veria um palete e concluiria que é o único.
+    final ruasDoProduto = _ruasComDestaque;
     setState(() {
-      _ruasVisiveis = {posicao.rua.numero};
+      _ruasVisiveis =
+          ruasDoProduto.length > 1 ? null : {posicao.rua.numero};
       _selecionado = ToqueGalpao(
         posicao: numero,
         ordem:   pilha.isEmpty ? 1 : pilha.length,
         ocupado: pilha.isNotEmpty,
       );
     });
+  }
+
+  // ── Destaque de produto (busca) ────────────────────────────────────────────
+
+  /// Racks do produto destacado, no galpão inteiro. Vazio sem destaque.
+  List<RackGalpao> get _racksDestacados {
+    final codigo = _destacadoCodigo;
+    if (codigo == null) return const [];
+    return [
+      for (final pilha in _pilhas.values)
+        for (final rack in pilha)
+          if (rack.produtoCodigo == codigo) rack,
+    ];
+  }
+
+  /// Posições (1–85) que guardam o produto destacado.
+  Set<int> get _posicoesComDestaque =>
+      {for (final rack in _racksDestacados) rack.posicao};
+
+  /// Ruas que guardam o produto destacado — vira um ponto laranja no chip da
+  /// rua, pelo mesmo motivo do ponto ciano da conferência: com uma rua
+  /// isolada, os racks acesos das outras somem da tela.
+  Set<int> get _ruasComDestaque {
+    final ruas = <int>{};
+    for (final numero in _posicoesComDestaque) {
+      final rua = GalpaoConfig.ruaDe(numero);
+      if (rua != null) ruas.add(rua.numero);
+    }
+    return ruas;
+  }
+
+  /// Nome do produto destacado, lido dos próprios racks (o catálogo pode
+  /// ainda estar carregando). Cai no código quando o rack foi gravado sem
+  /// nome.
+  String get _nomeDestacado {
+    final racks = _racksDestacados;
+    for (final rack in racks) {
+      if (rack.produtoNome.isNotEmpty) return rack.produtoNome;
+    }
+    return _destacadoCodigo ?? '';
+  }
+
+  /// Liga/desliga o destaque de um produto. Ligar não mexe no filtro de rua
+  /// já escolhido pelo usuário: os pontos nos chips dizem onde estão as
+  /// outras posições, e trocar o filtro por baixo dele seria o mapa se mexer
+  /// sozinho.
+  void _alternarDestaque(String codigo) {
+    setState(() =>
+        _destacadoCodigo = _destacadoCodigo == codigo ? null : codigo);
   }
 
   Future<void> _carregarCatalogo() async {
@@ -397,6 +469,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
             selecionado:   sel == null
                 ? null
                 : (posicao: sel.posicao, ordem: sel.ordem),
+            destacadoCodigo:     _destacadoCodigo,
             onTapEndereco:       _onTapEndereco,
             descida:             _descida,
             ruasVisiveis:        _ruasVisiveis,
@@ -513,7 +586,26 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       visiveis: _ruasVisiveis,
                       onSelecionar: _filtrarRua,
                       comPendencia: _ruasComPendencia,
+                      comDestaque: _modoConferencia
+                          ? const {}
+                          : _ruasComDestaque,
                     ),
+                    // Enquanto a conferência está ligada ela manda nas cores,
+                    // então o destaque de busca não aparece — nem a faixa.
+                    if (_destacadoCodigo != null && !_modoConferencia)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        child: _FaixaDestaqueProduto(
+                          nome:      _nomeDestacado,
+                          posicoes:  _posicoesComDestaque.length,
+                          racks:     _racksDestacados.length,
+                          onLimpar:  () =>
+                              setState(() => _destacadoCodigo = null),
+                          onVerTodas: _ruasVisiveis == null
+                              ? null
+                              : () => _filtrarRua(null),
+                        ),
+                      ),
                     if (_modoConferencia)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -549,6 +641,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   recentes:            _recentes,
                   carregandoCatalogo:  _carregandoCatalogo,
                   codigosConferencia:  _codigosConferencia,
+                  destacadoCodigo:     _destacadoCodigo,
+                  onAlternarDestaque:  _modoConferencia
+                      ? null
+                      : _alternarDestaque,
                   onFechar: () => setState(() => _selecionado = null),
                   onLancar: (produto, quantidade) =>
                       _onLancar(sel.posicao, produto, quantidade),
@@ -606,10 +702,16 @@ class _BarraDeRuas extends StatelessWidget {
   /// Ruas com pendente de conferência hoje — ganham um ponto ciano no chip.
   final Set<int>           comPendencia;
 
+  /// Ruas com o produto destacado pela busca — ponto laranja no chip. Sem
+  /// ele, isolar uma rua esconderia as outras posições do produto sem dizer
+  /// para onde ir procurá-las.
+  final Set<int>           comDestaque;
+
   const _BarraDeRuas({
     required this.visiveis,
     required this.onSelecionar,
     this.comPendencia = const {},
+    this.comDestaque  = const {},
   });
 
   @override
@@ -627,6 +729,7 @@ class _BarraDeRuas extends StatelessWidget {
               visiveis != null && visiveis!.contains(rua.numero),
               () => onSelecionar(rua.numero),
               pendente: comPendencia.contains(rua.numero),
+              destacada: comDestaque.contains(rua.numero),
             ),
         ],
       ),
@@ -634,7 +737,7 @@ class _BarraDeRuas extends StatelessWidget {
   }
 
   Widget _chip(String texto, bool ativo, VoidCallback onTap,
-          {bool pendente = false}) =>
+          {bool pendente = false, bool destacada = false}) =>
       Padding(
         padding: const EdgeInsets.only(right: 6),
         child: GestureDetector(
@@ -674,11 +777,114 @@ class _BarraDeRuas extends StatelessWidget {
                     ),
                   ),
                 ],
+                if (destacada) ...[
+                  const SizedBox(width: 5),
+                  Container(
+                    width: 6, height: 6,
+                    decoration: const BoxDecoration(
+                      color: corCamda,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ),
       );
+}
+
+// ── Faixa do produto destacado ───────────────────────────────────────────────
+
+/// Diz o que está aceso no mapa e em quantos lugares: o destaque é a resposta
+/// da busca, e sem essa linha o usuário veria vários cubos laranja sem saber
+/// se são todos do mesmo produto — nem quantos ainda estão fora da tela por
+/// causa do filtro de rua.
+class _FaixaDestaqueProduto extends StatelessWidget {
+  final String        nome;
+  final int           posicoes;
+  final int           racks;
+  final VoidCallback  onLimpar;
+
+  /// Tirar o filtro de rua para ver o produto no galpão inteiro. Null quando
+  /// já está em 'Todas'.
+  final VoidCallback? onVerTodas;
+
+  const _FaixaDestaqueProduto({
+    required this.nome,
+    required this.posicoes,
+    required this.racks,
+    required this.onLimpar,
+    this.onVerTodas,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Racks e posições são coisas diferentes — dois racks empilhados na mesma
+    // posição são dois paletes e um lugar só —, então a linha diz os dois
+    // quando eles não coincidem.
+    final resumo = posicoes == 0
+        ? 'nenhuma posição no galpão'
+        : racks == posicoes
+            ? pluralizar(posicoes, 'posição', 'posições')
+            : '${pluralizar(posicoes, 'posição', 'posições')} · '
+              '${pluralizar(racks, 'rack')}';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+      decoration: BoxDecoration(
+        color:        corCamda.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+        border:       Border.all(color: corCamda.withValues(alpha: 0.55)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.search, size: 14, color: corCamda),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  nome,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color:      Colors.white,
+                      fontSize:   12,
+                      fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  'aceso em $resumo',
+                  style: const TextStyle(color: corCamda, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          if (onVerTodas != null)
+            TextButton(
+              onPressed: onVerTodas,
+              style: TextButton.styleFrom(
+                foregroundColor: corCamda,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 30),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Ver todas as ruas',
+                  style: TextStyle(fontSize: 11)),
+            ),
+          GestureDetector(
+            onTap: onLimpar,
+            child: const Padding(
+              padding: EdgeInsets.all(6),
+              child: Icon(Icons.close, size: 16, color: corCamda),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ── Painel do endereço ───────────────────────────────────────────────────────
@@ -709,6 +915,14 @@ class PainelEnderecoGalpao extends StatefulWidget {
   /// foi por isso que ele acendeu.
   final Set<String>                codigosConferencia;
 
+  /// Produto aceso no mapa agora (busca), para o botão do painel saber se
+  /// oferece ligar ou desligar o destaque.
+  final String?                    destacadoCodigo;
+
+  /// Ligar/desligar o destaque do produto deste rack no galpão inteiro.
+  /// Null esconde o botão (Modo Conferência manda nas cores).
+  final ValueChanged<String>?      onAlternarDestaque;
+
   const PainelEnderecoGalpao({
     super.key,
     required this.toque,
@@ -721,6 +935,8 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.onEsvaziar,
     this.onIrParaVaga,
     this.codigosConferencia = const {},
+    this.destacadoCodigo,
+    this.onAlternarDestaque,
   });
 
   @override
@@ -958,6 +1174,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             ),
           ],
         ),
+        if (widget.onAlternarDestaque != null) ...[
+          const SizedBox(height: 10),
+          _botaoDestaque(rack),
+        ],
         const SizedBox(height: 12),
         Row(
           children: [
@@ -993,6 +1213,65 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         ),
       ],
     );
+  }
+
+  /// Acende (ou apaga) todas as posições deste produto no mapa. É a mesma
+  /// leitura que a busca da loja entrega ao abrir o galpão — só que a partir
+  /// de um rack que a pessoa já tem na mão.
+  Widget _botaoDestaque(RackGalpao rack) {
+    final quantas = _posicoesDoProduto(rack.produtoCodigo);
+    final aceso   = widget.destacadoCodigo == rack.produtoCodigo;
+
+    return GestureDetector(
+      onTap: () => widget.onAlternarDestaque?.call(rack.produtoCodigo),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        decoration: BoxDecoration(
+          color: aceso
+              ? corCamda.withValues(alpha: 0.18)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+            color: aceso
+                ? corCamda
+                : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              aceso ? Icons.lightbulb : Icons.lightbulb_outline,
+              size: 13,
+              color: aceso ? corCamda : const Color(0xFF8a9aa8),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              aceso
+                  ? 'Apagar destaque · '
+                    '${pluralizar(quantas, 'posição', 'posições')}'
+                  : 'Destacar ${pluralizar(quantas, 'posição', 'posições')} '
+                    'deste produto',
+              style: TextStyle(
+                color: aceso ? corCamda : const Color(0xFF8a9aa8),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Em quantas posições do galpão este produto está — racks empilhados na
+  /// mesma posição contam uma vez só, que é como quem vai buscar conta.
+  int _posicoesDoProduto(String codigo) {
+    var total = 0;
+    for (final pilha in widget.pilhas.values) {
+      if (pilha.any((r) => r.produtoCodigo == codigo)) total++;
+    }
+    return total;
   }
 
   // ── Endereço vazio: lançar ─────────────────────────────────────────────────
