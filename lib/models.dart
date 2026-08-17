@@ -157,6 +157,15 @@ String rotuloCurtoEstrutura(String tipo, int numero) => tipo == 'gondola'
         ? 'P$numero'
         : 'E$numero';
 
+/// "1 produto" / "3 produtos" — contagem já flexionada.
+///
+/// Existe porque os banners de conferência moram SOBRE os mapas: cada
+/// caractere gasto num "(s)" é mapa coberto, e um banner que cresce esconde
+/// justamente a estrutura que ele manda conferir. [plural] cobre os poucos
+/// casos em que o plural não é só um 's' ("posição" → "posições").
+String pluralizar(int n, String singular, [String? plural]) =>
+    '$n ${n == 1 ? singular : (plural ?? '${singular}s')}';
+
 /// Nome por extenso da estrutura: "Gôndola 7", "Estante 5", "Palete 101".
 String nomeEstrutura(String tipo, int numero) => tipo == 'gondola'
     ? 'Gôndola $numero'

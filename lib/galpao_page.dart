@@ -10,7 +10,7 @@ import 'galpao_pilhas.dart';
 import 'galpao_scene.dart';
 import 'galpao_service.dart';
 import 'modo_conferencia_service.dart';
-import 'models.dart' show Produto, corConferenciaCiano;
+import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
 import 'turso_service.dart';
 
 /// Mapa 3D do galpão de racks.
@@ -1355,8 +1355,13 @@ class _BannerConferenciaGalpao extends StatelessWidget {
                 ? 'Carregando conferência do dia…'
                 : vazio
                     ? 'Nenhum pendente com rack no galpão hoje 🎉'
-                    : 'Conferência do dia: ${r!.totalProdutosGalpao} '
-                      'produto(s) em ${r.totalPosicoesGalpao} posição(ões)',
+                    : 'Conferência do dia: '
+                      '${pluralizar(r!.totalProdutosGalpao, 'produto')} em '
+                      '${pluralizar(r.totalPosicoesGalpao, 'posição', 'posições')}',
+            // O banner fica sobre a cena: duas linhas é o teto, senão ele
+            // cobre os racks que acabou de acender.
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: Colors.white, fontSize: 12),
           ),
         ),

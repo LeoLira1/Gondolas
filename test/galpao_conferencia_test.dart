@@ -76,7 +76,7 @@ void main() {
       expect(cena.codigosConferencia, {'BORAL'});
       expect(cena.contagemConferencia, {52: 1});
       expect(
-        find.textContaining('Conferência do dia: 1 produto(s) em 1 posição'),
+        find.textContaining('Conferência do dia: 1 produto em 1 posição'),
         findsOneWidget,
       );
       // A posição 52 é da Rua 5: só o chip dela ganha o ponto ciano.
