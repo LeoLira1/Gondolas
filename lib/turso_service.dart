@@ -397,6 +397,37 @@ class TursoService {
         criado_em  TEXT    NOT NULL
       )
     ''');
+    // Estrutura fixa do galpão de racks: as 78 posições de chão, sem nível.
+    // É espelho de GalpaoConfig (a autoridade das coordenadas continua sendo
+    // o código, ver galpao_config.dart) para que os apps irmãos consigam ler
+    // a planta sem embutir a tabela de novo. Populada por seed idempotente.
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS galpao_posicoes (
+        numero INTEGER PRIMARY KEY,
+        rua    INTEGER NOT NULL,
+        eixo   TEXT    NOT NULL,
+        pos_x  REAL    NOT NULL,
+        pos_z  REAL    NOT NULL
+      )
+    ''');
+    // Ocupação: um rack por linha. `ordem` é a posição na pilha (1 = chão) e
+    // MUDA quando algo abaixo é retirado — é dado, não identidade, e por isso
+    // nunca aparece dentro de um código de endereço textual. O UNIQUE
+    // (posicao, ordem) é o que garante pilha sem buraco nem duplicata; a
+    // renumeração ao esvaziar acontece em transação (ver GalpaoService).
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS galpao_racks (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        posicao        INTEGER NOT NULL,
+        ordem          INTEGER NOT NULL,
+        produto_codigo TEXT    NOT NULL,
+        produto_nome   TEXT    NOT NULL DEFAULT '',
+        quantidade     REAL    NOT NULL DEFAULT 0,
+        atualizado_em  TEXT    NOT NULL,
+        UNIQUE(posicao, ordem)
+      )
+    ''');
+
     // Índices das buscas mais quentes (só tabelas do próprio app): evitam full
     // scan em fetchLayout / fetchLayoutEstante / buscarProdutoEstante e na
     // busca global. IF NOT EXISTS torna idempotente; estoque_localizado já tem
@@ -429,6 +460,12 @@ class TursoService {
     );
     await client.execute(
       'CREATE INDEX IF NOT EXISTS idx_paletes_ativo ON paletes (ativo)',
+    );
+    // Busca "onde está este produto no galpão" — o UNIQUE(posicao, ordem) não
+    // serve esse predicado, a coluna líder dele é posicao.
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_galpao_racks_produto '
+      'ON galpao_racks (produto_codigo)',
     );
   }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,6 +8,7 @@ import 'galpao_busca.dart';
 import 'galpao_config.dart';
 import 'galpao_pilhas.dart';
 import 'galpao_scene.dart';
+import 'galpao_service.dart';
 import 'models.dart' show Produto;
 import 'turso_service.dart';
 
@@ -16,8 +19,9 @@ import 'turso_service.dart';
 /// animada da pilha. A ocupação ainda vive em memória — a etapa 6 troca as
 /// leituras/gravações pelo banco sem mexer no fluxo daqui.
 class GalpaoPage extends StatefulWidget {
-  /// Costuras para teste (e para a etapa 6 semear do banco): ocupação e
-  /// catálogo iniciais. Null = começa vazio e carrega o catálogo do Turso.
+  /// Ocupação e catálogo iniciais. Quando informados, a página NÃO consulta o
+  /// banco — é a costura dos testes e do uso offline. Null = carrega tudo do
+  /// Turso e grava lá as mudanças.
   final Map<int, List<RackGalpao>>? pilhasIniciais;
   final List<Produto>?             catalogoInicial;
 
@@ -63,6 +67,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   @override
   void dispose() {
+    TursoService().dataRevision.removeListener(_aoAtualizarDados);
     _irParaCtrl.dispose();
     super.dispose();
   }
@@ -108,6 +113,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
     FocusScope.of(context).unfocus();
   }
 
+  /// True quando a página fala com o banco. Com pilhas semeadas por
+  /// parâmetro (testes, uso offline) tudo fica em memória.
+  bool get _persistindo => widget.pilhasIniciais == null;
+
+  bool _carregandoPilhas = false;
+
   @override
   void initState() {
     super.initState();
@@ -117,6 +128,29 @@ class _GalpaoPageState extends State<GalpaoPage> {
     } else {
       _carregarCatalogo();
     }
+    if (_persistindo) _carregarPilhas();
+    // Uma sincronização traz racks lançados em outro aparelho — o mesmo
+    // gancho que as outras telas usam para se atualizar sem reabrir.
+    TursoService().dataRevision.addListener(_aoAtualizarDados);
+  }
+
+  void _aoAtualizarDados() {
+    if (!mounted || !_persistindo) return;
+    _carregarPilhas();
+    unawaited(_carregarCatalogo());
+  }
+
+  Future<void> _carregarPilhas() async {
+    setState(() => _carregandoPilhas = true);
+    await GalpaoService().garantirSeed();
+    final pilhas = await GalpaoService().carregarPilhas();
+    if (!mounted) return;
+    setState(() {
+      _pilhas
+        ..clear()
+        ..addAll(pilhas);
+      _carregandoPilhas = false;
+    });
   }
 
   Future<void> _carregarCatalogo() async {
@@ -138,9 +172,15 @@ class _GalpaoPageState extends State<GalpaoPage> {
     setState(() => _selecionado = toque);
   }
 
-  void _onLancar(int posicao, Produto produto, double quantidade) {
+  /// Lança na tela primeiro e no banco em seguida (UI otimista): o galpão é
+  /// usado em pé, com carga chegando, e esperar a ida ao banco a cada rack
+  /// travaria o ritmo. Se a gravação falhar, o estado local volta atrás e o
+  /// aviso é explícito — nunca fica um rack "lançado" só na tela.
+  Future<void> _onLancar(
+      int posicao, Produto produto, double quantidade) async {
+    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
     final nova = pilhaAposLancar(
-      _pilhas[posicao] ?? const [],
+      antes,
       posicao:       posicao,
       produtoCodigo: produto.codigo,
       produtoNome:   produto.nome,
@@ -157,12 +197,30 @@ class _GalpaoPageState extends State<GalpaoPage> {
       // vaga, e o produto recém-lançado está nos recentes.
       _selecionado = null;
     });
+    if (!_persistindo) return;
+
+    final gravada = await GalpaoService().lancar(
+      posicao:       posicao,
+      produtoCodigo: produto.codigo,
+      produtoNome:   produto.nome,
+      quantidade:    quantidade,
+    );
+    if (!mounted) return;
+    if (gravada == null) {
+      setState(() => _pilhas[posicao] = antes);
+      _avisar('Não deu para gravar o lançamento — confira a conexão com o '
+          'banco em ⚙️.');
+    } else {
+      // A pilha do banco manda: se outra pessoa lançou nesta posição no meio
+      // do caminho, o rack novo entrou num nível acima do previsto.
+      setState(() => _pilhas[posicao] = gravada);
+    }
   }
 
-  void _onEsvaziar(int posicao, int ordem) {
+  Future<void> _onEsvaziar(int posicao, int ordem) async {
+    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
     setState(() {
-      _pilhas[posicao] =
-          pilhaAposEsvaziar(_pilhas[posicao] ?? const [], ordem);
+      _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
       _descida = DescidaPilha(
         posicao:        posicao,
         aPartirDaOrdem: ordem,
@@ -170,6 +228,34 @@ class _GalpaoPageState extends State<GalpaoPage> {
       );
       _selecionado = null;
     });
+    if (!_persistindo) return;
+
+    final gravada = await GalpaoService().esvaziar(
+      posicao: posicao,
+      ordem:   ordem,
+    );
+    if (!mounted) return;
+    if (gravada == null) {
+      setState(() => _pilhas[posicao] = antes);
+      _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
+    } else {
+      setState(() => _pilhas[posicao] = gravada);
+    }
+  }
+
+  /// Racks ocupados no galpão inteiro.
+  int get _racksOcupados =>
+      _pilhas.values.fold(0, (soma, pilha) => soma + pilha.length);
+
+  /// Vagas livres: o total de endereços menos o que está ocupado. É o número
+  /// que interessa a quem vai descarregar carga.
+  int get _vagasLivres => GalpaoConfig.totalEnderecos - _racksOcupados;
+
+  void _avisar(String mensagem) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(mensagem),
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   @override
@@ -218,9 +304,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '${GalpaoConfig.totalPosicoes} posições · '
-                            '${GalpaoConfig.ruas.length} ruas · '
-                            'até ${GalpaoConfig.niveisMax} racks empilhados',
+                            _carregandoPilhas
+                                ? 'Carregando ocupação…'
+                                : '${GalpaoConfig.totalPosicoes} posições · '
+                                  '${_racksOcupados} racks · '
+                                  '${_vagasLivres} vagas livres',
                             style: TextStyle(
                               color:    Colors.white.withValues(alpha: 0.45),
                               fontSize: 11,

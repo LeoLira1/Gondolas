@@ -10,6 +10,26 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 - Endereçamento de estoque integrado à tabela `estante_layout` no Turso
 - Modo Conferência para auditoria física do estoque
 - Sincronização de quantidades com os apps `inventariocamda` e `camda-estoque` via `estoque_localizado`
+- Mapa 3D do galpão de racks (botão na barra do mapa da loja)
+
+## Galpão de racks
+
+Prédio separado da loja, com racks metálicos empilháveis — o rack é a própria
+unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
+
+- **78 posições de chão em 7 ruas**, numeradas de 1 a 78 de forma global e
+  contínua (não reinicia por rua). O endereço exibido é `<número> · N<nível>`.
+- **O nível não é identidade**: é a ordem do rack dentro da pilha. Esvaziar um
+  rack faz os de cima descerem, e o que era N2 passa a ser N1 — por isso o
+  nível nunca é gravado dentro de um código de endereço textual.
+- Planta (coordenadas, ruas, medidas) em `lib/galpao_config.dart`, a única
+  fonte da geometria. As larguras de corredor ainda são estimativas.
+- Persistência em `galpao_posicoes` (estrutura, semeada do config) e
+  `galpao_racks` (ocupação, com renumeração transacional), espelhadas em
+  `estoque_localizado` com `local_tipo = 'galpao'` para o estoque do galpão
+  contar nos mesmos totais dos apps irmãos.
+- Quantidades são lançadas na unidade que se conta no chão — baldes (produto
+  de 20 L) ou caixas (5 L × 4) — e gravadas em litros.
 
 ## Créditos
 
