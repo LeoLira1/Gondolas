@@ -32,6 +32,16 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   contar nos mesmos totais dos apps irmãos.
 - Quantidades são lançadas na unidade que se conta no chão — baldes (produto
   de 20 L) ou caixas (5 L × 4) — e gravadas em litros.
+- **Busca acende TODAS as posições do produto**: procurar um produto no mapa
+  da loja abre o galpão com o endereço escolhido marcado e todos os racks
+  daquele produto acesos em laranja — o mesmo produto costuma ocupar vários
+  paletes, às vezes em ruas diferentes, e antes só o endereço da linha
+  clicada se destacava. Quem casa é o CÓDIGO do produto, não o endereço
+  (mesma regra do Modo Conferência). Quando as posições cruzam mais de uma
+  rua, o filtro fica em `Todas` em vez de isolar a rua do endereço escolhido,
+  e os chips das ruas com o produto ganham um ponto laranja. O painel de um
+  rack tem o mesmo destaque num botão (`Destacar N posições deste produto`),
+  para partir de um palete achado no mapa.
 - **Modo Conferência também no galpão**: o mesmo botão do mapa da loja acende
   em ciano os racks que guardam pendente de hoje (`contagem_itens`), apaga o
   resto e põe um contador `<posição> · <nº>` acima de cada pilha. O cruzamento

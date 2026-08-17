@@ -6,6 +6,7 @@ import 'package:gondola_camda/galpao_config.dart';
 import 'package:gondola_camda/galpao_scene.dart';
 import 'package:gondola_camda/gondola_scene.dart'
     show Camera, ProjecaoCamera, Vec3;
+import 'package:gondola_camda/models.dart' show corConferenciaCiano;
 
 /// Uma pilha de [altura] racks na posição [posicao], como a cena espera
 /// receber: ordem 1..n, sem buraco.
@@ -101,6 +102,76 @@ void main() {
       // 5: o que some da tela não pode continuar recebendo toque.
       final ordem = ruasPorProfundidade(const Vec3(30, 20, 30), visiveis: {2, 5});
       expect(ordem.map((r) => r.numero).toSet(), {2, 5});
+    });
+  });
+
+  group('cor do rack (precedência das três leituras)', () {
+    const corProduto = Color(0xFF2e7d4f);
+    const corPor     = {'BORAL': corProduto};
+
+    test('sem destaque nem conferência, vale a cor do produto', () {
+      expect(
+        corRackGalpao(produtoCodigo: 'BORAL', corPorProduto: corPor),
+        corProduto,
+      );
+      // Produto fora do catálogo cai no cinza padrão, não some.
+      expect(
+        corRackGalpao(produtoCodigo: 'XPTO', corPorProduto: corPor),
+        isNot(corProduto),
+      );
+    });
+
+    test('o produto buscado acende, independente do endereço', () {
+      // O ponto da mudança: quem casa é o CÓDIGO, então todo rack do produto
+      // acende — não só o endereço escolhido na lista de resultados.
+      expect(
+        corRackGalpao(
+            produtoCodigo:   'BORAL',
+            corPorProduto:   corPor,
+            destacadoCodigo: 'BORAL'),
+        corCamda,
+      );
+      // Os outros produtos continuam na cor deles.
+      expect(
+        corRackGalpao(
+            produtoCodigo:   'ADUBO',
+            corPorProduto:   corPor,
+            destacadoCodigo: 'BORAL'),
+        isNot(corCamda),
+      );
+    });
+
+    test('código destacado vazio não acende ninguém', () {
+      // Rack gravado sem código casaria com '' e acenderia o galpão inteiro.
+      expect(
+        corRackGalpao(produtoCodigo: '', destacadoCodigo: ''),
+        isNot(corCamda),
+      );
+    });
+
+    test('Modo Conferência tem precedência sobre a busca', () {
+      // Ligada a conferência, o galpão inteiro fala de rota do dia: um cubo
+      // laranja de busca no meio seria uma quarta cor sem significado.
+      expect(
+        corRackGalpao(
+          produtoCodigo:      'BORAL',
+          corPorProduto:      corPor,
+          destacadoCodigo:    'BORAL',
+          modoConferencia:    true,
+          codigosConferencia: const {'BORAL'},
+        ),
+        corConferenciaCiano,
+      );
+      expect(
+        corRackGalpao(
+          produtoCodigo:      'BORAL',
+          corPorProduto:      corPor,
+          destacadoCodigo:    'BORAL',
+          modoConferencia:    true,
+          codigosConferencia: const {'OUTRO'},
+        ),
+        isNot(corCamda),
+      );
     });
   });
 
@@ -303,6 +374,26 @@ void main() {
           body: GalpaoScene(
             pilhas: {52: _pilha(52, 2)},
             selecionado: (posicao: 52, ordem: 2),
+          ),
+        ),
+      ));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('produto destacado em ruas diferentes pinta sem exceção',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: GalpaoScene(
+            pilhas: {
+              1:  _pilha(1, 2),
+              52: _pilha(52, 1),
+              78: _pilha(78, 3),
+            },
+            // 'P1' é o rack de ordem 1 de todas as pilhas do helper: o
+            // destaque cruza três ruas de uma vez.
+            destacadoCodigo: 'P1',
+            selecionado:     (posicao: 52, ordem: 1),
           ),
         ),
       ));

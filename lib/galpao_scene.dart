@@ -112,6 +112,10 @@ const Color _corRack        = Color(0xFF888888);
 const Color _corContorno    = Color(0x44000000);
 const Color _corRotuloRua   = Color(0x4DFFFFFF);
 
+/// Contorno dos racks acesos pela busca — o mesmo laranja clareado, para
+/// separar dois paletes vizinhos do mesmo produto sem inventar outra cor.
+const Color _corDestaqueBorda = Color(0xFFffc98a);
+
 // Modo Conferência: mesma dupla do mapa da loja — ciano nos racks pendentes,
 // cinza morto nos demais —, para quem vem da loja reconhecer a leitura sem
 // aprender outra convenção. O apagado é o _corApagado de loja_scene.dart, e o
@@ -119,6 +123,36 @@ const Color _corRotuloRua   = Color(0x4DFFFFFF);
 // destino de nada, só referência de onde a fileira está.
 const Color _corApagado     = Color(0xFF2d2e31);
 const Color _corVazioFraco  = Color(0x1FFFFFFF);
+
+/// Cor de um rack na cena, na ordem de precedência que o galpão usa:
+/// Modo Conferência > destaque da busca > cor do produto.
+///
+/// É pura de propósito: a precedência entre as três leituras é a regra que
+/// mais confunde quem mexe na cena depois (a conferência apaga o galpão
+/// inteiro, e um destaque de busca aceso por baixo dela seria uma quarta cor
+/// sem significado), e assim ela pode ser conferida sem pintar nada.
+///
+/// [destacadoCodigo] vazio não destaca ninguém: um rack gravado sem código
+/// casaria com ele e acenderia o galpão todo.
+Color corRackGalpao({
+  required String produtoCodigo,
+  Map<String, Color> corPorProduto  = const {},
+  String? destacadoCodigo,
+  bool modoConferencia              = false,
+  Set<String> codigosConferencia    = const {},
+}) {
+  if (modoConferencia) {
+    return codigosConferencia.contains(produtoCodigo)
+        ? corConferenciaCiano
+        : _corApagado;
+  }
+  if (destacadoCodigo != null &&
+      destacadoCodigo.isNotEmpty &&
+      produtoCodigo == destacadoCodigo) {
+    return corCamda;
+  }
+  return corPorProduto[produtoCodigo] ?? _corRack;
+}
 
 /// Os 3 tons de um cubo: topo cheio, uma lateral média e a outra escura.
 /// Sem textura e sem especular — o galpão quer leitura de posição, não
@@ -194,6 +228,17 @@ class GalpaoPainter extends CustomPainter {
   /// Endereço selecionado (posição + ordem), ou null sem seleção.
   final ({int posicao, int ordem})? selecionado;
 
+  /// Produto destacado pela busca: TODOS os racks com este código acendem em
+  /// laranja CAMDA, no galpão inteiro.
+  ///
+  /// É o código que manda, não o endereço — pelo mesmo motivo do Modo
+  /// Conferência (a pilha renumera ao esvaziar), e porque a pergunta que a
+  /// busca responde é "onde está este produto", que quase nunca tem uma
+  /// resposta só: o mesmo herbicida ocupa oito paletes espalhados por duas
+  /// ruas, e destacar apenas o endereço escolhido na lista escondia os
+  /// outros sete de quem estava olhando o mapa.
+  final String? destacadoCodigo;
+
   /// Descida em andamento: racks (e o contorno de vaga) da posição, com ordem
   /// >= aPartirDe, desenhados [dy] metros acima do lugar final.
   final ({int posicao, int aPartirDe, double dy})? descida;
@@ -220,6 +265,7 @@ class GalpaoPainter extends CustomPainter {
     this.corPorProduto      = const {},
     this.mostrarEtiquetas   = true,
     this.selecionado,
+    this.destacadoCodigo,
     this.descida,
     this.ruasVisiveis,
     this.modoConferencia    = false,
@@ -253,6 +299,10 @@ class GalpaoPainter extends CustomPainter {
       ..color       = corCamda
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 2.0;
+    final contornoDestaque = Paint()
+      ..color       = _corDestaqueBorda
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
     final vazio = Paint()
       ..color       = modoConferencia ? _corVazioFraco : _corVazio
       ..style       = PaintingStyle.stroke
@@ -264,6 +314,10 @@ class GalpaoPainter extends CustomPainter {
 
     final sel = selecionado;
     final desc = descida;
+    // Código vazio não destaca nada: a busca pode devolver um endereço cujo
+    // rack foi gravado sem código, e casar '' com '' acenderia o galpão todo.
+    final codigoAceso =
+        (destacadoCodigo?.isEmpty ?? true) ? null : destacadoCodigo;
 
     // Deslocamento vertical da descida em andamento, por rack.
     double dyDe(int numeroPosicao, int ordem) =>
@@ -285,20 +339,35 @@ class GalpaoPainter extends CustomPainter {
           final isSel = sel != null &&
               sel.posicao == posicao.numero &&
               sel.ordem == k + 1;
-          // No Modo Conferência a cor de produto sai de cena: o que interessa
-          // é "este rack tem produto para conferir hoje, aquele não".
-          final cor = modoConferencia
-              ? (codigosConferencia.contains(rack.produtoCodigo)
-                  ? corConferenciaCiano
-                  : _corApagado)
-              : (corPorProduto[rack.produtoCodigo] ?? _corRack);
+          // Busca: o produto procurado acende no galpão inteiro. Vale para
+          // TODOS os racks dele, não só o endereço que veio da lista de
+          // resultados — é o que permite ler as oito posições do mesmo
+          // herbicida de uma olhada no mapa. No Modo Conferência a leitura de
+          // rota tem precedência, como nas estantes.
+          final cor = corRackGalpao(
+            produtoCodigo:      rack.produtoCodigo,
+            corPorProduto:      corPorProduto,
+            destacadoCodigo:    codigoAceso,
+            modoConferencia:    modoConferencia,
+            codigosConferencia: codigosConferencia,
+          );
+          final destacadoAceso = !modoConferencia &&
+              codigoAceso != null &&
+              rack.produtoCodigo == codigoAceso;
           _desenharCubo(
             canvas, proj, posicao, k + 1,
             // Seleção: clareia o cubo e troca o contorno pelo laranja CAMDA —
             // a cor do produto continua legível por baixo do destaque.
             cor: isSel ? Color.lerp(cor, Colors.white, 0.30)! : cor,
             preenchimento: preenchimento,
-            contorno: isSel ? contornoSel : contorno,
+            // O rack aceso pela busca ganha um contorno âmbar claro: o cubo já
+            // é laranja, e sem o traço as posições vizinhas do mesmo produto
+            // viravam um bloco só no zoom de galpão inteiro.
+            contorno: isSel
+                ? contornoSel
+                : destacadoAceso
+                    ? contornoDestaque
+                    : contorno,
             // Rack com outro em cima tem o topo escondido — não desenhar
             // também evita disputa de pintura entre as duas faces coladas.
             // Durante a descida o de cima está um pouco acima, mas continua
@@ -679,6 +748,7 @@ class GalpaoPainter extends CustomPainter {
       old.camera.target.z     != camera.target.z ||
       old.mostrarEtiquetas    != mostrarEtiquetas ||
       old.selecionado         != selecionado      ||
+      old.destacadoCodigo     != destacadoCodigo  ||
       old.descida             != descida          ||
       !setEquals(old.ruasVisiveis, ruasVisiveis)  ||
       !identical(old.pilhas, pilhas)             ||
@@ -694,6 +764,10 @@ class GalpaoScene extends StatefulWidget {
 
   /// Endereço selecionado, destacado em laranja na cena.
   final ({int posicao, int ordem})? selecionado;
+
+  /// Código do produto destacado pela busca: todos os racks dele acendem
+  /// (ver [GalpaoPainter.destacadoCodigo]).
+  final String? destacadoCodigo;
 
   /// Toque num endereço (cubo sólido ou contorno de vaga), ou null quando o
   /// toque caiu fora de qualquer alvo — é o gesto de desfazer a seleção.
@@ -722,6 +796,7 @@ class GalpaoScene extends StatefulWidget {
     this.corPorProduto      = const {},
     this.mostrarEtiquetas   = true,
     this.selecionado,
+    this.destacadoCodigo,
     this.onTapEndereco,
     this.descida,
     this.ruasVisiveis,
@@ -1078,6 +1153,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
                 corPorProduto:       widget.corPorProduto,
                 mostrarEtiquetas:    widget.mostrarEtiquetas,
                 selecionado:         widget.selecionado,
+                destacadoCodigo:     widget.destacadoCodigo,
                 descida:             _descidaDoFrame,
                 ruasVisiveis:        widget.ruasVisiveis,
                 modoConferencia:     widget.modoConferencia,
