@@ -3,17 +3,17 @@ import 'package:gondola_camda/galpao_config.dart';
 
 void main() {
   group('estrutura do galpão', () {
-    test('são 78 posições em 7 ruas, e 312 endereços', () {
-      expect(GalpaoConfig.ruas.length, 7);
-      expect(GalpaoConfig.posicoes.length, 78);
-      expect(GalpaoConfig.totalPosicoes, 78);
-      expect(GalpaoConfig.totalEnderecos, 312);
+    test('são 85 posições em 8 ruas, e 340 endereços', () {
+      expect(GalpaoConfig.ruas.length, 8);
+      expect(GalpaoConfig.posicoes.length, 85);
+      expect(GalpaoConfig.totalPosicoes, 85);
+      expect(GalpaoConfig.totalEnderecos, 340);
     });
 
-    test('a numeração é global, contínua de 1 a 78 e sem repetição', () {
+    test('a numeração é global, contínua de 1 a 85 e sem repetição', () {
       final numeros = GalpaoConfig.posicoes.map((p) => p.numero).toList();
-      expect(numeros.toSet().length, 78, reason: 'há número repetido');
-      expect(numeros, List.generate(78, (i) => i + 1));
+      expect(numeros.toSet().length, 85, reason: 'há número repetido');
+      expect(numeros, List.generate(85, (i) => i + 1));
     });
 
     test('cada rua tem a quantidade e a faixa de números contadas no galpão', () {
@@ -25,6 +25,7 @@ void main() {
         5: (10, 47, 56),
         6: (11, 57, 67),
         7: (11, 68, 78),
+        8: (7, 79, 85),
       };
       for (final rua in GalpaoConfig.ruas) {
         final (quantidade, primeiro, ultimo) = esperado[rua.numero]!;
@@ -43,7 +44,7 @@ void main() {
     });
 
     test('toda posição pertence a exatamente uma rua', () {
-      for (var n = 1; n <= 78; n++) {
+      for (var n = 1; n <= 85; n++) {
         final rua = GalpaoConfig.ruaDe(n);
         expect(rua, isNotNull, reason: 'posição $n sem rua');
         expect(GalpaoConfig.porNumero(n)!.rua.numero, rua!.numero);
@@ -51,8 +52,8 @@ void main() {
             reason: 'posição $n em mais de uma rua');
       }
       expect(GalpaoConfig.ruaDe(0), isNull);
-      expect(GalpaoConfig.ruaDe(79), isNull);
-      expect(GalpaoConfig.porNumero(79), isNull);
+      expect(GalpaoConfig.ruaDe(86), isNull);
+      expect(GalpaoConfig.porNumero(86), isNull);
     });
   });
 
@@ -115,6 +116,33 @@ void main() {
       // A Rua 7, ao contrário da 6, desce.
       expect(GalpaoConfig.porNumero(68)!.z,
           lessThan(GalpaoConfig.porNumero(78)!.z));
+    });
+
+    test('a Rua 8 fecha o fundo, espelhando a Rua 2 do outro lado', () {
+      final rua2 = GalpaoConfig.ruas.firstWhere((r) => r.numero == 2);
+      final rua8 = GalpaoConfig.ruas.firstWhere((r) => r.numero == 8);
+
+      // As duas atravessam o galpão na horizontal, em pontas opostas do Z.
+      expect(rua8.eixo, EixoRua.x);
+      expect(rua2.coordFixa, lessThan(0));
+      expect(rua8.coordFixa, greaterThan(0));
+
+      // Fica DEPOIS da ponta da Rua 1 (o croqui a desenha por fora dela), com
+      // a mesma folga que a Rua 2 tem na ponta oposta.
+      final naRua1 = GalpaoConfig.posicoes.where((p) => p.rua.numero == 1);
+      final zMaisAlto = naRua1.map((p) => p.z).reduce((a, b) => a > b ? a : b);
+      final zMaisBaixo = naRua1.map((p) => p.z).reduce((a, b) => a < b ? a : b);
+      expect(rua8.coordFixa, greaterThan(zMaisAlto));
+      expect(rua8.coordFixa - zMaisAlto,
+          closeTo(zMaisBaixo - rua2.coordFixa, 1e-9));
+
+      // Numeração ao contrário da Rua 2: 79 no extremo X negativo (lado da
+      // Rua 3), 85 andando para o meio do galpão.
+      expect(GalpaoConfig.porNumero(79)!.x,
+          lessThan(GalpaoConfig.porNumero(85)!.x));
+      // E alinhada pela esquerda com a Rua 2, como no croqui.
+      expect(GalpaoConfig.porNumero(79)!.x,
+          closeTo(GalpaoConfig.porNumero(25)!.x, 1e-9));
     });
 
     test('os pares 4/5 e 6/7 estão encostados fundo com fundo', () {

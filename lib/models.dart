@@ -343,11 +343,11 @@ const Color corConferenciaCiano = Color(0xFF22d3ee);
 /// A tabela é COMPARTILHADA com os apps irmãos (dashboard, inventariocamda,
 /// camda-estoque): é dela que saem o total do inventário cíclico e o Modo
 /// Conferência. O galpão entra nela como um terceiro tipo, ao lado de
-/// 'gondola' e 'estante' — com local_num = número da posição (1–78),
+/// 'gondola' e 'estante' — com local_num = número da posição (1–85),
 /// face_ou_coluna = 0 (o galpão não tem face nem coluna) e andar_ou_nivel =
 /// ordem na pilha.
 ///
-/// ATENÇÃO: os números de posição do galpão (1–78) SE SOBREPÕEM aos números
+/// ATENÇÃO: os números de posição do galpão (1–85) SE SOBREPÕEM aos números
 /// de estante (1–21) e de palete (101+). Qualquer agrupamento de
 /// estoque_localizado tem de levar o local_tipo na chave, nunca só o
 /// local_num — foi assim que o galpão passou a somar quantidade dentro da

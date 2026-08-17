@@ -102,7 +102,7 @@ class EstruturaConferencia {
   Set<String> get codigos => itens.map((i) => i.codigo).toSet();
 }
 
-/// Uma posição do galpão (1–78) que guarda pendentes de hoje.
+/// Uma posição do galpão (1–85) que guarda pendentes de hoje.
 ///
 /// O irmão de [EstruturaConferencia] do outro lado da rua: lá a chave é
 /// tipo + número da estrutura da loja, aqui é o número global da posição de
@@ -111,7 +111,7 @@ class EstruturaConferencia {
 /// (ver galpao_config.dart). Quem acende é o CÓDIGO do produto, então a cena
 /// reencontra o rack certo mesmo depois de uma renumeração.
 class PosicaoConferencia {
-  final int posicao; // 1–78
+  final int posicao; // 1–85
   final List<ItemPendente> itens;
 
   const PosicaoConferencia({
@@ -128,7 +128,7 @@ class PosicaoConferencia {
 /// endereço nenhum.
 class ModoConferenciaResultado {
   final Map<String, EstruturaConferencia> estruturas; // chave '$tipo:$numero'
-  // Posições do galpão com pendentes, por número global (1–78).
+  // Posições do galpão com pendentes, por número global (1–85).
   final Map<int, PosicaoConferencia> galpao;
   final List<ItemPendente> semEndereco;
   final int totalProdutos; // pendentes únicos de hoje relevantes à loja
@@ -372,7 +372,7 @@ class ModoConferenciaService {
     return mapa;
   }
 
-  /// Posições do galpão (1–78) que têm rack de cada código.
+  /// Posições do galpão (1–85) que têm rack de cada código.
   ///
   /// Lê galpao_racks — a ocupação, autoridade do galpão — e não o espelho em
   /// estoque_localizado: o espelho é derivado dela (ver GalpaoService) e pode

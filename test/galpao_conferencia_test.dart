@@ -178,7 +178,7 @@ void main() {
         pilhas:              _pilhas,
         modoConferencia:     true,
         codigosConferencia:  const {'BORAL'},
-        // 999 não existe na planta (são 78 posições): não pode desenhar nada
+        // 999 não existe na planta (são 85 posições): não pode desenhar nada
         // nem derrubar o frame.
         contagemConferencia: const {999: 3},
       ).paint(Canvas(recorder), tela);

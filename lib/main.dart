@@ -1346,7 +1346,7 @@ class _LocationCard extends StatelessWidget {
         : ehGalpaoAqui
             ? corCamda
             : corEstanteLoja;
-    // No galpão o número JÁ é o endereço (1–78, único no galpão inteiro), sem
+    // No galpão o número JÁ é o endereço (1–85, único no galpão inteiro), sem
     // letra na frente — é assim que a etiqueta física está no chão.
     final prefixo = tipo == 'gondola'
         ? 'G'

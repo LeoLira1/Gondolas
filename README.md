@@ -17,8 +17,10 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 Prédio separado da loja, com racks metálicos empilháveis — o rack é a própria
 unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
 
-- **78 posições de chão em 7 ruas**, numeradas de 1 a 78 de forma global e
+- **85 posições de chão em 8 ruas**, numeradas de 1 a 85 de forma global e
   contínua (não reinicia por rua). O endereço exibido é `<número> · N<nível>`.
+  As Ruas 2 (15–25) e 8 (79–85) atravessam as pontas do galpão na horizontal;
+  as outras seis correm no comprimento.
 - **O nível não é identidade**: é a ordem do rack dentro da pilha. Esvaziar um
   rack faz os de cima descerem, e o que era N2 passa a ser N1 — por isso o
   nível nunca é gravado dentro de um código de endereço textual.
