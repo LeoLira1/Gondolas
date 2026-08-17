@@ -78,6 +78,27 @@ class ToqueGalpao {
   int get hashCode => Object.hash(posicao, ordem, ocupado);
 }
 
+/// Pedido de animação da descida de uma pilha (esvaziar renumera as ordens e
+/// os racks de cima descem um nível — uns 250 ms de ease-out é o que torna a
+/// renumeração legível: sem isso o rack "teleporta" e o usuário não entende
+/// por que o N2 virou N1).
+///
+/// A cena recebe as pilhas JÁ renumeradas e desenha os racks a partir de
+/// [aPartirDaOrdem] deslocados um passo para cima, deslizando até o lugar.
+/// [id] distingue duas descidas seguidas no mesmo endereço — é a mudança de
+/// id que dispara a animação, não a igualdade dos outros campos.
+class DescidaPilha {
+  final int posicao;
+  final int aPartirDaOrdem;
+  final int id;
+
+  const DescidaPilha({
+    required this.posicao,
+    required this.aPartirDaOrdem,
+    required this.id,
+  });
+}
+
 // ── Cores ────────────────────────────────────────────────────────────────────
 
 const Color corCamda        = Color(0xFFe87722);
@@ -163,12 +184,17 @@ class GalpaoPainter extends CustomPainter {
   /// Endereço selecionado (posição + ordem), ou null sem seleção.
   final ({int posicao, int ordem})? selecionado;
 
+  /// Descida em andamento: racks (e o contorno de vaga) da posição, com ordem
+  /// >= aPartirDe, desenhados [dy] metros acima do lugar final.
+  final ({int posicao, int aPartirDe, double dy})? descida;
+
   GalpaoPainter(
     this.camera, {
     this.pilhas           = const {},
     this.corPorProduto    = const {},
     this.mostrarEtiquetas = true,
     this.selecionado,
+    this.descida,
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
@@ -207,6 +233,15 @@ class GalpaoPainter extends CustomPainter {
       ..strokeWidth = 2.0;
 
     final sel = selecionado;
+    final desc = descida;
+
+    // Deslocamento vertical da descida em andamento, por rack.
+    double dyDe(int numeroPosicao, int ordem) =>
+        desc != null &&
+                desc.posicao == numeroPosicao &&
+                ordem >= desc.aPartirDe
+            ? desc.dy
+            : 0.0;
 
     for (final rua in ruasPorProfundidade(proj.eye)) {
       final coordOlho = rua.eixo == EixoRua.z ? proj.eye.z : proj.eye.x;
@@ -230,7 +265,10 @@ class GalpaoPainter extends CustomPainter {
             contorno: isSel ? contornoSel : contorno,
             // Rack com outro em cima tem o topo escondido — não desenhar
             // também evita disputa de pintura entre as duas faces coladas.
+            // Durante a descida o de cima está um pouco acima, mas continua
+            // cobrindo o topo do de baixo na projeção — a regra se mantém.
             desenharTopo: k == pilha.length - 1,
+            dy: dyDe(posicao.numero, k + 1),
           );
         }
 
@@ -243,7 +281,8 @@ class GalpaoPainter extends CustomPainter {
               sel.posicao == posicao.numero &&
               sel.ordem == proxima;
           _desenharVazio(canvas, proj, posicao, proxima,
-              isSel ? vazioSel : vazio);
+              isSel ? vazioSel : vazio,
+              dy: dyDe(posicao.numero, proxima));
         }
       }
     }
@@ -311,9 +350,10 @@ class GalpaoPainter extends CustomPainter {
   /// descartado nesse caso (acontece só com a câmera dentro da pilha; o
   /// recorte no near plane fica com quem ordena faces, que aqui não existe).
   bool _projetarCantos(
-      ProjecaoCamera proj, PosicaoGalpao p, int ordem) {
+      ProjecaoCamera proj, PosicaoGalpao p, int ordem, {double dy = 0}) {
     final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
-    final y0 = GalpaoConfig.yBase(ordem), y1 = GalpaoConfig.yTopo(ordem);
+    final y0 = GalpaoConfig.yBase(ordem) + dy;
+    final y1 = GalpaoConfig.yTopo(ordem) + dy;
     var ok = true;
     for (var i = 0; i < 8; i++) {
       final v = Vec3(
@@ -383,8 +423,9 @@ class GalpaoPainter extends CustomPainter {
     required Paint preenchimento,
     required Paint contorno,
     required bool desenharTopo,
+    double dy = 0,
   }) {
-    if (!_projetarCantos(proj, p, ordem)) return;
+    if (!_projetarCantos(proj, p, ordem, dy: dy)) return;
     final (faceX, faceZ) = _lateraisVisiveis(proj, p);
 
     void pintar(List<int> face, double tom) {
@@ -407,8 +448,8 @@ class GalpaoPainter extends CustomPainter {
   }
 
   void _desenharVazio(Canvas canvas, ProjecaoCamera proj, PosicaoGalpao p,
-      int ordem, Paint traco) {
-    if (!_projetarCantos(proj, p, ordem)) return;
+      int ordem, Paint traco, {double dy = 0}) {
+    if (!_projetarCantos(proj, p, ordem, dy: dy)) return;
     final (faceX, faceZ) = _lateraisVisiveis(proj, p);
 
     final path = Path();
@@ -519,6 +560,7 @@ class GalpaoPainter extends CustomPainter {
       old.camera.target.z     != camera.target.z ||
       old.mostrarEtiquetas    != mostrarEtiquetas ||
       old.selecionado         != selecionado      ||
+      old.descida             != descida          ||
       !identical(old.pilhas, pilhas)             ||
       !identical(old.corPorProduto, corPorProduto);
 }
@@ -537,6 +579,10 @@ class GalpaoScene extends StatefulWidget {
   /// toque caiu fora de qualquer alvo — é o gesto de desfazer a seleção.
   final ValueChanged<ToqueGalpao?>? onTapEndereco;
 
+  /// Descida a animar (esvaziou e a pilha renumerou). A animação dispara na
+  /// mudança do [DescidaPilha.id].
+  final DescidaPilha? descida;
+
   const GalpaoScene({
     super.key,
     this.pilhas           = const {},
@@ -544,6 +590,7 @@ class GalpaoScene extends StatefulWidget {
     this.mostrarEtiquetas = true,
     this.selecionado,
     this.onTapEndereco,
+    this.descida,
   });
 
   /// Câmera isométrica que enquadra o galpão inteiro numa tela de [size].
@@ -610,13 +657,54 @@ class GalpaoScene extends StatefulWidget {
 }
 
 class _GalpaoSceneState extends State<GalpaoScene>
-    with SceneGestureGuard<GalpaoScene> {
+    with SingleTickerProviderStateMixin, SceneGestureGuard<GalpaoScene> {
   // Só é conhecida quando a tela tem tamanho (o enquadramento depende da
   // proporção), então nasce nula e é resolvida no primeiro build.
   Camera? _camera;
   Camera? _cameraAoIniciarGesto;
 
   final _painterKey = GlobalKey();
+
+  /// Animação da descida da pilha: 250 ms, ease-out — rápido o bastante para
+  /// não atrasar a próxima ação, lento o bastante para o olho acompanhar o
+  /// rack assentando no nível novo. Criada no initState (não num late):
+  /// numa cena que nunca animou, o primeiro toque no campo seria o dispose,
+  /// que criaria o ticker com a árvore já desativada.
+  late final AnimationController _descidaCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _descidaCtrl = AnimationController(
+      vsync:    this,
+      duration: const Duration(milliseconds: 250),
+    )..addListener(() => setState(() {}));
+  }
+
+  @override
+  void didUpdateWidget(GalpaoScene old) {
+    super.didUpdateWidget(old);
+    final d = widget.descida;
+    if (d != null && d.id != old.descida?.id) {
+      _descidaCtrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _descidaCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Descida corrente traduzida para o painter, ou null quando não há nada
+  /// descendo (antes do primeiro esvaziar e depois que o rack assentou).
+  ({int posicao, int aPartirDe, double dy})? get _descidaDoFrame {
+    final d = widget.descida;
+    if (d == null || !_descidaCtrl.isAnimating) return null;
+    final dy = (1 - Curves.easeOutCubic.transform(_descidaCtrl.value)) *
+        GalpaoConfig.passoNivel;
+    return (posicao: d.posicao, aPartirDe: d.aPartirDaOrdem, dy: dy);
+  }
 
   // Toque vs. arrasto, mais apertado que o padrão das outras cenas: os alvos
   // aqui são cubos de mais de 1 m — não precisam de tolerância de mira — e o
@@ -708,10 +796,16 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// Endereço sob o toque, ou null se o raio não acerta cubo nem contorno.
   ///
   /// Os alvos são os racks ocupados E o contorno da próxima vaga de cada
-  /// pilha incompleta — o vazio é desenhado, então é tocável (é assim que se
-  /// vai lançar carga na etapa 4). Ganha o alvo de menor t, o mais próximo da
-  /// câmera; como o contorno da vaga fica sempre ACIMA dos racks da própria
-  /// pilha, ele nunca rouba o toque de um cubo da mesma posição.
+  /// pilha incompleta — o vazio é desenhado, então é tocável (é por ele que
+  /// se lança carga).
+  ///
+  /// Regra de prioridade: quando o raio acerta a vaga E um rack DA MESMA
+  /// posição, ganha o rack. Sem isso, tocar o topo da pilha nunca selecionava
+  /// o rack de cima: o volume da vaga fica exatamente sobre ele, então
+  /// qualquer toque na face superior atravessava a vaga primeiro — e esvaziar
+  /// o topo, que é o movimento mais comum do galpão, exigia mirar na lateral.
+  /// A vaga continua ganhando quando é o único alvo da posição no caminho do
+  /// raio (posição vazia, ou toque no contorno em área que não cobre rack).
   ///
   /// ⚠️ Etapa 5 (filtro por rua): este é o lugar onde a lista de candidatos
   /// tem de ser reconstruída — o que estiver escondido sai DAQUI, não só do
@@ -729,29 +823,46 @@ class _GalpaoSceneState extends State<GalpaoScene>
     final dir  = (right * (ndcX * tanH * aspect) + up * (ndcY * tanH) + fwd)
         .normalized;
 
-    ToqueGalpao? melhor;
-    var melhorT = double.infinity;
-
-    void considerar(PosicaoGalpao p, int ordem, bool ocupado) {
+    double? tDe(PosicaoGalpao p, int ordem) {
       final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
-      final t = _rayAabb(eye, dir,
+      return _rayAabb(eye, dir,
           x0: p.x - hx, x1: p.x + hx,
           y0: GalpaoConfig.yBase(ordem), y1: GalpaoConfig.yTopo(ordem),
           z0: p.z - hz, z1: p.z + hz);
-      if (t != null && t < melhorT) {
-        melhorT = t;
-        melhor  = ToqueGalpao(
-            posicao: p.numero, ordem: ordem, ocupado: ocupado);
-      }
     }
+
+    ToqueGalpao? melhor;
+    var melhorT = double.infinity;
 
     for (final p in GalpaoConfig.posicoes) {
       final pilha = widget.pilhas[p.numero] ?? const <RackGalpao>[];
+
+      // Racks ocupados: menor t entre os da posição (o raio pode varar mais
+      // de um cubo da mesma pilha; vale o primeiro que ele encontra).
+      double? tRack;
+      var ordemRack = 0;
       for (var k = 0; k < pilha.length; k++) {
-        considerar(p, k + 1, true);
+        final t = tDe(p, k + 1);
+        if (t != null && (tRack == null || t < tRack)) {
+          tRack     = t;
+          ordemRack = k + 1;
+        }
       }
-      if (pilha.length < GalpaoConfig.niveisMax) {
-        considerar(p, pilha.length + 1, false);
+
+      // A vaga só compete quando o raio NÃO acerta rack nenhum desta posição
+      // (ver a regra de prioridade na doc do método).
+      double? tVaga;
+      if (tRack == null && pilha.length < GalpaoConfig.niveisMax) {
+        tVaga = tDe(p, pilha.length + 1);
+      }
+
+      final t = tRack ?? tVaga;
+      if (t != null && t < melhorT) {
+        melhorT = t;
+        melhor = tRack != null
+            ? ToqueGalpao(posicao: p.numero, ordem: ordemRack, ocupado: true)
+            : ToqueGalpao(
+                posicao: p.numero, ordem: pilha.length + 1, ocupado: false);
       }
     }
     return melhor;
@@ -808,6 +919,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
                 corPorProduto:    widget.corPorProduto,
                 mostrarEtiquetas: widget.mostrarEtiquetas,
                 selecionado:      widget.selecionado,
+                descida:          _descidaDoFrame,
               ),
               child: const SizedBox.expand(),
             ),

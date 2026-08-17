@@ -1,33 +1,122 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'embalagem.dart';
+import 'galpao_busca.dart';
 import 'galpao_config.dart';
+import 'galpao_pilhas.dart';
 import 'galpao_scene.dart';
+import 'models.dart' show Produto;
+import 'turso_service.dart';
 
 /// Mapa 3D do galpão de racks.
 ///
-/// Etapa 3: toque, seleção e painel inferior de leitura. As pilhas ainda não
-/// vêm do banco (etapa 6), então o galpão abre com as 78 vagas livres — é o
-/// estado verdadeiro enquanto não houver persistência, não uma tela de
-/// exemplo. Lançar/esvaziar (etapa 4) e filtro por rua + "ir para o número"
-/// (etapa 5) vêm nas próximas etapas.
+/// Etapa 4: lançar produto (busca por qualquer parte do nome, código ou dois
+/// termos soltos; últimos lançados como atalho) e esvaziar com a descida
+/// animada da pilha. A ocupação ainda vive em memória — a etapa 6 troca as
+/// leituras/gravações pelo banco sem mexer no fluxo daqui.
 class GalpaoPage extends StatefulWidget {
-  const GalpaoPage({super.key});
+  /// Costuras para teste (e para a etapa 6 semear do banco): ocupação e
+  /// catálogo iniciais. Null = começa vazio e carrega o catálogo do Turso.
+  final Map<int, List<RackGalpao>>? pilhasIniciais;
+  final List<Produto>?             catalogoInicial;
+
+  const GalpaoPage({super.key, this.pilhasIniciais, this.catalogoInicial});
 
   @override
   State<GalpaoPage> createState() => _GalpaoPageState();
 }
 
-class _GalpaoPageState extends State<GalpaoPage> {
-  /// Ocupação por posição — vazia até a etapa 6 ligar o banco.
-  final Map<int, List<RackGalpao>> _pilhas = {};
+/// Um lançamento recente — o atalho de quando chega carga: o mesmo produto é
+/// lançado em vários endereços seguidos, então os últimos usados aparecem
+/// antes de qualquer digitação, e a quantidade do último lançamento vem
+/// preenchida.
+class LancamentoRecente {
+  final Produto produto;
+  final double  quantidade;
 
-  final Map<String, Color> _corPorProduto = {};
+  const LancamentoRecente({required this.produto, required this.quantidade});
+}
+
+class _GalpaoPageState extends State<GalpaoPage> {
+  late final Map<int, List<RackGalpao>> _pilhas = {
+    ...?widget.pilhasIniciais,
+  };
+
+  List<Produto>      _catalogo           = const [];
+  Map<String, Color> _corPorProduto      = const {};
+  bool               _carregandoCatalogo = false;
+
+  final List<LancamentoRecente> _recentes = [];
+  static const int _maxRecentes = 4;
 
   ToqueGalpao? _selecionado;
 
+  DescidaPilha? _descida;
+  int           _descidaSeq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final semente = widget.catalogoInicial;
+    if (semente != null) {
+      _aplicarCatalogo(semente);
+    } else {
+      _carregarCatalogo();
+    }
+  }
+
+  Future<void> _carregarCatalogo() async {
+    setState(() => _carregandoCatalogo = true);
+    final produtos = await TursoService().fetchProdutos();
+    if (!mounted) return;
+    setState(() {
+      _aplicarCatalogo(produtos);
+      _carregandoCatalogo = false;
+    });
+  }
+
+  void _aplicarCatalogo(List<Produto> produtos) {
+    _catalogo      = produtos;
+    _corPorProduto = {for (final p in produtos) p.codigo: p.cor};
+  }
+
   void _onTapEndereco(ToqueGalpao? toque) {
     setState(() => _selecionado = toque);
+  }
+
+  void _onLancar(int posicao, Produto produto, double quantidade) {
+    final nova = pilhaAposLancar(
+      _pilhas[posicao] ?? const [],
+      posicao:       posicao,
+      produtoCodigo: produto.codigo,
+      produtoNome:   produto.nome,
+      quantidade:    quantidade,
+    );
+    if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
+    setState(() {
+      _pilhas[posicao] = nova;
+      _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
+      _recentes.insert(
+          0, LancamentoRecente(produto: produto, quantidade: quantidade));
+      if (_recentes.length > _maxRecentes) _recentes.removeLast();
+      // Fecha o painel: no fluxo de carga o próximo gesto é tocar a próxima
+      // vaga, e o produto recém-lançado está nos recentes.
+      _selecionado = null;
+    });
+  }
+
+  void _onEsvaziar(int posicao, int ordem) {
+    setState(() {
+      _pilhas[posicao] =
+          pilhaAposEsvaziar(_pilhas[posicao] ?? const [], ordem);
+      _descida = DescidaPilha(
+        posicao:        posicao,
+        aPartirDaOrdem: ordem,
+        id:             ++_descidaSeq,
+      );
+      _selecionado = null;
+    });
   }
 
   @override
@@ -45,6 +134,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                 ? null
                 : (posicao: sel.posicao, ordem: sel.ordem),
             onTapEndereco: _onTapEndereco,
+            descida:       _descida,
           ),
 
           Positioned(
@@ -98,9 +188,28 @@ class _GalpaoPageState extends State<GalpaoPage> {
               child: SafeArea(
                 top: false,
                 child: PainelEnderecoGalpao(
-                  toque:  sel,
-                  pilhas: _pilhas,
+                  // A key troca o estado interno (busca, quantidade) ao mudar
+                  // de endereço — resto de digitação de um endereço não pode
+                  // vazar para o outro.
+                  key: ValueKey('${sel.posicao}-${sel.ordem}-${sel.ocupado}'),
+                  toque:               sel,
+                  pilhas:              _pilhas,
+                  catalogo:            _catalogo,
+                  recentes:            _recentes,
+                  carregandoCatalogo:  _carregandoCatalogo,
                   onFechar: () => setState(() => _selecionado = null),
+                  onLancar: (produto, quantidade) =>
+                      _onLancar(sel.posicao, produto, quantidade),
+                  onEsvaziar: () => _onEsvaziar(sel.posicao, sel.ordem),
+                  onIrParaVaga: () {
+                    final pilha = _pilhas[sel.posicao] ?? const [];
+                    if (pilha.length >= GalpaoConfig.niveisMax) return;
+                    setState(() => _selecionado = ToqueGalpao(
+                          posicao: sel.posicao,
+                          ordem:   pilha.length + 1,
+                          ocupado: false,
+                        ));
+                  },
                 ),
               ),
             )
@@ -133,27 +242,123 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
 // ── Painel do endereço ───────────────────────────────────────────────────────
 
-/// Painel inferior com o endereço selecionado — leitura apenas (as ações de
-/// lançar e esvaziar entram na etapa 4). Público para o teste montá-lo com
-/// pilhas de exemplo sem atravessar a cena.
-class PainelEnderecoGalpao extends StatelessWidget {
+/// Painel inferior do endereço selecionado.
+///
+/// Ocupado: produto, quantidade, botão Esvaziar (com a descida animada da
+/// pilha) e o atalho para a vaga do topo — o toque direto no wireframe da
+/// vaga de uma pilha parcial quase sempre acerta o rack embaixo dele (regra
+/// de prioridade do hit-test), então o caminho garantido para lançar em cima
+/// é por aqui.
+///
+/// Vazio: busca de produto (qualquer parte do nome, código, dois termos
+/// soltos), últimos lançados como atalho, quantidade e Lançar.
+class PainelEnderecoGalpao extends StatefulWidget {
   final ToqueGalpao                toque;
   final Map<int, List<RackGalpao>> pilhas;
+  final List<Produto>              catalogo;
+  final List<LancamentoRecente>    recentes;
+  final bool                       carregandoCatalogo;
   final VoidCallback               onFechar;
+  final void Function(Produto produto, double quantidade)? onLancar;
+  final VoidCallback?              onEsvaziar;
+  final VoidCallback?              onIrParaVaga;
 
   const PainelEnderecoGalpao({
     super.key,
     required this.toque,
     required this.pilhas,
     required this.onFechar,
+    this.catalogo           = const [],
+    this.recentes           = const [],
+    this.carregandoCatalogo = false,
+    this.onLancar,
+    this.onEsvaziar,
+    this.onIrParaVaga,
   });
 
   @override
+  State<PainelEnderecoGalpao> createState() => _PainelEnderecoGalpaoState();
+}
+
+class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
+  final _buscaCtrl = TextEditingController();
+  final _qtdCtrl   = TextEditingController();
+
+  List<Produto> _resultados  = const [];
+  Produto?      _produtoSel;
+
+  @override
+  void dispose() {
+    _buscaCtrl.dispose();
+    _qtdCtrl.dispose();
+    super.dispose();
+  }
+
+  void _aoDigitarBusca(String q) {
+    setState(() => _resultados = buscarProdutosGalpao(q, widget.catalogo));
+  }
+
+  void _selecionarProduto(Produto p, {double? quantidade}) {
+    setState(() {
+      _produtoSel = p;
+      _resultados = const [];
+      _buscaCtrl.clear();
+      if (quantidade != null) {
+        _qtdCtrl.text = formatarNumero(quantidade);
+      }
+    });
+  }
+
+  double? get _quantidadeDigitada {
+    final q = double.tryParse(_qtdCtrl.text.replaceAll(',', '.'));
+    return q != null && q > 0 ? q : null;
+  }
+
+  void _lancar() {
+    final produto = _produtoSel;
+    final qtd     = _quantidadeDigitada;
+    if (produto == null || qtd == null) return;
+    widget.onLancar?.call(produto, qtd);
+  }
+
+  Future<void> _confirmarEsvaziar() async {
+    final t     = widget.toque;
+    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
+    final temAcima = t.ordem < pilha.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        title: Text('Esvaziar ${t.posicao} · N${t.ordem}?',
+            style: const TextStyle(color: Colors.white, fontSize: 16)),
+        content: temAcima
+            ? const Text(
+                'Os racks de cima descem um nível e a ordem é renumerada.',
+                style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13))
+            : null,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Esvaziar',
+                style: TextStyle(color: Color(0xFFef5350))),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) widget.onEsvaziar?.call();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final rua   = GalpaoConfig.ruaDe(toque.posicao);
-    final pilha = pilhas[toque.posicao] ?? const <RackGalpao>[];
-    final rack  = toque.ocupado && toque.ordem <= pilha.length
-        ? pilha[toque.ordem - 1]
+    final t     = widget.toque;
+    final rua   = GalpaoConfig.ruaDe(t.posicao);
+    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
+    final rack  = t.ocupado && t.ordem <= pilha.length
+        ? pilha[t.ordem - 1]
         : null;
 
     return Container(
@@ -172,7 +377,7 @@ class PainelEnderecoGalpao extends StatelessWidget {
             children: [
               // Endereço: número global + nível derivado da ordem na pilha.
               Text(
-                '${toque.posicao} · N${toque.ordem}',
+                '${t.posicao} · N${t.ordem}',
                 style: const TextStyle(
                   color:      corCamda,
                   fontSize:   22,
@@ -194,7 +399,7 @@ class PainelEnderecoGalpao extends StatelessWidget {
                 ),
               ),
               GestureDetector(
-                onTap: onFechar,
+                onTap: widget.onFechar,
                 child: const Padding(
                   padding: EdgeInsets.all(4),
                   child: Icon(Icons.close, size: 18, color: Color(0xFF8a9aa8)),
@@ -204,27 +409,20 @@ class PainelEnderecoGalpao extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           if (rack != null)
-            _ConteudoOcupado(rack: rack)
+            _buildOcupado(rack, pilha)
           else
-            _ConteudoVazio(proximaOrdem: toque.ordem),
+            _buildVazio(t),
         ],
       ),
     );
   }
-}
 
-class _ConteudoOcupado extends StatelessWidget {
-  final RackGalpao rack;
+  // ── Endereço ocupado ───────────────────────────────────────────────────────
 
-  const _ConteudoOcupado({required this.rack});
-
-  @override
-  Widget build(BuildContext context) {
-    // Quantidade na unidade de manuseio quando o nome permite deduzir a
-    // embalagem (20L → baldes, 5L → caixas); os litros ficam como texto
-    // secundário. Sem litragem no nome, mostra o número cru mesmo.
+  Widget _buildOcupado(RackGalpao rack, List<RackGalpao> pilha) {
     final embalada = quantidadeEmbalada(rack.produtoNome, rack.quantidade);
     final litros   = '${formatarNumero(rack.quantidade)} L';
+    final temVaga  = pilha.length < GalpaoConfig.niveisMax;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -268,33 +466,308 @@ class _ConteudoOcupado extends StatelessWidget {
             ),
           ],
         ),
-      ],
-    );
-  }
-}
-
-class _ConteudoVazio extends StatelessWidget {
-  final int proximaOrdem;
-
-  const _ConteudoVazio({required this.proximaOrdem});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Icon(Icons.check_box_outline_blank,
-            size: 16, color: Color(0xFF6fcf97)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            'Vaga livre — carga nova entra como N$proximaOrdem, no topo '
-            'da pilha.',
-            style: const TextStyle(color: Color(0xFF6fcf97), fontSize: 12),
-          ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed:
+                    widget.onEsvaziar == null ? null : _confirmarEsvaziar,
+                icon: const Icon(Icons.remove_circle_outline, size: 16),
+                label: const Text('Esvaziar'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFef5350),
+                  side: const BorderSide(color: Color(0x66ef5350)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
+            ),
+            if (temVaga && widget.onIrParaVaga != null) ...[
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: widget.onIrParaVaga,
+                  icon: const Icon(Icons.add, size: 16),
+                  label: Text('Lançar N${pilha.length + 1}'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF6fcf97),
+                    side: const BorderSide(color: Color(0x662e6b46)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ],
     );
   }
+
+  // ── Endereço vazio: lançar ─────────────────────────────────────────────────
+
+  Widget _buildVazio(ToqueGalpao t) {
+    final produto = _produtoSel;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.check_box_outline_blank,
+                size: 16, color: Color(0xFF6fcf97)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Vaga livre — carga nova entra como N${t.ordem}, no topo '
+                'da pilha.',
+                style:
+                    const TextStyle(color: Color(0xFF6fcf97), fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (produto == null) ...[
+          TextField(
+            controller: _buscaCtrl,
+            onChanged:  _aoDigitarBusca,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: _decoracaoCampo(
+                'Buscar produto por nome ou código…', Icons.search),
+          ),
+          if (_resultados.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(
+                children: [
+                  for (final p in _resultados)
+                    InkWell(
+                      onTap: () => _selecionarProduto(p),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 8),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10, height: 10,
+                              decoration: BoxDecoration(
+                                color: p.cor,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                p.nome,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 12),
+                              ),
+                            ),
+                            Text(
+                              p.codigo,
+                              style: const TextStyle(
+                                  color: Color(0xFF8a9aa8), fontSize: 10),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            )
+          else if (_buscaCtrl.text.trim().length >= 2)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                widget.carregandoCatalogo
+                    ? 'Carregando catálogo…'
+                    : widget.catalogo.isEmpty
+                        ? 'Catálogo não carregado — sincronize no mapa da '
+                          'loja (⚙️).'
+                        : 'Nenhum produto encontrado.',
+                style:
+                    const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+              ),
+            )
+          else if (widget.recentes.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.only(top: 8, bottom: 6),
+              child: Text(
+                'ÚLTIMOS LANÇADOS',
+                style: TextStyle(
+                  color:         Color(0xFF8a9aa8),
+                  fontSize:      10,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+            Wrap(
+              spacing: 6, runSpacing: 6,
+              children: [
+                for (final r in widget.recentes)
+                  InkWell(
+                    onTap: () => _selecionarProduto(r.produto,
+                        quantidade: r.quantidade),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161c22),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF232f3a)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8, height: 8,
+                            decoration: BoxDecoration(
+                              color: r.produto.cor,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 180),
+                            child: Text(
+                              r.produto.nome,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ] else ...[
+          // Produto escolhido: chip + quantidade + Lançar.
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF162416),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFF2e6b46)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 10, height: 10,
+                  decoration: BoxDecoration(
+                    color: produto.cor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    produto.nome,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color:      Color(0xFF6fcf97),
+                      fontSize:   12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => setState(() {
+                    _produtoSel = null;
+                    _qtdCtrl.clear();
+                  }),
+                  child: const Icon(Icons.close,
+                      size: 14, color: Color(0xFF8a9aa8)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 110,
+                child: TextField(
+                  controller: _qtdCtrl,
+                  onChanged: (_) => setState(() {}),
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
+                  ],
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: _decoracaoCampo('Litros', null),
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Conversão ao vivo — a pessoa confere em baldes/caixas, não
+              // em litros.
+              Expanded(
+                child: Text(
+                  _quantidadeDigitada == null
+                      ? ''
+                      : quantidadeEmbalada(
+                              produto.nome, _quantidadeDigitada!) ??
+                          '',
+                  style: const TextStyle(
+                      color: Color(0xFF8a9aa8), fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _quantidadeDigitada == null ? null : _lancar,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF2e6b46),
+                padding: const EdgeInsets.symmetric(vertical: 11),
+              ),
+              child: Text('Lançar em ${t.posicao} · N${t.ordem}'),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  InputDecoration _decoracaoCampo(String hint, IconData? icone) =>
+      InputDecoration(
+        hintText:  hint,
+        hintStyle: const TextStyle(color: Color(0x44ffffff), fontSize: 13),
+        prefixIcon: icone == null
+            ? null
+            : Icon(icone, color: const Color(0xFF8a9aa8), size: 18),
+        filled:    true,
+        fillColor: const Color(0xFF161c22),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF232f3a)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF232f3a)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide:
+              const BorderSide(color: Color(0xFF2e6b46), width: 1.5),
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
+      );
 }
 
 class _BotaoRedondo extends StatelessWidget {
