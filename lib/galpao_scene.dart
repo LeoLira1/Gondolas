@@ -21,14 +21,14 @@ import 'scene_gestures.dart';
 // ordem correta de desenho sai do PERCURSO dos índices, de trás para frente,
 // sem comparar nada:
 //
-//   * as 7 ruas são ordenadas entre si (7 elementos, custo desprezível);
+//   * as 8 ruas são ordenadas entre si (8 elementos, custo desprezível);
 //   * dentro da rua, as posições são percorridas das pontas para o meio, na
 //     direção do olho (duas agulhas, O(n) — ver [ordemDeDesenho]);
 //   * dentro da posição, de baixo para cima: a câmera fica sempre acima da
 //     pilha, então o rack mais alto é o mais próximo.
 //
-// Com até 312 racks na tela isso troca um sort de ~900 faces por frame por um
-// percurso linear. É intencional, não descuido: se um dia a grade deixar de
+// Com até 340 racks na tela isso troca um sort de ~1.000 faces por frame por
+// um percurso linear. É intencional, não descuido: se um dia a grade deixar de
 // ser regular, este é o primeiro lugar a rever.
 
 /// Um rack ocupado numa posição do galpão.
@@ -38,7 +38,7 @@ import 'scene_gestures.dart';
 /// descerem, e a ordem de todos eles muda. Ver a discussão em
 /// galpao_config.dart.
 class RackGalpao {
-  final int    posicao;        // 1–78
+  final int    posicao;        // 1–85
   final int    ordem;          // 1–GalpaoConfig.niveisMax
   final String produtoCodigo;
   final String produtoNome;
@@ -59,7 +59,7 @@ class RackGalpao {
 /// numa posição com vaga o toque no contorno devolve a PRÓXIMA ordem livre,
 /// que é onde uma carga nova entraria (produto novo sempre entra no topo).
 class ToqueGalpao {
-  final int  posicao;  // 1–78
+  final int  posicao;  // 1–85
   final int  ordem;    // 1–GalpaoConfig.niveisMax
   final bool ocupado;
 
@@ -158,9 +158,9 @@ List<PosicaoGalpao> ordemDeDesenho(RuaGalpao rua, double coordOlho) {
 
 /// As ruas da mais longe para a mais perto do olho.
 ///
-/// São 7: ordenar é mais barato e mais claro que qualquer esquema esperto, e
-/// o resultado não depende de as ruas serem paralelas (a Rua 2 é perpendicular
-/// às outras).
+/// São 8: ordenar é mais barato e mais claro que qualquer esquema esperto, e
+/// o resultado não depende de as ruas serem paralelas (as Ruas 2 e 8 são
+/// perpendiculares às outras).
 List<RuaGalpao> ruasPorProfundidade(Vec3 olho, {Set<int>? visiveis}) {
   double distancia(RuaGalpao r) {
     final cx = r.eixo == EixoRua.z ? r.coordFixa : r.centro;
@@ -181,7 +181,7 @@ List<RuaGalpao> ruasPorProfundidade(Vec3 olho, {Set<int>? visiveis}) {
 class GalpaoPainter extends CustomPainter {
   final Camera camera;
 
-  /// Pilhas por posição (1–78), cada uma ordenada por [RackGalpao.ordem].
+  /// Pilhas por posição (1–85), cada uma ordenada por [RackGalpao.ordem].
   /// Posição ausente ou lista vazia = vaga livre no chão.
   final Map<int, List<RackGalpao>> pilhas;
 
@@ -211,7 +211,7 @@ class GalpaoPainter extends CustomPainter {
   /// preso a (posição, ordem) acenderia o rack errado depois disso.
   final Set<String> codigosConferencia;
 
-  /// Posição (1–78) → nº de produtos pendentes ali, para o badge contador.
+  /// Posição (1–85) → nº de produtos pendentes ali, para o badge contador.
   final Map<int, int> contagemConferencia;
 
   GalpaoPainter(

@@ -11,7 +11,7 @@ import 'galpao_scene.dart' show RackGalpao;
 import 'models.dart' show localTipoGalpao;
 import 'turso_service.dart';
 
-/// Persistência do galpão: as 78 posições (estrutura) e os racks empilhados
+/// Persistência do galpão: as 85 posições (estrutura) e os racks empilhados
 /// (ocupação).
 ///
 /// Duas tabelas próprias — galpao_posicoes e galpao_racks — porque a pilha
@@ -79,8 +79,8 @@ class GalpaoService {
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
   ///
-  /// Uma consulta só (são no máximo 312 linhas) — percorrer posição a posição
-  /// custaria 78 idas ao banco para pintar um frame.
+  /// Uma consulta só (são no máximo 340 linhas) — percorrer posição a posição
+  /// custaria 85 idas ao banco para pintar um frame.
   Future<Map<int, List<RackGalpao>>> carregarPilhas() async {
     final client = await _conexao();
     if (client == null) return {};

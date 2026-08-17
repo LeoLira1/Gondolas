@@ -942,10 +942,8 @@ class _BannerConferencia extends StatelessWidget {
     // dia só de herbicida e adubo tem conferência de verdade, ainda que nenhuma
     // estrutura da loja acenda.
     final vazio = !carregando && (r == null || (r.vazioHoje && r.galpaoVazioHoje));
-    final temSemEndereco = r != null && r.semEndereco.isNotEmpty;
-    final temFiltrados   = r != null && r.totalFiltradosDeposito > 0;
-    final filtradosTexto =
-        temFiltrados ? ' · ${r.totalFiltradosDeposito} depósito (filtrados)' : '';
+    final temSemEndereco = !carregando && r != null && r.semEndereco.isNotEmpty;
+    final temFiltrados   = !carregando && r != null && r.totalFiltradosDeposito > 0;
     final temForaDoMapa  = !carregando && foraDoMapa.isNotEmpty;
     final noGalpao       = r == null ? 0 : r.totalProdutosGalpao;
     final temGalpao      = !carregando && noGalpao > 0;
@@ -957,94 +955,146 @@ class _BannerConferencia extends StatelessWidget {
         border: Border.all(color: corConferenciaCiano.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(children: [
-        Icon(
-          vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
-          color: corConferenciaCiano,
-          size: 15,
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: carregando
-              ? const Text(
-                  'Carregando conferência do dia...',
-                  style: TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
-                )
-              : GestureDetector(
-                  onTap: (temSemEndereco || temFiltrados) ? onVerSemEndereco : null,
-                  child: Text(
-                    vazio
-                        ? 'Nenhuma conferência pendente hoje 🎉$filtradosTexto'
+      // Texto e atalhos em LINHAS SEPARADAS de propósito. Com os dois na mesma
+      // linha, os chips (largura fixa) comiam a largura do texto e a frase
+      // quebrava uma letra por linha — o banner virava uma coluna de 500 px de
+      // altura e cobria justamente as gôndolas que ele manda conferir.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(children: [
+            Icon(
+              vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
+              color: corConferenciaCiano,
+              size: 15,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                carregando
+                    ? 'Carregando conferência do dia...'
+                    : vazio
+                        ? 'Nenhuma conferência pendente hoje 🎉'
                         : r!.vazioHoje
-                            // Nenhuma estrutura da loja acesa, mas o galpão
-                            // tem racks a conferir: o chip ao lado é o caminho.
+                            // Nenhuma estrutura da loja acesa, mas o galpão tem
+                            // racks a conferir: o chip abaixo é o caminho.
                             ? 'Nada a conferir na loja hoje — a conferência é '
-                              'no galpão$filtradosTexto'
-                            : 'Conferência do dia: ${r.totalProdutos} produto(s) · '
-                              '${r.totalEstruturas} estrutura(s)'
-                              '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
-                              '$filtradosTexto',
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
+                              'no galpão'
+                            // Só os dois números que valem para o mapa: o resto
+                            // virou chip, e chip não empurra o texto.
+                            : 'Conferência do dia: '
+                              '${pluralizar(r.totalProdutos, 'produto')} · '
+                              '${pluralizar(r.totalEstruturas, 'estrutura')}',
+                // Teto de altura: mesmo na tela mais estreita o banner não
+                // passa de duas linhas de texto.
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: carregando ? const Color(0xFFb0ada8) : Colors.white,
+                  fontSize: 12,
                 ),
-        ),
-        if (temGalpao) ...[
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: onVerGalpao,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: corConferenciaCiano.withValues(alpha: 0.16),
-                border: Border.all(
-                    color: corConferenciaCiano.withValues(alpha: 0.6)),
-                borderRadius: BorderRadius.circular(999),
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.warehouse_outlined,
-                    size: 12, color: corConferenciaCiano),
-                const SizedBox(width: 4),
-                Text(
-                  '$noGalpao no galpão',
-                  style: const TextStyle(
-                      color: corConferenciaCiano, fontSize: 11),
-                ),
-              ]),
             ),
-          ),
-        ],
-        if (temForaDoMapa) ...[
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: onVerForaDoMapa,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0x33d9a441),
-                border: Border.all(color: const Color(0x99d9a441)),
-                borderRadius: BorderRadius.circular(999),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
+              onPressed: carregando ? null : onRefresh,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              tooltip: 'Atualizar',
+            ),
+          ]),
+          if (temGalpao || temForaDoMapa || temSemEndereco || temFiltrados)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (temGalpao)
+                    _ChipBanner(
+                      icone:   Icons.warehouse_outlined,
+                      texto:   '$noGalpao no galpão',
+                      cor:     corConferenciaCiano,
+                      corFundo: corConferenciaCiano.withValues(alpha: 0.16),
+                      corBorda: corConferenciaCiano.withValues(alpha: 0.6),
+                      onTap:   onVerGalpao,
+                    ),
+                  if (temForaDoMapa)
+                    _ChipBanner(
+                      icone:   Icons.location_off_outlined,
+                      texto:   '${foraDoMapa.length} fora do mapa',
+                      cor:     const Color(0xFFd9a441),
+                      corFundo: const Color(0x33d9a441),
+                      corBorda: const Color(0x99d9a441),
+                      onTap:   onVerForaDoMapa,
+                    ),
+                  // Os dois contadores que antes viviam no fim da frase: como
+                  // abrem a mesma folha de detalhes, viraram chips do mesmo
+                  // toque em vez de texto comprido.
+                  if (temSemEndereco)
+                    _ChipBanner(
+                      icone:   Icons.help_outline,
+                      texto:   '${r.semEndereco.length} sem endereço',
+                      cor:     const Color(0xFFa8b6c2),
+                      corFundo: const Color(0x22a8b6c2),
+                      corBorda: const Color(0x66a8b6c2),
+                      onTap:   onVerSemEndereco,
+                    ),
+                  if (temFiltrados)
+                    _ChipBanner(
+                      icone:   Icons.filter_alt_outlined,
+                      texto:   '${r.totalFiltradosDeposito} de depósito',
+                      cor:     const Color(0xFF7c8b98),
+                      corFundo: const Color(0x1A7c8b98),
+                      corBorda: const Color(0x557c8b98),
+                      onTap:   onVerSemEndereco,
+                    ),
+                ],
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.location_off_outlined,
-                    size: 12, color: Color(0xFFd9a441)),
-                const SizedBox(width: 4),
-                Text(
-                  '${foraDoMapa.length} fora do mapa',
-                  style: const TextStyle(color: Color(0xFFd9a441), fontSize: 11),
-                ),
-              ]),
             ),
-          ),
         ],
-        const SizedBox(width: 4),
-        IconButton(
-          icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
-          onPressed: carregando ? null : onRefresh,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          tooltip: 'Atualizar',
+      ),
+    );
+  }
+}
+
+/// Atalho do banner de conferência: pílula com ícone e contagem. Os dois
+/// atalhos (galpão e fora do mapa) só diferem em cor e texto, então dividem a
+/// mesma forma — assim eles não podem sair de sintonia.
+class _ChipBanner extends StatelessWidget {
+  final IconData     icone;
+  final String       texto;
+  final Color        cor, corFundo, corBorda;
+  final VoidCallback onTap;
+
+  const _ChipBanner({
+    required this.icone,
+    required this.texto,
+    required this.cor,
+    required this.corFundo,
+    required this.corBorda,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color:  corFundo,
+          border: Border.all(color: corBorda),
+          borderRadius: BorderRadius.circular(999),
         ),
-      ]),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icone, size: 12, color: cor),
+          const SizedBox(width: 4),
+          Text(texto, style: TextStyle(color: cor, fontSize: 11)),
+        ]),
+      ),
     );
   }
 }
@@ -1296,7 +1346,7 @@ class _LocationCard extends StatelessWidget {
         : ehGalpaoAqui
             ? corCamda
             : corEstanteLoja;
-    // No galpão o número JÁ é o endereço (1–78, único no galpão inteiro), sem
+    // No galpão o número JÁ é o endereço (1–85, único no galpão inteiro), sem
     // letra na frente — é assim que a etiqueta física está no chão.
     final prefixo = tipo == 'gondola'
         ? 'G'

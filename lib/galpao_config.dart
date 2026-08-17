@@ -16,7 +16,7 @@
 //    código de endereço textual (nada de 'GALPAO-52-N3': tal referência vence
 //    na primeira movimentação).
 //
-// A numeração das posições é GLOBAL e contínua de 1 a 78 — não reinicia por
+// A numeração das posições é GLOBAL e contínua de 1 a 85 — não reinicia por
 // rua. O endereço exibido é '<número> · N<nível>' (ex.: '52 · N3'); a rua é
 // derivada, mostrada só para orientar quem vai buscar.
 //
@@ -29,8 +29,9 @@
 
 /// Eixo ao longo do qual as posições de uma rua se sucedem.
 ///
-/// Seis das sete ruas correm em Z (o comprimento do galpão); só a Rua 2, no
-/// topo do croqui, corre em X.
+/// Seis das oito ruas correm em Z (o comprimento do galpão); as duas que
+/// atravessam as pontas do croqui — a Rua 2 no topo e a Rua 8 no fundo —
+/// correm em X.
 enum EixoRua { x, z }
 
 /// Uma rua do galpão: uma fileira de posições no chão.
@@ -44,13 +45,14 @@ enum EixoRua { x, z }
 /// atravessa o topo para a esquerda, desce pela esquerda) — útil para uma
 /// futura rota de separação.
 class RuaGalpao {
-  /// Número da rua, 1–7, como está etiquetado no galpão.
+  /// Número da rua, 1–8, como está etiquetado no galpão.
   final int numero;
 
   /// Eixo ao longo do qual as posições se sucedem.
   final EixoRua eixo;
 
-  /// Coordenada FIXA da rua: x para as ruas de eixo Z, z para a Rua 2.
+  /// Coordenada FIXA da rua: x para as ruas de eixo Z, z para as de eixo X
+  /// (Ruas 2 e 8).
   final double coordFixa;
 
   /// Centro da rua ao longo do seu eixo (zc para eixo Z, xc para eixo X).
@@ -89,13 +91,13 @@ class RuaGalpao {
       numeroPosicao >= primeiroNumero && numeroPosicao <= ultimoNumero;
 }
 
-/// Uma das 78 posições de chão do galpão: a vaga onde uma pilha de até
+/// Uma das 85 posições de chão do galpão: a vaga onde uma pilha de até
 /// [GalpaoConfig.niveisMax] racks se apoia.
 ///
 /// Não guarda nível nenhum de propósito — o nível é a ordem do rack na pilha,
 /// e essa ordem é dado de ocupação, não de estrutura.
 class PosicaoGalpao {
-  /// Número global 1–78, único no galpão inteiro. É o endereço.
+  /// Número global 1–85, único no galpão inteiro. É o endereço.
   final int numero;
 
   /// Rua a que a posição pertence — informação derivada, para orientação.
@@ -113,7 +115,8 @@ class PosicaoGalpao {
   });
 
   /// Tamanho da posição no eixo X. O lado de 1,20 m do rack corre ao longo da
-  /// rua; nas ruas de eixo Z isso deixa 1,00 m em X, e na Rua 2 é o contrário.
+  /// rua; nas ruas de eixo Z isso deixa 1,00 m em X, e nas de eixo X (Ruas 2 e
+  /// 8) é o contrário.
   double get tamanhoX => rua.eixo == EixoRua.z
       ? GalpaoConfig.larguraRack
       : GalpaoConfig.comprimentoRack;
@@ -130,7 +133,7 @@ class PosicaoGalpao {
       : (x, z + rua.ladoCorredor * (tamanhoZ / 2 + GalpaoConfig.recuoEtiqueta));
 }
 
-/// Estrutura fixa do galpão: medidas do rack, tabela das ruas e as 78 posições
+/// Estrutura fixa do galpão: medidas do rack, tabela das ruas e as 85 posições
 /// derivadas dela.
 class GalpaoConfig {
   // ── Medidas do rack (metros) ───────────────────────────────────────────────
@@ -165,7 +168,7 @@ class GalpaoConfig {
 
   // ── Tabela das ruas ────────────────────────────────────────────────────────
   //
-  // 7 ruas, 78 posições, 312 endereços (78 × 4 níveis).
+  // 8 ruas, 85 posições, 340 endereços (85 × 4 níveis).
   //
   //   Rua 1 │  1–14 │ 14 │ fileira simples (lado direito / perímetro)
   //   Rua 2 │ 15–25 │ 11 │ fileira simples, confirmada (topo, na horizontal)
@@ -174,6 +177,7 @@ class GalpaoConfig {
   //   Rua 5 │ 47–56 │ 10 │ encostada fundo com fundo na Rua 4, confirmado
   //   Rua 6 │ 57–67 │ 11 │ encostada fundo com fundo na Rua 7, confirmado
   //   Rua 7 │ 68–78 │ 11 │ encostada fundo com fundo na Rua 6, confirmado
+  //   Rua 8 │ 79–85 │  7 │ fileira simples, na horizontal, fechando o FUNDO
   static const List<RuaGalpao> ruas = [
     RuaGalpao(
       numero: 1, eixo: EixoRua.z, coordFixa: 8.30, centro: 1.00,
@@ -216,21 +220,37 @@ class GalpaoConfig {
       quantidade: 11, primeiroNumero: 68,
       primeiroNoFim: false, ladoCorredor: 1,
     ),
+    // Rua 8: a segunda fileira na horizontal, fechando o FUNDO do galpão —
+    // espelho da Rua 2, do outro lado das ruas de eixo Z. O z de 11,30 põe a
+    // fileira logo depois da ponta da Rua 1 (que termina em z = 10,31), com a
+    // mesma folga de corredor que a Rua 2 tem na ponta oposta.
+    //
+    // É mais curta que a Rua 2 (7 posições contra 11) e alinhada pela
+    // ESQUERDA: o croqui mostra o nº 79 na mesma altura do começo da Rua 2
+    // (x = -6,20) e a fileira andando para a direita até o 85, então o centro
+    // é -6,20 + 3 passos = -2,18. A ponta direita do fundo fica livre.
+    RuaGalpao(
+      numero: 8, eixo: EixoRua.x, coordFixa: 11.30, centro: -2.18,
+      quantidade: 7, primeiroNumero: 79,
+      // Ao contrário da Rua 2, a numeração sobe com o X: nº 79 no extremo X
+      // negativo (lado da Rua 3), nº 85 em direção ao meio do galpão.
+      primeiroNoFim: false, ladoCorredor: -1,
+    ),
   ];
 
-  /// Total de posições de chão do galpão (contado no galpão: 78).
+  /// Total de posições de chão do galpão (contado no galpão: 85).
   static int get totalPosicoes =>
       ruas.fold(0, (soma, r) => soma + r.quantidade);
 
   /// Total de endereços possíveis: posições × níveis.
   static int get totalEnderecos => totalPosicoes * niveisMax;
 
-  // ── Seed das 78 posições ───────────────────────────────────────────────────
+  // ── Seed das 85 posições ───────────────────────────────────────────────────
 
   static List<PosicaoGalpao>? _cachePosicoes;
   static Map<int, PosicaoGalpao>? _cachePorNumero;
 
-  /// As 78 posições, em ordem de número global (1 → 78).
+  /// As 85 posições, em ordem de número global (1 → 85).
   ///
   /// Memoizada e imutável: a cena, o hit-test e os rótulos pedem esta lista o
   /// tempo todo, e ela é geometria fixa — remontá-la a cada frame seria lixo
@@ -238,7 +258,7 @@ class GalpaoConfig {
   static List<PosicaoGalpao> get posicoes =>
       _cachePosicoes ??= List.unmodifiable(_montarPosicoes());
 
-  /// Posição pelo número global, ou null se fora de 1–78.
+  /// Posição pelo número global, ou null se fora de 1–85.
   static PosicaoGalpao? porNumero(int numero) {
     final index = _cachePorNumero ??= {
       for (final p in posicoes) p.numero: p,
@@ -269,7 +289,7 @@ class GalpaoConfig {
     return index[numeroRua] ?? const <PosicaoGalpao>[];
   }
 
-  /// Rua a que um número de posição pertence, ou null se fora de 1–78.
+  /// Rua a que um número de posição pertence, ou null se fora de 1–85.
   static RuaGalpao? ruaDe(int numeroPosicao) {
     for (final r in ruas) {
       if (r.contem(numeroPosicao)) return r;

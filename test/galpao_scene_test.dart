@@ -71,7 +71,7 @@ void main() {
       // Olho do lado direito do galpão (+X), fora dele.
       const olho = Vec3(60, 20, 1);
       final ordem = ruasPorProfundidade(olho);
-      expect(ordem.length, 7);
+      expect(ordem.length, 8);
       var anterior = double.infinity;
       for (final r in ordem) {
         final cx = r.eixo == EixoRua.z ? r.coordFixa : r.centro;
@@ -87,11 +87,12 @@ void main() {
     });
 
     test('a ordem das ruas acompanha o olho, não é fixa', () {
-      // Vista do topo do croqui (Z bem negativo): a Rua 2 passa a ser a da
-      // frente e a Rua 1, a mais distante. Se a ordem fosse pré-calculada uma
-      // vez, girar a câmera pintaria as ruas na ordem errada.
+      // Vista do topo do croqui (Z bem negativo): a Rua 2 (que atravessa esse
+      // topo) passa a ser a da frente e a Rua 8, no fundo oposto, a mais
+      // distante. Se a ordem fosse pré-calculada uma vez, girar a câmera
+      // pintaria as ruas na ordem errada.
       final doTopo = ruasPorProfundidade(const Vec3(0, 20, -50));
-      expect(doTopo.first.numero, 1);
+      expect(doTopo.first.numero, 8);
       expect(doTopo.last.numero, 2);
     });
 
