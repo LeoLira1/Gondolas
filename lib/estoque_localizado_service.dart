@@ -2,16 +2,6 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'models.dart';
 import 'turso_service.dart';
 
-/// Valor de `local_tipo` dos endereços do galpão em estoque_localizado.
-///
-/// A tabela é COMPARTILHADA com os apps irmãos (dashboard, inventariocamda,
-/// camda-estoque): é dela que saem o total do inventário cíclico e o Modo
-/// Conferência. O galpão entra nela como um terceiro tipo, ao lado de
-/// 'gondola' e 'estante', para que o estoque de lá conte nos mesmos totais —
-/// com local_num = número da posição (1–78), face_ou_coluna = 0 (o galpão não
-/// tem face nem coluna) e andar_ou_nivel = ordem na pilha.
-const String localTipoGalpao = 'galpao';
-
 /// Uma linha de estoque_localizado: quantidade de um produto num endereço
 /// físico (gôndola, estante ou galpão).
 class EnderecoLocalizado {

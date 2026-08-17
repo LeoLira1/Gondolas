@@ -6,9 +6,9 @@ import 'package:libsql_dart/libsql_dart.dart';
 // Se um upgrade do libsql_dart mover o arquivo, é aqui que quebra.
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 
-import 'estoque_localizado_service.dart' show localTipoGalpao;
 import 'galpao_config.dart';
 import 'galpao_scene.dart' show RackGalpao;
+import 'models.dart' show localTipoGalpao;
 import 'turso_service.dart';
 
 /// Persistência do galpão: as 78 posições (estrutura) e os racks empilhados

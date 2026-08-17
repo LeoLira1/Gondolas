@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/estoque_localizado_service.dart';
 import 'package:gondola_camda/galpao_service.dart';
+import 'package:gondola_camda/models.dart' show localTipoGalpao;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {

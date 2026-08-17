@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart'
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'galpao_config.dart';
 import 'layout_cache.dart';
 import 'models.dart';
 import 'palete_registry.dart';
@@ -1040,8 +1041,54 @@ class TursoService {
     final resultados = await Future.wait([
       _buscarNasGondolas(like),
       _buscarNasEstantes(like),
+      _buscarNoGalpao(like),
     ]);
-    return _anexarQuantidades([...resultados[0], ...resultados[1]]);
+    return _anexarQuantidades(
+        [...resultados[0], ...resultados[1], ...resultados[2]]);
+  }
+
+  /// Produtos do galpão que casam com a busca. Lê galpao_racks (a ocupação),
+  /// não o espelho em estoque_localizado: é lá que estão o nome do produto e
+  /// a ordem na pilha.
+  ///
+  /// Sem isto, um produto lançado no galpão simplesmente não existia para a
+  /// busca do mapa — era o caminho pelo qual alguém procurava um herbicida e
+  /// concluía que ele não estava na loja.
+  Future<List<ProdutoEncontrado>> _buscarNoGalpao(String like) async {
+    try {
+      final stmt = await _client!.prepare(
+        'SELECT posicao, ordem, produto_codigo, produto_nome, quantidade '
+        'FROM galpao_racks '
+        'WHERE produto_nome LIKE ? OR produto_codigo LIKE ? '
+        'ORDER BY produto_nome, posicao, ordem LIMIT 20',
+      );
+      final rows = await stmt.query(positional: [like, like]);
+      return (rows as List<dynamic>).map((dynamic row) {
+        final r       = row as Map<String, dynamic>;
+        final posicao = r['posicao'] as int? ?? 0;
+        final ordem   = r['ordem']   as int? ?? 1;
+        final rua     = GalpaoConfig.ruaDe(posicao);
+        return ProdutoEncontrado(
+          nome:           r['produto_nome']   as String? ?? '',
+          tipo:           localTipoGalpao,
+          numero:         posicao,
+          // O endereço do galpão é '<número> · N<nível>'; a rua é derivada e
+          // entra só para orientar quem vai buscar.
+          nivelDescricao: rua == null
+              ? 'N$ordem'
+              : 'Rua ${rua.numero} · N$ordem',
+          produtoCodigo:  r['produto_codigo'] as String? ?? '',
+          nivel:          ordem,
+          // A quantidade vem da própria linha do rack — não precisa esperar
+          // o espelho em estoque_localizado.
+          quantidade:     (r['quantidade'] as num?)?.toDouble(),
+        );
+      }).toList();
+    } catch (_) {
+      // Tabela ainda não criada (replica antes do bootstrap): a busca nas
+      // outras estruturas não pode cair por causa disso.
+      return [];
+    }
   }
 
   /// Anexa a cada resultado a quantidade contada (estoque_localizado) no seu
@@ -1064,7 +1111,13 @@ class TursoService {
       );
       final rows = await stmt.query(positional: codigos);
 
-      // gôndola: 'g|codigo|num|face|andar' · estante: 'e|codigo|num|nivel'
+      // gôndola: 'g|codigo|num|face|andar' · estante: 'e|codigo|num|nivel' ·
+      // galpão: 'x|codigo|posicao|ordem'.
+      //
+      // O prefixo por TIPO não é enfeite: os números de posição do galpão
+      // (1–78) se sobrepõem aos de estante (1–21), então uma chave montada só
+      // com o número faria a quantidade do galpão ser somada dentro da
+      // estante de mesmo número.
       final somas = <String, double>{};
       for (final dynamic row in rows as List<dynamic>) {
         final r        = row as Map<String, dynamic>;
@@ -1076,13 +1129,19 @@ class TursoService {
         final qtd      = (r['quantidade'] as num?)?.toDouble() ?? 0;
         // Estante: mesmo clamp de nível usado em _buscarNasEstantes, pra
         // chave casar com o resultado exibido.
-        final chave = tipo == 'gondola'
-            ? 'g|$codigo|$localNum|$fc|$an'
-            : 'e|$codigo|$localNum|${an.clamp(0, niveisProdutoPara(localNum) - 1)}';
+        final chave = switch (tipo) {
+          'gondola'      => 'g|$codigo|$localNum|$fc|$an',
+          localTipoGalpao => 'x|$codigo|$localNum|$an',
+          _ =>
+            'e|$codigo|$localNum|${an.clamp(0, niveisProdutoPara(localNum) - 1)}',
+        };
         somas[chave] = (somas[chave] ?? 0) + qtd;
       }
 
       return encontrados.map((p) {
+        // O galpão já traz a quantidade da própria linha do rack; o espelho
+        // em estoque_localizado só confirmaria o mesmo número.
+        if (p.tipo == localTipoGalpao) return p;
         final chave = p.tipo == 'gondola'
             ? 'g|${p.produtoCodigo}|${p.numero}|${p.face}|${p.andar}'
             : 'e|${p.produtoCodigo}|${p.numero}|${p.nivel}';

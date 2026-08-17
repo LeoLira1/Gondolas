@@ -10,6 +10,7 @@ import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
 import 'expositor_nellore_scene.dart';
 import 'galpao_page.dart';
+import 'galpao_scene.dart' show corCamda;
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
@@ -274,7 +275,13 @@ class _LojaPageState extends State<LojaPage> {
             andar:         _produtoSelecionado!.andar,
           )
         : null;
-    if (tipo == 'gondola') {
+    if (tipo == localTipoGalpao) {
+      // O galpão não tem maquete no mapa da loja (é outro prédio): a busca
+      // leva direto à tela dele, isolando a rua e marcando a posição.
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => GalpaoPage(posicaoInicial: numero),
+      ));
+    } else if (tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
           gondolaInicial:   numero,
@@ -581,24 +588,29 @@ class _LojaPageState extends State<LojaPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Linha: campo de busca + legenda + toggle conferência
+                    // O campo de busca fica SOZINHO na linha, ocupando a
+                    // largura toda. Ele dividia a linha com três botões de
+                    // 46 px e a legenda, e num celular sobrava tão pouco que
+                    // o nome do produto não cabia — os nomes cadastrados são
+                    // longos ('HERBICIDA BORAL 500 SC 20L'), então é a busca
+                    // que precisa do espaço, não os botões.
+                    _SearchBox(
+                      controller:    _searchCtrl,
+                      focusNode:     _searchFocus,
+                      sugestoes:     _sugestoes,
+                      showSugestoes: _showSugestoes,
+                      buscando:      _buscando,
+                      semResultados: _semResultados,
+                      onChanged:     _onSearchChanged,
+                      onSelecionar:  _selecionarProduto,
+                      onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
+                    ),
+                    const SizedBox(height: 8),
+                    // Segunda linha: ações e legenda. Sincronizar, galpão e
+                    // conferência à esquerda; a legenda encostada à direita.
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: _SearchBox(
-                            controller:    _searchCtrl,
-                            focusNode:     _searchFocus,
-                            sugestoes:     _sugestoes,
-                            showSugestoes: _showSugestoes,
-                            buscando:      _buscando,
-                            semResultados: _semResultados,
-                            onChanged:     _onSearchChanged,
-                            onSelecionar:  _selecionarProduto,
-                            onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
                         _SyncButton(
                           sincronizando: _sincronizando,
                           onTap: _sincronizar,
@@ -615,7 +627,7 @@ class _LojaPageState extends State<LojaPage> {
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
                         ),
-                        const SizedBox(width: 10),
+                        const Spacer(),
                         const _LegendRow(),
                       ],
                     ),
@@ -1107,7 +1119,7 @@ class _SearchBox extends StatelessWidget {
                                           const SizedBox(width: 5),
                                           Flexible(
                                             child: Text(
-                                              '${p.tipo == 'gondola' ? 'Gôndola' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
+                                              '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
                                               ' nº ${p.numero} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
@@ -1225,19 +1237,30 @@ class _LocationCard extends StatelessWidget {
 
     final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
     final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
-    final cor     = tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+    final ehGalpaoAqui = tipo == localTipoGalpao;
+    final cor = tipo == 'gondola'
+        ? corGondolaLoja
+        : ehGalpaoAqui
+            ? corCamda
+            : corEstanteLoja;
+    // No galpão o número JÁ é o endereço (1–78, único no galpão inteiro), sem
+    // letra na frente — é assim que a etiqueta física está no chão.
     final prefixo = tipo == 'gondola'
         ? 'G'
-        : ehPaleteAqui
-            ? 'P'
-            : 'E';
+        : ehGalpaoAqui
+            ? ''
+            : ehPaleteAqui
+                ? 'P'
+                : 'E';
     final tipoLabel = tipo == 'gondola'
         ? 'Gôndola'
-        : ehPaleteAqui
-            ? 'Palete'
-            : ehParede
-                ? 'Estante Parede'
-                : 'Estante';
+        : ehGalpaoAqui
+            ? 'Galpão'
+            : ehPaleteAqui
+                ? 'Palete'
+                : ehParede
+                    ? 'Estante Parede'
+                    : 'Estante';
     // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
     // resultado da busca quando há produto selecionado.
     final numeroTitulo = ehParede

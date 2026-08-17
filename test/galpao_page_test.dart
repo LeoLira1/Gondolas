@@ -385,6 +385,50 @@ void main() {
       expect(find.text('20 baldes'), findsOneWidget);
     });
 
+    testWidgets('posicaoInicial abre isolando a rua e marcando o endereço',
+        (tester) async {
+      // É por aqui que a busca do mapa da loja entra quando o produto está
+      // no galpão.
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          posicaoInicial: 52,
+          pilhasIniciais: {
+            52: const [
+              RackGalpao(
+                  posicao: 52, ordem: 1, produtoCodigo: 'A',
+                  produtoNome: 'PRODUTO A 20L', quantidade: 900),
+              RackGalpao(
+                  posicao: 52, ordem: 2, produtoCodigo: 'B',
+                  produtoNome: 'HERBICIDA BORAL 500 SC 20L', quantidade: 1800),
+            ],
+          },
+        ),
+      ));
+      await tester.pump();
+
+      // Abre no rack do topo da posição pedida…
+      expect(find.text('52 · N2'), findsOneWidget);
+      expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
+      // …com a Rua 5 isolada: a posição 1 (Rua 1) não responde mais ao toque.
+      await tester.tapAt(centroNaTela(tester, 1, 1));
+      await tester.pump();
+      expect(find.text('1 · N1'), findsNothing);
+    });
+
+    testWidgets('posicaoInicial numa vaga vazia marca o chão', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: [],
+          pilhasIniciais: {},
+          posicaoInicial: 26,
+        ),
+      ));
+      await tester.pump();
+      expect(find.text('26 · N1'), findsOneWidget);
+      expect(find.textContaining('carga nova entra como N1'), findsOneWidget);
+    });
+
     testWidgets('número fora de 1–78 avisa e não muda nada', (tester) async {
       await tester.pumpWidget(const MaterialApp(
           home: GalpaoPage(catalogoInicial: [])));

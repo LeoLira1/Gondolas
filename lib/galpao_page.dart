@@ -25,7 +25,16 @@ class GalpaoPage extends StatefulWidget {
   final Map<int, List<RackGalpao>>? pilhasIniciais;
   final List<Produto>?             catalogoInicial;
 
-  const GalpaoPage({super.key, this.pilhasIniciais, this.catalogoInicial});
+  /// Abrir já isolando a rua desta posição e marcando o endereço — é por onde
+  /// a busca do mapa da loja entra quando o produto está no galpão.
+  final int? posicaoInicial;
+
+  const GalpaoPage({
+    super.key,
+    this.pilhasIniciais,
+    this.catalogoInicial,
+    this.posicaoInicial,
+  });
 
   @override
   State<GalpaoPage> createState() => _GalpaoPageState();
@@ -128,7 +137,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
     } else {
       _carregarCatalogo();
     }
-    if (_persistindo) _carregarPilhas();
+    if (_persistindo) {
+      _carregarPilhas();
+    } else {
+      _marcarPosicaoInicial();
+    }
     // Uma sincronização traz racks lançados em outro aparelho — o mesmo
     // gancho que as outras telas usam para se atualizar sem reabrir.
     TursoService().dataRevision.addListener(_aoAtualizarDados);
@@ -150,6 +163,27 @@ class _GalpaoPageState extends State<GalpaoPage> {
         ..clear()
         ..addAll(pilhas);
       _carregandoPilhas = false;
+    });
+    _marcarPosicaoInicial();
+  }
+
+  /// Aplica [GalpaoPage.posicaoInicial], quando informada: isola a rua e marca
+  /// o endereço, do mesmo jeito que o campo "ir para o nº". Roda DEPOIS das
+  /// pilhas chegarem — antes disso não daria para saber se a posição está
+  /// ocupada nem em que nível está o rack do topo.
+  void _marcarPosicaoInicial() {
+    final numero = widget.posicaoInicial;
+    if (numero == null || !mounted) return;
+    final posicao = GalpaoConfig.porNumero(numero);
+    if (posicao == null) return;
+    final pilha = _pilhas[numero] ?? const <RackGalpao>[];
+    setState(() {
+      _ruasVisiveis = {posicao.rua.numero};
+      _selecionado = ToqueGalpao(
+        posicao: numero,
+        ordem:   pilha.isEmpty ? 1 : pilha.length,
+        ocupado: pilha.isNotEmpty,
+      );
     });
   }
 
