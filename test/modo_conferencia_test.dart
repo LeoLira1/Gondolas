@@ -138,6 +138,47 @@ void main() {
       expect(r.vazioHoje, isFalse);
     });
 
+    test('acessório de lubrificação acende a gôndola — não é de depósito', () {
+      // O caso real: ENGRAXADEIRA em ACESSORIOS DE LUBRIFICACAO casava com a
+      // keyword 'LUBRIFIC' e a gôndola 1 não acendia no Modo Conferência.
+      final item = ItemPendente(
+        codigo:     '165816',
+        produto:    'ENGRAXADEIRA 5KG MAC LUB MAC 35 EXPORT',
+        categoria:  'ACESSORIOS DE LUBRIFICAÇÃO',
+        qtdEstoque: 1,
+      );
+
+      expect(ehCategoriaDeDeposito(item), isFalse);
+
+      final r = _montar([item], gondolas: const {'165816': {1}});
+      expect(r.estruturas['gondola:1']!.itens.single.codigo, '165816');
+      expect(r.totalProdutos, 1);
+      expect(r.totalFiltradosDeposito, 0);
+    });
+
+    test('acessório sem endereço nenhum vai pro "sem endereço", não some', () {
+      final r = _montar([
+        _item('ACESS1', categoria: 'ACESSORIOS DE LUBRIFICACAO'),
+      ]);
+
+      expect(r.semEndereco.single.codigo, 'ACESS1');
+      expect(r.totalFiltradosDeposito, 0);
+    });
+
+    test('endereço na loja vence a categoria de depósito', () {
+      // Rede de segurança pras categorias que a keyword pega de propósito:
+      // se alguém cadastrou face de gôndola, a gôndola acende do mesmo jeito —
+      // a premissa do filtro ("nunca terão endereço de loja") caiu.
+      final r = _montar(
+        [_item('OLEO2', categoria: 'LUBRIFICANTES')],
+        gondolas: const {'OLEO2': {9}},
+      );
+
+      expect(r.estruturas['gondola:9']!.itens.single.codigo, 'OLEO2');
+      expect(r.totalProdutos, 1);
+      expect(r.totalFiltradosDeposito, 0);
+    });
+
     test('óleo mineral é pego pelo nome, não só pela categoria', () {
       // O filtro testa o nome nas keywords de categoria duvidosa: aqui a
       // categoria está "certa" mas o produto é óleo mineral.

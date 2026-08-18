@@ -15,6 +15,7 @@ on:
       - "claude/rack-quantity-edit-61ezd7"
       - "claude/local-cache-error-kuoiu8"
       - "claude/galpao-segunda-parte-jd5mpt"
+      - "claude/gondola-1-counting-mode-qfm26n"
   workflow_dispatch:
 
 jobs:
