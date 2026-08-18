@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'galpao_busca.dart';
+import 'baixa_por_contagem.dart';
+import 'baixa_por_contagem_service.dart';
+import 'baixa_por_contagem_ui.dart';
 import 'galpao_config.dart';
 import 'galpao_pilhas.dart';
 import 'galpao_saldo.dart';
@@ -116,6 +119,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
   // gôndolas e estantes.
   late bool                 _mostrarSaldo = widget.saldoAoAbrir;
   Map<String, SaldoProduto> _saldos       = const {};
+
+  // Baixa automática do que foi vendido (ver baixa_por_contagem.dart): roda
+  // ao abrir o galpão e, quando tira quantidade de algum rack, deixa a faixa
+  // que diz o que saiu. Null = não rodou ainda, ou não havia o que baixar.
+  ResumoBaixa? _resumoBaixa;
 
   DescidaPilha? _descida;
   int           _descidaSeq = 0;
@@ -236,6 +244,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
     }
     if (_persistindo) {
       _carregarPilhas();
+      // Depois de _carregarPilhas, não antes: a baixa avisa por dataRevision
+      // quando muda alguma coisa, e é esse aviso que traz as pilhas já
+      // corrigidas. Abrir o galpão é o momento certo — é aqui que o rack
+      // azul de produto vendido aparecia.
+      unawaited(_rodarBaixaAutomatica());
     } else {
       _marcarPosicaoInicial();
     }
@@ -271,6 +284,18 @@ class _GalpaoPageState extends State<GalpaoPage> {
     // códigos que estão em galpao_racks, e recarregá-la junto mantém as duas
     // leituras do mesmo instante.
     unawaited(_carregarSaldos());
+  }
+
+  /// Roda a baixa automática da contagem e mostra a faixa quando ela tirou
+  /// quantidade de algum endereço.
+  ///
+  /// As pilhas NÃO são recarregadas aqui: a baixa incrementa o dataRevision
+  /// quando grava, e o listener que já existe faz a releitura — chamar as
+  /// duas coisas carregaria o galpão inteiro duas vezes.
+  Future<void> _rodarBaixaAutomatica() async {
+    final resumo = await BaixaPorContagemService().rodarSeAutomatica();
+    if (!mounted || resumo.semBaixas) return;
+    setState(() => _resumoBaixa = resumo);
   }
 
   /// Relê os saldos do banco. Silencioso: sem conexão o mapa volta vazio e o
@@ -831,6 +856,17 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           racks:     _racksDestacados.length,
                           onLimpar:  () =>
                               setState(() => _destacadoCodigo = null),
+                        ),
+                      ),
+                    // A baixa manda na faixa de cima: ela EXPLICA o mapa que
+                    // acabou de mudar, e o resumo de saldo abaixo é a leitura
+                    // do resultado. Some no Modo Conferência como as outras.
+                    if (_resumoBaixa != null && !_modoConferencia)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                        child: FaixaBaixaAutomatica(
+                          resumo:   _resumoBaixa!,
+                          onFechar: () => setState(() => _resumoBaixa = null),
                         ),
                       ),
                     if (resumoSaldo.comFalta > 0 || resumoSaldo.comSobra > 0)

@@ -312,6 +312,7 @@ class GalpaoService {
     required int    posicao,
     required int    ordem,
     required double quantidade,
+    String? origem,
   }) async {
     if (quantidade <= 0) return null; // zerar é esvaziar, que é outra coisa
     final client = await _conexao();
@@ -341,7 +342,8 @@ class GalpaoService {
         final pilha = await _lerPilha(tx, posicao);
         await _reescreverEspelho(tx, posicao, pilha, agora);
         await _registrarLog(tx, posicao, ordem, codigo,
-            anterior: qtdAntes, nova: quantidade, agora: agora);
+            anterior: qtdAntes, nova: quantidade, agora: agora,
+            origem: origem);
         await tx.commit();
         return pilha;
       } catch (e) {
@@ -359,6 +361,7 @@ class GalpaoService {
   Future<List<RackGalpao>?> esvaziar({
     required int posicao,
     required int ordem,
+    String? origem,
   }) async {
     final client = await _conexao();
     if (client == null) return null;
@@ -402,7 +405,7 @@ class GalpaoService {
         final pilha = await _lerPilha(tx, posicao);
         await _reescreverEspelho(tx, posicao, pilha, agora);
         await _registrarLog(tx, posicao, ordem, codigo,
-            anterior: qtdAntes, nova: 0, agora: agora);
+            anterior: qtdAntes, nova: 0, agora: agora, origem: origem);
         await tx.commit();
         return pilha;
       } catch (e) {
@@ -458,6 +461,9 @@ class GalpaoService {
     }
   }
 
+  /// Uma linha em contagens_log por gravação do galpão. [origem] só é
+  /// passada por quem NÃO é a tela — hoje a baixa automática, que precisa
+  /// ficar separada do que uma pessoa digitou no painel do rack.
   Future<void> _registrarLog(
     Transaction tx,
     int posicao,
@@ -466,6 +472,7 @@ class GalpaoService {
     required double? anterior,
     required double nova,
     required String agora,
+    String? origem,
   }) async {
     await tx.execute(
       'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
@@ -475,7 +482,10 @@ class GalpaoService {
         'GALPAO·$posicao·N$ordem',
         anterior,
         nova,
-        nova == 0 ? 'gondolas_app_galpao_exclusao' : 'gondolas_app_galpao',
+        origem ??
+            (nova == 0
+                ? 'gondolas_app_galpao_exclusao'
+                : 'gondolas_app_galpao'),
         agora,
       ],
     );

@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'baixa_por_contagem.dart';
+import 'baixa_por_contagem_service.dart';
+import 'baixa_por_contagem_ui.dart';
 import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_parede_scene.dart';
@@ -129,6 +132,11 @@ class _LojaPageState extends State<LojaPage> {
 
   bool _sincronizando = false;
 
+  // Baixa automática do que foi vendido (ver baixa_por_contagem.dart). Roda
+  // uma vez, assim que a conexão sobe, e deixa a faixa que explica o mapa que
+  // mudou. Null = não rodou ainda, ou não havia o que baixar.
+  ResumoBaixa? _resumoBaixa;
+
   @override
   void initState() {
     super.initState();
@@ -149,7 +157,13 @@ class _LojaPageState extends State<LojaPage> {
     // usuário ainda está se situando no mapa. LojaPage é a home e não emite
     // consulta própria, então essa janela é livre — e é ela que faz a PRIMEIRA
     // abertura de uma gôndola/prateleira custar o mesmo que as seguintes.
-    unawaited(TursoService().init().then((_) => TursoService().prewarm()));
+    unawaited(TursoService().init().then((_) {
+      unawaited(TursoService().prewarm());
+      // Junto do prewarm: a baixa é a primeira coisa que precisa acontecer no
+      // dia, porque é ela que tira do mapa o azul do que já foi vendido. Roda
+      // sozinha e sem segurar a tela — o mapa abre enquanto ela trabalha.
+      return _rodarBaixaAutomatica();
+    }));
 
     if (widget.itemTipoInicial != null && widget.itemNumeroInicial != null) {
       final numeroMapa =
@@ -172,6 +186,15 @@ class _LojaPageState extends State<LojaPage> {
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
+
+  /// Roda a baixa automática da contagem e mostra a faixa quando ela tirou
+  /// quantidade de algum endereço. Silenciosa quando não há nada a baixar:
+  /// abrir o app não é notícia.
+  Future<void> _rodarBaixaAutomatica() async {
+    final resumo = await BaixaPorContagemService().rodarSeAutomatica();
+    if (!mounted || resumo.semBaixas) return;
+    setState(() => _resumoBaixa = resumo);
+  }
 
   void _onSelecionado(int? idx) {
     setState(() {
@@ -655,6 +678,17 @@ class _LojaPageState extends State<LojaPage> {
                       ],
                     ),
                     const SizedBox(height: 8),
+                    // Antes do banner de conferência: a baixa fala do mapa que
+                    // acabou de mudar, e é a primeira pergunta de quem abre o
+                    // app e vê uma gôndola com número diferente do de ontem.
+                    if (_resumoBaixa != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: FaixaBaixaAutomatica(
+                          resumo:   _resumoBaixa!,
+                          onFechar: () => setState(() => _resumoBaixa = null),
+                        ),
+                      ),
                     if (_modoConferencia)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),

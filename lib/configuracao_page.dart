@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'loja_scene.dart' show PreferenciasMapa;
+import 'baixa_por_contagem_service.dart';
 import 'palete_registry.dart';
 import 'turso_service.dart';
 
@@ -30,6 +31,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   // Bonecos caminhando pelo mapa da loja: 0 (desligado), 1 ou 2.
   int _bonecos = PreferenciasMapa.bonecos.value;
 
+  // Baixa automática do que foi vendido (ver baixa_por_contagem.dart). Nasce
+  // no padrão e é corrigida pela leitura das preferências logo em seguida.
+  bool _baixaAutomatica = BaixaPorContagemService.padraoBaixaAutomatica;
+
   @override
   void initState() {
     super.initState();
@@ -37,6 +42,9 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     _carregarPaletes();
     PreferenciasMapa.lerBonecos().then((n) {
       if (mounted) setState(() => _bonecos = n);
+    });
+    BaixaPorContagemService.lerAutomatica().then((ligada) {
+      if (mounted) setState(() => _baixaAutomatica = ligada);
     });
   }
 
@@ -363,6 +371,11 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         _testeOk     = false;
       });
     }
+  }
+
+  Future<void> _alterarBaixaAutomatica(bool ligada) async {
+    setState(() => _baixaAutomatica = ligada);
+    await BaixaPorContagemService.salvarAutomatica(ligada);
   }
 
   // ── Mapa da loja ───────────────────────────────────────────────────────────
@@ -719,6 +732,40 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                     ),
                   ),
                 ],
+              ),
+            ),
+
+            // ── Baixa automática ──────────────────────────────────────────
+            // O interruptor existe porque a baixa MEXE em quantidade de
+            // estoque sozinha. Quem preferir conferir rack por rack tem de
+            // poder desligá-la sem desinstalar nada — e quem a desliga
+            // continua vendo o azul do que foi vendido, que é o estado
+            // anterior a este recurso, não um defeito.
+            const SizedBox(height: 28),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF0d1117),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF232f3a)),
+              ),
+              child: SwitchListTile(
+                value: _baixaAutomatica,
+                onChanged: _alterarBaixaAutomatica,
+                activeThumbColor: const Color(0xFF4a9d6a),
+                title: const Text(
+                  'Baixar a venda pela contagem',
+                  style: TextStyle(color: Colors.white, fontSize: 13),
+                ),
+                subtitle: const Text(
+                  'Quando a contagem é confirmada no app Contagem CAMDA, o '
+                  'que os endereços têm a mais que o contado sai sozinho dos '
+                  'racks e prateleiras — é a venda que ninguém baixou à mão. '
+                  'As divergências abertas do app de divergências já entram '
+                  'na conta. Nunca cria quantidade, e nunca mexe num produto '
+                  'lançado depois da contagem.',
+                  style: TextStyle(
+                      color: Color(0xFF8a9aa8), fontSize: 11, height: 1.4),
+                ),
               ),
             ),
 

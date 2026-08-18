@@ -10,6 +10,7 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 - Endereçamento de estoque integrado à tabela `estante_layout` no Turso
 - Modo Conferência para auditoria física do estoque
 - Sincronização de quantidades com os apps `inventariocamda` e `camda-estoque` via `estoque_localizado`
+- **Baixa automática da venda pela contagem** — o que foi vendido sai sozinho dos racks e prateleiras
 - Mapa 3D do galpão de racks (botão na barra do mapa da loja)
 
 ## Galpão de racks
@@ -117,6 +118,76 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   do galpão usa TODOS os pendentes, sem o filtro de categorias de depósito da
   loja — herbicida, adubo e óleo têm endereço justamente aqui. O banner da
   loja ganhou o atalho `N no galpão`, que abre o galpão já em conferência.
+
+## Baixa automática da venda pela contagem
+
+O rack ficava azul sozinho. Vende-se 30 do Boral, o ERP baixa o `qtd_sistema`
+na planilha do dia seguinte, e os endereços continuam com a quantidade de
+antes da venda — endereçado 100 contra sistema 70. Não era erro de ninguém:
+este app é o único lugar que sabe em QUE rack o produto está, e ninguém vai lá
+tirar 30 do palete a cada nota emitida. O mapa mentia em azul até alguém
+corrigir rack por rack.
+
+Agora quem corrige é a **contagem**. Quando um produto é confirmado no app
+[Contagem CAMDA](https://github.com/LeoLira1/Contagemsimplificada) — `OK ✓` ou
+`Divergência` —, ele grava em `contagem_itens` que a pilha foi conferida. Na
+abertura seguinte do app (ou do galpão), a diferença entre o que os endereços
+somam e o que foi contado sai dos racks, **de um ou de vários**, e uma faixa
+azul no topo do mapa diz o que saiu de onde.
+
+**O alvo é a contagem, não o sistema.** O app de divergências
+([`Planilha-`](https://github.com/LeoLira1/Planilha-)) registra o que falta ou
+sobra por conta de um cooperado SEM mexer no `qtd_sistema`: uma falta de 30
+lançada para o cooperado quer dizer que o sistema tem 100 e o chão tem 70.
+Baixar contra o sistema puro deixaria no rack 30 unidades que não existem na
+prateleira, então o alvo é `qtd_sistema + Σ delta das divergências abertas` —
+o mesmo número que o app de contagem gravou em `qtd_fisica`. É essa soma que
+amarra os três apps na mesma conta, e é ela que responde "está faltando, mas é
+de algum cooperado". Divergência resolvida some da tabela, e o alvo volta ao
+`qtd_sistema` sozinho: não há estado a manter dos dois lados.
+
+**De onde sai primeiro.** Gôndola, estante, galpão — nessa ordem, porque é da
+gôndola que o cliente pega e do galpão que a carga só sai por separação. Na
+loja esvazia o slot mais CHEIO primeiro (a mesma regra da correção manual); no
+galpão, o mais VAZIO, porque quem separa termina o palete aberto antes de
+romper um fechado, e é assim que a vaga se libera de verdade. Rack que chega a
+zero é esvaziado de verdade, com a pilha descendo — os ajustes de uma mesma
+posição são gravados do nível mais alto para o mais baixo, senão a renumeração
+faria o ajuste seguinte acertar o palete errado.
+
+**O que ela nunca faz:**
+
+- **Nunca inventa quantidade.** Endereçado MENOR que o contado é carga sem
+  endereço, e só uma pessoa sabe em que rack ela está — o rack continua
+  vermelho, e o extrato lista esses produtos à parte.
+- **Nunca baixa sem contagem.** Sem confirmação em `contagem_itens` não há
+  quem afirme o que existe no chão.
+- **Nunca usa a contagem feita AQUI.** `inventario_cicli` fica de fora de
+  propósito: ele é gravado somando os próprios endereços, e usá-lo faria a
+  baixa contradizer quem acabou de contar o rack na mão. Quem conta pelo app
+  das gôndolas está dizendo que o endereço está certo e o sistema é que está
+  atrasado; a baixa existe para o caso contrário.
+- **Nunca mexe num produto tocado depois da contagem.** Se QUALQUER endereço
+  do produto é mais novo que a contagem, alguém lançou ou corrigiu carga desde
+  então e a contagem já não descreve o mundo — o produto fica de fora inteiro.
+  É essa regra que também torna a baixa idempotente: o endereço que ela grava
+  nasce mais novo que a contagem, então a mesma contagem nunca é aplicada duas
+  vezes. **Uma contagem, uma baixa.**
+
+**Auditável, nunca mágica.** Cada linha gravada vai para `contagens_log` com
+`origem = 'gondolas_app_baixa_contagem'` — é por ela que se acha depois tudo o
+que o automático mexeu, e é por ela que se desfaz à mão o que não devia ter
+saído. A faixa do mapa abre o extrato produto a produto, com o
+de-onde-para-onde de cada endereço.
+
+O interruptor está em ⚙️ → **Baixar a venda pela contagem**, ligado por padrão.
+Desligado, o app volta a se comportar como antes: o azul fica no mapa até
+alguém corrigir. Na primeira vez que ela roda, a limpeza pode ser grande — são
+todas as vendas acumuladas desde a última contagem de cada produto, e todas
+elas aparecem no extrato.
+
+A regra vive em `lib/baixa_por_contagem.dart` (função pura, sem banco e sem
+tela); o SQL e a ordem das gravações, em `lib/baixa_por_contagem_service.dart`.
 
 ## Créditos
 
