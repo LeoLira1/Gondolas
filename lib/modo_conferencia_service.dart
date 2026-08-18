@@ -13,6 +13,12 @@ import 'turso_service.dart';
 // fora do Modo Conferência DA LOJA por completo (nem estrutura, nem sem
 // endereço), mas continuam contados à parte pro total bater com o dashboard.
 //
+// ⚠️ Endereço cadastrado na loja vence a categoria. A premissa acima é "nunca
+// terão endereço de loja"; quando o produto TEM face de gôndola ou prateleira
+// de estante, a premissa caiu e a estrutura acende normalmente — foi assim que
+// a engraxadeira (ACESSORIOS DE LUBRIFICACAO, pega por 'LUBRIFIC') sumia da
+// gôndola 1. O filtro só decide o destino de quem não tem endereço na loja.
+//
 // ⚠️ O filtro vale só para o lado da LOJA. O cruzamento com o galpão é feito
 // com TODOS os pendentes do dia, sem filtro nenhum: é justamente nos racks
 // do galpão que herbicida, adubo e óleo têm endereço, e filtrá-los ali
@@ -42,6 +48,14 @@ const List<String> categoriasExcluidasKeywords = [
 const List<String> _keywordsTambemNoNomeProduto = [
   'OLEO MINERAL',
   'OLEO VEGETAL',
+];
+
+// Categorias que uma keyword acima pega por engano — acessório é produto de
+// gôndola, não de depósito. 'ACESSORIOS DE LUBRIFICACAO' (engraxadeira, bico
+// de graxa) casava com 'LUBRIFIC' e sumia do mapa da loja mesmo tendo face de
+// gôndola cadastrada. Testado antes das keywords, vence todas elas.
+const List<String> _categoriasNuncaDeDeposito = [
+  'ACESSORIO',
 ];
 
 /// Uppercase + remoção de acentos, pra comparar categoria/nome sem depender
@@ -79,6 +93,7 @@ class ItemPendente {
 /// Conferência por completo.
 bool ehCategoriaDeDeposito(ItemPendente item) {
   final categoriaNorm = normalizarTexto(item.categoria);
+  if (_categoriasNuncaDeDeposito.any(categoriaNorm.contains)) return false;
   if (categoriasExcluidasKeywords.any(categoriaNorm.contains)) return true;
 
   // OLEO MINERAL/VEGETAL podem estar cadastrados numa categoria diferente:
@@ -202,7 +217,15 @@ ModoConferenciaResultado montarConferencia({
       posicoes.putIfAbsent(numero, () => []).add(item);
     }
 
-    if (ehCategoriaDeDeposito(item)) {
+    final gondolas = gondolasPorCodigo[item.codigo] ?? const <int>{};
+    final estantes = estantesPorCodigo[item.codigo] ?? const <int>{};
+    final temEnderecoNaLoja = gondolas.isNotEmpty || estantes.isNotEmpty;
+
+    // O filtro de categorias existe pra não inflar o "sem endereço" com
+    // produto que mora no galpão — face de gôndola cadastrada desmente essa
+    // premissa. Endereço na loja vence a categoria: a estrutura acende, mesmo
+    // que a keyword tenha pego a categoria (certa ou por engano).
+    if (!temEnderecoNaLoja && ehCategoriaDeDeposito(item)) {
       // Sem rack no galpão o item não tem onde aparecer — segue oculto, como
       // antes de o galpão existir no app.
       if (noGalpao.isEmpty) filtradosDeposito++;
@@ -210,9 +233,7 @@ ModoConferenciaResultado montarConferencia({
     }
 
     totalLoja++;
-    final gondolas = gondolasPorCodigo[item.codigo] ?? const <int>{};
-    final estantes = estantesPorCodigo[item.codigo] ?? const <int>{};
-    if (gondolas.isEmpty && estantes.isEmpty) {
+    if (!temEnderecoNaLoja) {
       // "Sem endereço" é sem endereço NENHUM: com rack no galpão o item já
       // tem para onde mandar quem vai conferir.
       if (noGalpao.isEmpty) semEndereco.add(item);
@@ -268,9 +289,10 @@ class ModoConferenciaService {
   /// poucas mais, se o lote de códigos precisar ser quebrado), nunca uma por
   /// estrutura.
   ///
-  /// As consultas da loja recebem só os códigos que podem ter endereço lá (o
-  /// filtro de categorias de depósito), e a do galpão recebe TODOS — ver a
-  /// nota no topo do arquivo. O cruzamento em si é de [montarConferencia].
+  /// As três consultas recebem TODOS os códigos pendentes: o filtro de
+  /// categorias de depósito não é mais aplicado antes de perguntar ao banco,
+  /// porque é o próprio endereço que decide se ele vale (ver a nota no topo do
+  /// arquivo). O cruzamento em si é de [montarConferencia].
   Future<ModoConferenciaResultado> buscarConferenciaDoDia() async {
     final client = await _conexao();
     if (client == null) return ModoConferenciaResultado.vazio;
@@ -280,14 +302,10 @@ class ModoConferenciaService {
       if (pendentes.isEmpty) return ModoConferenciaResultado.vazio;
 
       final codigosTodos = pendentes.map((p) => p.codigo).toList();
-      final codigosLoja = [
-        for (final item in pendentes)
-          if (!ehCategoriaDeDeposito(item)) item.codigo,
-      ];
 
       final resultados = await Future.wait([
-        _buscarEnderecosGondola(client, codigosLoja),
-        _buscarEnderecosEstante(client, codigosLoja),
+        _buscarEnderecosGondola(client, codigosTodos),
+        _buscarEnderecosEstante(client, codigosTodos),
         _buscarEnderecosGalpao(client, codigosTodos),
       ]);
 
