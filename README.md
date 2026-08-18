@@ -30,8 +30,16 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   `galpao_racks` (ocupação, com renumeração transacional), espelhadas em
   `estoque_localizado` com `local_tipo = 'galpao'` para o estoque do galpão
   contar nos mesmos totais dos apps irmãos.
-- Quantidades são lançadas na unidade que se conta no chão — baldes (produto
-  de 20 L) ou caixas (5 L × 4) — e gravadas em litros.
+- **Quantidade em UNIDADES, do ERP ao cubo.** O galpão já converteu para
+  litros (baldes/caixas × 20) e isso era discrepância garantida contra o
+  `qtd_sistema` do `estoque_mestre`, que está em unidade: o mesmo produto que
+  o app do scanner (`LeoLira1/scanner`) mostra com 559 aparecia aqui como
+  "sistema 19.4". Agora não há conversão em lugar nenhum — o que se digita é o
+  que se grava, é o que se soma no endereçado e é o que se compara com o
+  sistema. Os racks lançados na convenção antiga são convertidos uma única vez
+  pela migração `galpao_quantidade_em_unidades_v1`, que divide por 20 os
+  produtos de 20 L e 5 L em `galpao_racks` e no espelho de
+  `estoque_localizado`.
 - **Busca acende TODAS as posições do produto**: procurar um produto no mapa
   da loja abre o galpão com o endereço escolhido marcado e todos os racks
   daquele produto acesos em laranja — o mesmo produto costuma ocupar vários
@@ -47,8 +55,8 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   de um produto que ainda tem carga sem endereço fica **vermelho** e o de um
   produto endereçado além do que o sistema registra fica **azul** — as mesmas
   cores que as gôndolas e estantes já usam para divergência de contagem. O
-  painel do endereço mostra a conta por extenso (`Sistema 145 baldes ·
-  endereçado 90 baldes`), e ela também aparece ao escolher o produto para
+  painel do endereço mostra a conta por extenso (`Sistema 145 unidades ·
+  endereçado 90 unidades`), e ela também aparece ao escolher o produto para
   lançar numa vaga, que é quando interessa saber quanto ainda falta distribuir.
   O endereçado soma TODOS os locais do produto em `estoque_localizado`
   (galpão + gôndolas + estantes) contra `estoque_mestre.qtd_sistema` — a mesma
@@ -57,6 +65,14 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   `estoque_mestre` fica na cor da categoria: sem `qtd_sistema` não há saldo a
   afirmar. A precedência das cores é Modo Conferência > busca > saldo >
   categoria.
+- **Os dois lados da conta somam TODOS os códigos do produto.** O mesmo item
+  tem mais de uma linha em `estoque_mestre` (`254185` e `US254185`), e ler só
+  a do rack mostrava metade do saldo. O agrupamento é o mesmo do app do
+  scanner (`lib/codigos_vinculados.dart`): primeiro o cadastro
+  (`mapa_produtos` + `mapa_produtos_codigos`), e só na falta dele o nome do
+  produto, ignorando irmão já vinculado a outro produto. Quando mais de um
+  código entra na soma, a tarja diz quais (`códigos somados · 254185 +
+  US254185`).
 - **Modo Conferência também no galpão**: o mesmo botão do mapa da loja acende
   em ciano os racks que guardam pendente de hoje (`contagem_itens`), apaga o
   resto e põe um contador `<posição> · <nº>` acima de cada pilha. O cruzamento

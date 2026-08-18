@@ -11,6 +11,7 @@ on:
       - "claude/turso-direct-libsql-dart-vw93za"
       - "claude/warehouse-search-highlight-all-wm1deu"
       - "claude/pallet-product-quantity-ou6pq0"
+      - "claude/quantidade-sistema-discrepancia-bnuoum"
   workflow_dispatch:
 
 jobs:

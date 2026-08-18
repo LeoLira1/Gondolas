@@ -13,10 +13,8 @@ import 'package:gondola_camda/models.dart' show Produto;
 /// o campo "ir para o nº", find.byType(TextField) é ambíguo na página.
 final _campoBusca =
     find.widgetWithText(TextField, 'Buscar produto por nome ou código…');
-final _campoQuantidade = find.byWidgetPredicate((w) =>
-    w is TextField &&
-    const ['Baldes', 'Caixas', 'Quantidade']
-        .contains(w.decoration?.hintText));
+final _campoQuantidade = find.byWidgetPredicate(
+    (w) => w is TextField && w.decoration?.hintText == 'Unidades');
 
 void main() {
   group('PainelEnderecoGalpao', () {
@@ -31,7 +29,7 @@ void main() {
           ),
         );
 
-    testWidgets('endereço ocupado: produto e quantidade em baldes',
+    testWidgets('endereço ocupado: produto e quantidade em unidades',
         (tester) async {
       await tester.pumpWidget(montar(
         const ToqueGalpao(posicao: 52, ordem: 2, ocupado: true),
@@ -42,7 +40,7 @@ void main() {
                 produtoNome: 'ADUBO 20L', quantidade: 400),
             RackGalpao(
                 posicao: 52, ordem: 2, produtoCodigo: 'BORAL',
-                produtoNome: 'HERBICIDA BORAL 500 SC 20L', quantidade: 1800),
+                produtoNome: 'HERBICIDA BORAL 500 SC 20L', quantidade: 90),
           ],
         },
       ));
@@ -50,11 +48,12 @@ void main() {
       expect(find.text('52 · N2'), findsOneWidget);
       expect(find.text('Rua 5 · 2 de 4 na pilha'), findsOneWidget);
       expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
-      expect(find.text('90 baldes'), findsOneWidget);
-      expect(find.text('1800 L'), findsOneWidget);
+      expect(find.text('90 unidades'), findsOneWidget);
+      // A quantidade gravada é a que se conta: nada de litros na tela.
+      expect(find.text('1800 L'), findsNothing);
     });
 
-    testWidgets('produto sem litragem no nome mostra o número cru',
+    testWidgets('produto sem litragem no nome conta igual a todo o resto',
         (tester) async {
       await tester.pumpWidget(montar(
         const ToqueGalpao(posicao: 10, ordem: 1, ocupado: true),
@@ -67,8 +66,7 @@ void main() {
         },
       ));
 
-      expect(find.text('35'), findsOneWidget);
-      // Sem conversão não há texto secundário de litros.
+      expect(find.text('35 unidades'), findsOneWidget);
       expect(find.text('35 L'), findsNothing);
     });
 
@@ -138,18 +136,18 @@ void main() {
       await tester.pump();
       expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
 
-      // Seleciona e digita a quantidade NA UNIDADE QUE SE CONTA: quem foi ao
-      // galpão viu 90 baldes, então digita 90 — os litros são derivados.
+      // Seleciona e digita a quantidade: o que se conta é o que se grava e é
+      // o que o sistema mostra — uma unidade só, sem conversão no meio.
       await tester.tap(find.text('HERBICIDA BORAL 500 SC 20L'));
       await tester.pump();
-      // O campo pede BALDES (a unidade do produto de 20 L), não litros.
       expect(
         tester.widget<TextField>(_campoQuantidade).decoration?.hintText,
-        'Baldes',
+        'Unidades',
       );
       await tester.enterText(_campoQuantidade, '90');
       await tester.pump();
-      expect(find.text('= 1800 L'), findsOneWidget);
+      // Não existe mais conversão ao vivo para litros ao lado do campo.
+      expect(find.text('= 1800 L'), findsNothing);
 
       await tester.tap(find.textContaining('Lançar em 1 · N1'));
       await tester.pump();
@@ -161,7 +159,7 @@ void main() {
       await tester.pump();
       expect(find.text('1 · N1'), findsOneWidget);
       expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
-      expect(find.text('90 baldes'), findsOneWidget);
+      expect(find.text('90 unidades'), findsOneWidget);
       expect(find.text('Esvaziar'), findsOneWidget);
     });
 
@@ -183,8 +181,7 @@ void main() {
       await tester.pump();
 
       // Próxima vaga: o produto está nos recentes, sem digitar nada, e o
-      // toque no chip já preenche a quantidade do último lançamento — de
-      // volta em BALDES, não nos litros que foram gravados.
+      // toque no chip já preenche a quantidade do último lançamento.
       await tester.tapAt(centroNaTela(tester, 2, 1));
       await tester.pump();
       expect(find.text('ÚLTIMOS LANÇADOS'), findsOneWidget);
@@ -196,7 +193,7 @@ void main() {
       await tester.pump();
       await tester.tapAt(centroNaTela(tester, 2, 1));
       await tester.pump();
-      expect(find.text('90 baldes'), findsOneWidget);
+      expect(find.text('90 unidades'), findsOneWidget);
     });
 
     testWidgets('esvaziar a base: o de cima desce, vira N1 e anima',
@@ -382,7 +379,7 @@ void main() {
 
       expect(find.text('52 · N2'), findsOneWidget);
       expect(find.text('PRODUTO B 20L'), findsOneWidget);
-      expect(find.text('20 baldes'), findsOneWidget);
+      expect(find.text('400 unidades'), findsOneWidget);
     });
 
     testWidgets('posicaoInicial abre isolando a rua e marcando o endereço',

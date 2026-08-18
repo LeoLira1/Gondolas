@@ -1,3 +1,5 @@
+import 'codigos_vinculados.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Saldo por produto: o que o sistema tem × o que já está endereçado
 // ─────────────────────────────────────────────────────────────────────────────
@@ -12,26 +14,38 @@
 // produto em estoque_localizado (galpão + gôndolas + estantes) contra
 // estoque_mestre.qtd_sistema. Contar só os racks do galpão daria falta falsa em
 // todo produto que também está na loja.
+//
+// Os dois lados da conta estão em UNIDADE (ver unidades.dart) e somam TODOS os
+// códigos do mesmo produto (ver codigos_vinculados.dart) — as duas coisas que
+// faziam o galpão discordar do app do scanner.
 
 /// Saldo de um produto entre o sistema e os endereços físicos.
 class SaldoProduto {
   final String codigo;
 
-  /// estoque_mestre.qtd_sistema — o que o ERP diz que existe.
+  /// estoque_mestre.qtd_sistema — o que o ERP diz que existe, em unidades,
+  /// somando todos os códigos do produto.
   final double qtdSistema;
 
-  /// Soma de estoque_localizado.quantidade do produto, em TODOS os locais.
+  /// Soma de estoque_localizado.quantidade do produto, em TODOS os locais e
+  /// em todos os códigos do produto.
   final double enderecado;
+
+  /// Os códigos que entraram nas duas somas, em ordem. Vazio ou com um item
+  /// só = o produto tem código único; mais de um é o que a tela mostra para
+  /// explicar um número maior que o da linha do código lido.
+  final List<String> codigosSomados;
 
   const SaldoProduto({
     required this.codigo,
     required this.qtdSistema,
     required this.enderecado,
+    this.codigosSomados = const [],
   });
 
   /// Folga para não pintar o galpão inteiro por causa de arredondamento de
-  /// ponto flutuante (as quantidades são double e passam por divisões por 20
-  /// na conversão de baldes/caixas).
+  /// ponto flutuante (as quantidades são double e passam por somas de várias
+  /// linhas de estoque_localizado).
   static const double tolerancia = 0.001;
 
   /// Endereçado − sistema: negativo falta endereçar, positivo sobra.
@@ -52,15 +66,19 @@ class SaldoProduto {
   /// Quanto sobra endereçado (0 quando não sobra).
   double get quantoSobra => sobra ? diferenca : 0;
 
+  /// True quando o saldo somou mais de um código — o que a tarja explicita.
+  bool get temCodigosSomados => codigosSomados.length > 1;
+
   /// O mesmo saldo com [delta] a mais (ou a menos) de endereçado.
   ///
   /// É o que deixa a cor do rack responder no ato do lançamento: a tela grava
   /// otimista e só depois relê o saldo do banco, e sem isso o cubo recém-posto
   /// continuaria vermelho até a releitura chegar.
   SaldoProduto comDelta(double delta) => SaldoProduto(
-        codigo:     codigo,
-        qtdSistema: qtdSistema,
-        enderecado: enderecado + delta,
+        codigo:         codigo,
+        qtdSistema:     qtdSistema,
+        enderecado:     enderecado + delta,
+        codigosSomados: codigosSomados,
       );
 
   @override
@@ -68,10 +86,12 @@ class SaldoProduto {
       other is SaldoProduto &&
       other.codigo == codigo &&
       other.qtdSistema == qtdSistema &&
-      other.enderecado == enderecado;
+      other.enderecado == enderecado &&
+      other.codigosSomados.join(',') == codigosSomados.join(',');
 
   @override
-  int get hashCode => Object.hash(codigo, qtdSistema, enderecado);
+  int get hashCode =>
+      Object.hash(codigo, qtdSistema, enderecado, codigosSomados.join(','));
 }
 
 /// Mapa de saldos com [delta] aplicado ao produto [codigo].
@@ -105,4 +125,46 @@ Map<String, SaldoProduto> saldosComDelta(
     if (saldo.sobra) comSobra++;
   }
   return (comFalta: comFalta, comSobra: comSobra);
+}
+
+/// Monta o saldo de cada código a partir das leituras cruas do banco, somando
+/// os códigos irmãos de cada produto ([gruposDeCodigos]).
+///
+/// [sistemaPorCodigo] é o `qtd_sistema` do estoque_mestre e
+/// [enderecadoPorCodigo] a soma de estoque_localizado, ambos por código
+/// (linhas que o banco devolveu, nem todo código está nos dois). Produto sem
+/// NENHUMA linha em estoque_mestre fica de fora do mapa: sem qtd_sistema não
+/// dá para dizer se falta ou sobra, e chutar zero pintaria de azul todo rack
+/// de produto fora do cadastro.
+///
+/// A CHAVE do mapa é o código como ele veio em [codigos] — o mesmo texto que
+/// está em galpao_racks.produto_codigo, porque é por ele que a cena procura a
+/// cor do cubo. A normalização vale só para cruzar as somas.
+Map<String, SaldoProduto> montarSaldos({
+  required Iterable<String> codigos,
+  required Map<String, Set<String>> grupos,
+  required Map<String, double> sistemaPorCodigo,
+  required Map<String, double> enderecadoPorCodigo,
+}) {
+  final saldos = <String, SaldoProduto>{};
+  for (final bruto in codigos) {
+    final codigo = normalizarCodigo(bruto);
+    if (codigo == null || saldos.containsKey(bruto)) continue;
+
+    final grupo = (grupos[codigo] ?? {codigo}).toList()..sort();
+    if (!grupo.any(sistemaPorCodigo.containsKey)) continue;
+
+    var sistema = 0.0, enderecado = 0.0;
+    for (final c in grupo) {
+      sistema    += sistemaPorCodigo[c]    ?? 0;
+      enderecado += enderecadoPorCodigo[c] ?? 0;
+    }
+    saldos[bruto] = SaldoProduto(
+      codigo:         bruto,
+      qtdSistema:     sistema,
+      enderecado:     enderecado,
+      codigosSomados: grupo,
+    );
+  }
+  return saldos;
 }

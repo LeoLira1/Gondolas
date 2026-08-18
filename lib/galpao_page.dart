@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'embalagem.dart';
-import 'estoque_localizado_service.dart';
 import 'galpao_busca.dart';
 import 'galpao_config.dart';
 import 'galpao_pilhas.dart';
@@ -16,6 +14,7 @@ import 'gondola_scene.dart'
 import 'modo_conferencia_service.dart';
 import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
 import 'turso_service.dart';
+import 'unidades.dart';
 
 /// Mapa 3D do galpão de racks.
 ///
@@ -264,19 +263,15 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// sistema tem 145, já endereçei 100").
   ///
   /// O mapa em memória responde primeiro; só um produto de fora dele (nunca
-  /// endereçado, ou catálogo recém-aberto) custa as duas consultas.
+  /// endereçado, ou catálogo recém-aberto) custa a consulta. Ela é a MESMA de
+  /// [GalpaoService.carregarSaldos] — inclusive na soma dos códigos irmãos do
+  /// produto —, para o painel nunca mostrar um número diferente do da tarja
+  /// que já estava na tela.
   Future<SaldoProduto?> _saldoDoProduto(String codigo) async {
     final emMemoria = _saldos[codigo];
     if (emMemoria != null) return emMemoria;
     if (!_consultandoSaldos) return null;
-    final servico = EstoqueLocalizadoService();
-    final info = await servico.buscarInfoMestre(codigo);
-    if (info == null) return null;
-    return SaldoProduto(
-      codigo:     codigo,
-      qtdSistema: info.qtdSistema,
-      enderecado: await servico.totalProduto(codigo),
-    );
+    return GalpaoService().carregarSaldo(codigo);
   }
 
   /// Aplica [GalpaoPage.posicaoInicial], quando informada: isola a rua e marca
@@ -1157,45 +1152,30 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     setState(() => _resultados = buscarProdutosGalpao(q, widget.catalogo));
   }
 
-  /// [quantidadeLitros] é o que o banco guarda; o campo mostra a quantidade
-  /// na unidade de manuseio do produto (45 baldes = digita 45), então o
-  /// prefill dos recentes converte de volta antes de preencher.
-  void _selecionarProduto(Produto p, {double? quantidadeLitros}) {
+  /// [quantidade] é o número de UNIDADES — a mesma conta do banco, do campo
+  /// e do sistema (ver unidades.dart), então o prefill dos recentes só
+  /// formata o que veio.
+  void _selecionarProduto(Produto p, {double? quantidade}) {
     setState(() {
       _produtoSel = p;
       _resultados = const [];
       _buscaCtrl.clear();
       _focarSaldo(p.codigo);
-      if (quantidadeLitros != null) {
-        final emUnidades = unidadeDoNome(p.nome) != null
-            ? quantidadeLitros / litrosPorUnidade
-            : quantidadeLitros;
-        _qtdCtrl.text = formatarNumero(emUnidades);
-      }
+      if (quantidade != null) _qtdCtrl.text = formatarNumero(quantidade);
     });
   }
 
+  /// Unidades digitadas — o que vai ao banco, sem conversão nenhuma.
   double? get _quantidadeDigitada {
     final q = double.tryParse(_qtdCtrl.text.replaceAll(',', '.'));
     return q != null && q > 0 ? q : null;
   }
 
-  /// O que foi digitado convertido para litros — a conta que vai ao banco.
-  /// Produto sem unidade dedutível grava o número como digitado.
-  double? get _quantidadeEmLitros {
-    final digitada = _quantidadeDigitada;
-    final produto  = _produtoSel;
-    if (digitada == null || produto == null) return null;
-    return unidadeDoNome(produto.nome) != null
-        ? litrosDeUnidades(digitada)
-        : digitada;
-  }
-
   void _lancar() {
-    final produto = _produtoSel;
-    final litros  = _quantidadeEmLitros;
-    if (produto == null || litros == null) return;
-    widget.onLancar?.call(produto, litros);
+    final produto    = _produtoSel;
+    final quantidade = _quantidadeDigitada;
+    if (produto == null || quantidade == null) return;
+    widget.onLancar?.call(produto, quantidade);
   }
 
   Future<void> _confirmarEsvaziar() async {
@@ -1297,11 +1277,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   // ── Endereço ocupado ───────────────────────────────────────────────────────
 
   Widget _buildOcupado(RackGalpao rack, List<RackGalpao> pilha) {
-    final embalada = quantidadeEmbalada(rack.produtoNome, rack.quantidade);
-    final litros   = '${formatarNumero(rack.quantidade)} L';
     final temVaga  = pilha.length < GalpaoConfig.niveisMax;
     final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
-    final blocoSaldo = _blocoSaldo(rack.produtoNome);
+    final blocoSaldo = _blocoSaldo();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1346,24 +1324,13 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Text(
-              embalada ?? formatarNumero(rack.quantidade),
+              quantidadeEmUnidades(rack.quantidade),
               style: const TextStyle(
                 color:      Colors.white,
                 fontSize:   18,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            if (embalada != null) ...[
-              const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  litros,
-                  style: const TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 12),
-                ),
-              ),
-            ],
             const Spacer(),
             Text(
               'cód. ${rack.produtoCodigo}',
@@ -1428,15 +1395,13 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// Devolve null quando não há saldo conhecido (produto fora do
   /// estoque_mestre, sem conexão, ou consulta a caminho) — melhor nada do que
   /// um número inventado.
-  Widget? _blocoSaldo(String nomeProduto) {
+  Widget? _blocoSaldo() {
     final saldo = _saldo;
     if (saldo == null) return null;
 
-    // As quantidades vão para a tela na unidade de manuseio do produto
-    // (baldes/caixas), a mesma do resto do painel — quem confere carga não
-    // conta litros.
-    String fmt(double valor) =>
-        quantidadeEmbalada(nomeProduto, valor) ?? formatarNumero(valor);
+    // Uma unidade só nos dois lados da conta — a mesma do sistema e a mesma
+    // que se digita ao lançar (ver unidades.dart).
+    String fmt(double valor) => quantidadeEmUnidades(valor);
 
     final cor = saldo.falta
         ? corEnderecoDivergente
@@ -1486,6 +1451,19 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                   style: const TextStyle(
                       color: Color(0xFF8a9aa8), fontSize: 11),
                 ),
+                // O sistema do produto soma mais de um código: dizer QUAIS é
+                // o que faz o número conferir com o app do scanner na mão de
+                // quem está olhando — sem isso, "sistema 559" num rack de
+                // código US254185 parece número inventado.
+                if (saldo.temCodigosSomados)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'códigos somados · ${saldo.codigosSomados.join(' + ')}',
+                      style: const TextStyle(
+                          color: Color(0xFF6b7a88), fontSize: 10),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1559,7 +1537,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final produto = _produtoSel;
     // Saldo do produto escolhido: quanto ainda falta endereçar é justamente o
     // que decide a quantidade a lançar neste palete.
-    final blocoSaldo = produto == null ? null : _blocoSaldo(produto.nome);
+    final blocoSaldo = produto == null ? null : _blocoSaldo();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1663,7 +1641,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                 for (final r in widget.recentes)
                   InkWell(
                     onTap: () => _selecionarProduto(r.produto,
-                        quantidadeLitros: r.quantidade),
+                        quantidade: r.quantidade),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -1751,46 +1729,24 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             blocoSaldo,
           ],
           const SizedBox(height: 8),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox(
-                width: 110,
-                child: TextField(
-                  controller: _qtdCtrl,
-                  onChanged: (_) => setState(() {}),
-                  keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
-                  ],
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  // Digita-se o que se CONTA no galpão: baldes ou caixas.
-                  // Litros são derivados ao lado, nunca digitados — quem vê
-                  // 45 baldes lança 45.
-                  decoration: _decoracaoCampo(
-                      _rotuloUnidade(produto.nome), null),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Conversão ao vivo para litros (o que o banco guarda).
-              Expanded(
-                child: Text(
-                  _quantidadeEmLitros == null ||
-                          unidadeDoNome(produto.nome) == null
-                      ? ''
-                      : '= ${formatarNumero(_quantidadeEmLitros!)} L',
-                  style: const TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 12),
-                ),
-              ),
+          TextField(
+            controller: _qtdCtrl,
+            onChanged: (_) => setState(() {}),
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
             ],
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+            // Digita-se o que se CONTA — e é o mesmo número que o sistema
+            // mostra. Não há mais conversão nenhuma no meio do caminho.
+            decoration: _decoracaoCampo('Unidades', null),
           ),
           const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: _quantidadeEmLitros == null ? null : _lancar,
+              onPressed: _quantidadeDigitada == null ? null : _lancar,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2e6b46),
                 padding: const EdgeInsets.symmetric(vertical: 11),
@@ -1801,15 +1757,6 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         ],
       ],
     );
-  }
-
-  /// Rótulo do campo de quantidade: a unidade em que se conta.
-  static String _rotuloUnidade(String nomeProduto) {
-    switch (unidadeDoNome(nomeProduto)) {
-      case 'balde': return 'Baldes';
-      case 'caixa': return 'Caixas';
-      default:      return 'Quantidade';
-    }
   }
 
   InputDecoration _decoracaoCampo(String hint, IconData? icone) =>
