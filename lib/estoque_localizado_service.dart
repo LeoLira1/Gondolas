@@ -398,6 +398,11 @@ class EstoqueLocalizadoService {
 
   /// Upsert de uma quantidade (via UNIQUE de estoque_localizado) + registro
   /// no log. Não mexe em inventario_cicli nem em estoque_mestre.
+  ///
+  /// [origem] é o que fica gravado em contagens_log. O padrão é a gravação
+  /// feita à mão na tela; a baixa automática passa a sua (ver
+  /// BaixaPorContagemService.origemLog), e é por ela que se separa depois o
+  /// que uma pessoa digitou do que o app deduziu sozinho.
   Future<bool> upsertQuantidade({
     required String produtoCodigo,
     required String localTipo,
@@ -405,6 +410,7 @@ class EstoqueLocalizadoService {
     required int faceOuColuna,
     required int andarOuNivel,
     required double quantidade,
+    String origem = 'gondolas_app',
   }) async {
     final client = await _conexao();
     if (client == null) return false;
@@ -460,7 +466,7 @@ class EstoqueLocalizadoService {
         endereco.enderecoCompacto,
         qtdAnterior,
         quantidade,
-        'gondolas_app',
+        origem,
         agora,
       ]);
       _invalidarCachesBadges();
