@@ -3,7 +3,10 @@ import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 import 'package:flutter/material.dart';
 
 import 'galpao_config.dart';
-import 'gondola_scene.dart' show Vec3, Camera, ProjecaoCamera, luzCena;
+import 'galpao_saldo.dart';
+import 'gondola_scene.dart'
+    show Vec3, Camera, ProjecaoCamera, luzCena, corEnderecoDivergente,
+        corEnderecoDivergentePositiva;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 
@@ -125,12 +128,19 @@ const Color _corApagado     = Color(0xFF2d2e31);
 const Color _corVazioFraco  = Color(0x1FFFFFFF);
 
 /// Cor de um rack na cena, na ordem de precedência que o galpão usa:
-/// Modo Conferência > destaque da busca > cor do produto.
+/// Modo Conferência > destaque da busca > saldo do produto > cor do produto.
 ///
-/// É pura de propósito: a precedência entre as três leituras é a regra que
-/// mais confunde quem mexe na cena depois (a conferência apaga o galpão
-/// inteiro, e um destaque de busca aceso por baixo dela seria uma quarta cor
-/// sem significado), e assim ela pode ser conferida sem pintar nada.
+/// É pura de propósito: a precedência entre as leituras é a regra que mais
+/// confunde quem mexe na cena depois (a conferência apaga o galpão inteiro, e
+/// um destaque de busca aceso por baixo dela seria mais uma cor sem
+/// significado), e assim ela pode ser conferida sem pintar nada.
+///
+/// O saldo entra DEPOIS dos dois destaques e ANTES da cor de categoria: ele é
+/// um estado permanente do produto (falta carga por endereçar, ou sobra
+/// endereçada), enquanto conferência e busca são leituras momentâneas que a
+/// pessoa acabou de pedir. As duas cores são as MESMAS das gôndolas e estantes
+/// — vermelho para falta, azul escuro para sobra —, para não haver duas
+/// convenções de divergência no mesmo app.
 ///
 /// [destacadoCodigo] vazio não destaca ninguém: um rack gravado sem código
 /// casaria com ele e acenderia o galpão todo.
@@ -140,6 +150,8 @@ Color corRackGalpao({
   String? destacadoCodigo,
   bool modoConferencia              = false,
   Set<String> codigosConferencia    = const {},
+  bool mostrarSaldo                 = false,
+  Map<String, SaldoProduto> saldos  = const {},
 }) {
   if (modoConferencia) {
     return codigosConferencia.contains(produtoCodigo)
@@ -150,6 +162,14 @@ Color corRackGalpao({
       destacadoCodigo.isNotEmpty &&
       produtoCodigo == destacadoCodigo) {
     return corCamda;
+  }
+  if (mostrarSaldo) {
+    final saldo = saldos[produtoCodigo];
+    // Produto sem saldo conhecido (fora do estoque_mestre, ou saldo ainda
+    // carregando) segue na cor da categoria — pintar de vermelho o que não se
+    // sabe seria inventar falta.
+    if (saldo != null && saldo.falta) return corEnderecoDivergente;
+    if (saldo != null && saldo.sobra) return corEnderecoDivergentePositiva;
   }
   return corPorProduto[produtoCodigo] ?? _corRack;
 }
@@ -259,6 +279,14 @@ class GalpaoPainter extends CustomPainter {
   /// Posição (1–85) → nº de produtos pendentes ali, para o badge contador.
   final Map<int, int> contagemConferencia;
 
+  /// Leitura de saldo ligada: rack de produto com carga por endereçar fica
+  /// vermelho, com carga endereçada a mais fica azul (ver [corRackGalpao]).
+  final bool mostrarSaldo;
+
+  /// Saldo por código de produto (ver galpao_saldo.dart). Só é consultado
+  /// quando [mostrarSaldo] está ligado.
+  final Map<String, SaldoProduto> saldos;
+
   GalpaoPainter(
     this.camera, {
     this.pilhas             = const {},
@@ -271,6 +299,8 @@ class GalpaoPainter extends CustomPainter {
     this.modoConferencia    = false,
     this.codigosConferencia = const {},
     this.contagemConferencia = const {},
+    this.mostrarSaldo       = false,
+    this.saldos             = const {},
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
@@ -350,6 +380,8 @@ class GalpaoPainter extends CustomPainter {
             destacadoCodigo:    codigoAceso,
             modoConferencia:    modoConferencia,
             codigosConferencia: codigosConferencia,
+            mostrarSaldo:       mostrarSaldo,
+            saldos:             saldos,
           );
           final destacadoAceso = !modoConferencia &&
               codigoAceso != null &&
@@ -751,6 +783,8 @@ class GalpaoPainter extends CustomPainter {
       old.destacadoCodigo     != destacadoCodigo  ||
       old.descida             != descida          ||
       !setEquals(old.ruasVisiveis, ruasVisiveis)  ||
+      old.mostrarSaldo        != mostrarSaldo      ||
+      !identical(old.saldos, saldos)              ||
       !identical(old.pilhas, pilhas)             ||
       !identical(old.corPorProduto, corPorProduto);
 }
@@ -790,6 +824,12 @@ class GalpaoScene extends StatefulWidget {
   /// Posição → nº de produtos pendentes ali.
   final Map<int, int> contagemConferencia;
 
+  /// Leitura de saldo ligada (ver [GalpaoPainter.mostrarSaldo]).
+  final bool mostrarSaldo;
+
+  /// Saldo por código de produto (ver [GalpaoPainter.saldos]).
+  final Map<String, SaldoProduto> saldos;
+
   const GalpaoScene({
     super.key,
     this.pilhas             = const {},
@@ -803,6 +843,8 @@ class GalpaoScene extends StatefulWidget {
     this.modoConferencia    = false,
     this.codigosConferencia = const {},
     this.contagemConferencia = const {},
+    this.mostrarSaldo       = false,
+    this.saldos             = const {},
   });
 
   /// Câmera isométrica que enquadra o galpão inteiro numa tela de [size].
@@ -1159,6 +1201,8 @@ class _GalpaoSceneState extends State<GalpaoScene>
                 modoConferencia:     widget.modoConferencia,
                 codigosConferencia:  widget.codigosConferencia,
                 contagemConferencia: widget.contagemConferencia,
+                mostrarSaldo:        widget.mostrarSaldo,
+                saldos:              widget.saldos,
               ),
               child: const SizedBox.expand(),
             ),

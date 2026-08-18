@@ -7,6 +7,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 
 import 'galpao_config.dart';
+import 'galpao_saldo.dart';
 import 'galpao_scene.dart' show RackGalpao;
 import 'models.dart' show localTipoGalpao;
 import 'turso_service.dart';
@@ -106,6 +107,47 @@ class GalpaoService {
             ));
       }
       return pilhas;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Saldo (sistema × endereçado) dos produtos que têm rack no galpão.
+  ///
+  /// Uma consulta só, restrita aos códigos que aparecem em galpao_racks: sem
+  /// esse recorte a query varreria estoque_localizado inteira — inclusive
+  /// milhares de produtos que só existem na loja e nunca vão pintar um cubo.
+  ///
+  /// O endereçado soma TODOS os locais do produto, não só o galpão (ver a nota
+  /// em galpao_saldo.dart). Produto sem linha em estoque_mestre fica de fora:
+  /// sem qtd_sistema não dá para dizer se falta ou sobra, e chutar zero
+  /// pintaria de azul todo rack de produto fora do cadastro.
+  Future<Map<String, SaldoProduto>> carregarSaldos() async {
+    final client = await _conexao();
+    if (client == null) return {};
+    try {
+      final stmt = await client.prepare(
+        'SELECT el.produto_codigo AS codigo, '
+        'SUM(el.quantidade) AS enderecado, '
+        'MAX(em.qtd_sistema) AS qtd_sistema '
+        'FROM estoque_localizado el '
+        'JOIN estoque_mestre em ON em.codigo = el.produto_codigo '
+        'WHERE el.produto_codigo IN (SELECT produto_codigo FROM galpao_racks) '
+        'GROUP BY el.produto_codigo',
+      );
+      final rows = await stmt.query() as List<dynamic>;
+      final saldos = <String, SaldoProduto>{};
+      for (final dynamic row in rows) {
+        final r      = row as Map<String, dynamic>;
+        final codigo = r['codigo'] as String? ?? '';
+        if (codigo.isEmpty) continue;
+        saldos[codigo] = SaldoProduto(
+          codigo:     codigo,
+          qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
+          enderecado: (r['enderecado']  as num?)?.toDouble() ?? 0,
+        );
+      }
+      return saldos;
     } catch (_) {
       return {};
     }

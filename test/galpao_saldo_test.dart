@@ -1,0 +1,229 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gondola_camda/galpao_page.dart';
+import 'package:gondola_camda/galpao_saldo.dart';
+import 'package:gondola_camda/galpao_scene.dart';
+import 'package:gondola_camda/gondola_scene.dart'
+    show corEnderecoDivergente, corEnderecoDivergentePositiva;
+import 'package:gondola_camda/models.dart' show corConferenciaCiano;
+
+/// O herbicida do exemplo: 20 L por balde, 2900 L no sistema (145 baldes).
+const _boral = 'HERBICIDA BORAL 500 SC 20L';
+
+SaldoProduto _saldo(double enderecado) => SaldoProduto(
+      codigo:     'BORAL',
+      qtdSistema: 2900,
+      enderecado: enderecado,
+    );
+
+final _pilhas = <int, List<RackGalpao>>{
+  52: const [
+    RackGalpao(
+        posicao: 52, ordem: 1, produtoCodigo: 'BORAL',
+        produtoNome: _boral, quantidade: 1800),
+  ],
+  1: const [
+    RackGalpao(
+        posicao: 1, ordem: 1, produtoCodigo: 'LUVA',
+        produtoNome: 'LUVA NITRILICA PAR', quantidade: 30),
+  ],
+};
+
+Widget _painel(Map<String, SaldoProduto> saldos) => MaterialApp(
+      home: Scaffold(
+        body: PainelEnderecoGalpao(
+          toque:    const ToqueGalpao(posicao: 52, ordem: 1, ocupado: true),
+          pilhas:   _pilhas,
+          saldos:   saldos,
+          onFechar: () {},
+        ),
+      ),
+    );
+
+void main() {
+  group('SaldoProduto', () {
+    test('falta quando o endereçado é menor que o sistema', () {
+      final saldo = _saldo(1800);
+      expect(saldo.falta, isTrue);
+      expect(saldo.sobra, isFalse);
+      expect(saldo.fecha, isFalse);
+      expect(saldo.quantoFalta, 1100);
+      expect(saldo.quantoSobra, 0);
+    });
+
+    test('sobra quando o endereçado passa do sistema', () {
+      final saldo = _saldo(3000);
+      expect(saldo.sobra, isTrue);
+      expect(saldo.falta, isFalse);
+      expect(saldo.quantoSobra, 100);
+    });
+
+    test('fecha na igualdade e dentro da tolerância', () {
+      expect(_saldo(2900).fecha, isTrue);
+      // Resto de divisão por 20 na conversão de baldes não pode pintar o
+      // galpão inteiro de vermelho.
+      expect(_saldo(2900 - SaldoProduto.tolerancia / 2).fecha, isTrue);
+      expect(_saldo(2900 + SaldoProduto.tolerancia / 2).fecha, isTrue);
+    });
+
+    test('comDelta soma no endereçado e preserva o sistema', () {
+      final depois = _saldo(1800).comDelta(400);
+      expect(depois.enderecado, 2200);
+      expect(depois.qtdSistema, 2900);
+    });
+  });
+
+  group('saldosComDelta', () {
+    test('devolve um mapa novo, sem mexer no anterior', () {
+      final antes = {'BORAL': _saldo(1800)};
+      final depois =
+          saldosComDelta(antes, codigo: 'BORAL', delta: 400);
+
+      expect(identical(antes, depois), isFalse);
+      expect(antes['BORAL']!.enderecado, 1800);
+      expect(depois['BORAL']!.enderecado, 2200);
+    });
+
+    test('produto sem saldo conhecido não entra no mapa', () {
+      final antes = {'BORAL': _saldo(1800)};
+      final depois = saldosComDelta(antes, codigo: 'NOVO', delta: 400);
+
+      expect(identical(antes, depois), isTrue);
+      expect(depois.containsKey('NOVO'), isFalse);
+    });
+  });
+
+  group('resumoSaldos', () {
+    test('conta produtos, não racks', () {
+      final saldos = {
+        'BORAL': _saldo(1800),                      // falta
+        'OUTRO': SaldoProduto(
+            codigo: 'OUTRO', qtdSistema: 100, enderecado: 140), // sobra
+        'CERTO': SaldoProduto(
+            codigo: 'CERTO', qtdSistema: 100, enderecado: 100), // fecha
+      };
+      final resumo = resumoSaldos(
+          saldos, ['BORAL', 'BORAL', 'BORAL', 'OUTRO', 'CERTO', 'SEM_SALDO']);
+
+      expect(resumo.comFalta, 1);
+      expect(resumo.comSobra, 1);
+    });
+  });
+
+  group('corRackGalpao com saldo', () {
+    const cinza = Color(0xFF888888);
+    final categorias = {'BORAL': cinza};
+
+    Color cor({
+      required Map<String, SaldoProduto> saldos,
+      bool mostrarSaldo         = true,
+      String? destacadoCodigo,
+      bool modoConferencia      = false,
+      Set<String> conferencia   = const {},
+    }) =>
+        corRackGalpao(
+          produtoCodigo:      'BORAL',
+          corPorProduto:      categorias,
+          destacadoCodigo:    destacadoCodigo,
+          modoConferencia:    modoConferencia,
+          codigosConferencia: conferencia,
+          mostrarSaldo:       mostrarSaldo,
+          saldos:             saldos,
+        );
+
+    test('falta pinta de vermelho e sobra de azul', () {
+      expect(cor(saldos: {'BORAL': _saldo(1800)}), corEnderecoDivergente);
+      expect(cor(saldos: {'BORAL': _saldo(3000)}),
+          corEnderecoDivergentePositiva);
+    });
+
+    test('saldo que fecha, produto sem saldo e leitura desligada mantêm a '
+        'cor da categoria', () {
+      expect(cor(saldos: {'BORAL': _saldo(2900)}), cinza);
+      expect(cor(saldos: const {}), cinza);
+      expect(cor(saldos: {'BORAL': _saldo(1800)}, mostrarSaldo: false), cinza);
+    });
+
+    test('conferência e busca têm precedência sobre o saldo', () {
+      expect(
+        cor(
+          saldos:          {'BORAL': _saldo(1800)},
+          modoConferencia: true,
+          conferencia:     const {'BORAL'},
+        ),
+        corConferenciaCiano,
+      );
+      expect(
+        cor(saldos: {'BORAL': _saldo(1800)}, destacadoCodigo: 'BORAL'),
+        corCamda,
+      );
+    });
+  });
+
+  group('painel do endereço', () {
+    testWidgets('rack de produto com carga por endereçar mostra o que falta',
+        (tester) async {
+      await tester.pumpWidget(_painel({'BORAL': _saldo(1800)}));
+
+      expect(find.text('Faltam 55 baldes por endereçar'), findsOneWidget);
+      expect(find.text('Sistema 145 baldes · endereçado 90 baldes'),
+          findsOneWidget);
+    });
+
+    testWidgets('endereçado acima do sistema mostra a sobra', (tester) async {
+      await tester.pumpWidget(_painel({'BORAL': _saldo(3000)}));
+
+      expect(find.text('Sobram 5 baldes endereçados'), findsOneWidget);
+    });
+
+    testWidgets('saldo que fecha, e produto sem saldo sem tarja nenhuma',
+        (tester) async {
+      await tester.pumpWidget(_painel({'BORAL': _saldo(2900)}));
+      expect(find.text('Tudo endereçado'), findsOneWidget);
+
+      await tester.pumpWidget(_painel(const {}));
+      expect(find.text('Tudo endereçado'), findsNothing);
+      expect(find.textContaining('por endereçar'), findsNothing);
+    });
+  });
+
+  group('galpão com a leitura de saldo', () {
+    Widget pagina() => MaterialApp(
+          home: GalpaoPage(
+            pilhasIniciais:  _pilhas,
+            catalogoInicial: const [],
+            saldosIniciais:  {'BORAL': _saldo(1800)},
+          ),
+        );
+
+    testWidgets('a faixa resume os produtos por endereçar e o botão desliga '
+        'a leitura', (tester) async {
+      await tester.pumpWidget(pagina());
+      await tester.pump();
+
+      expect(find.text('1 produto por endereçar'), findsOneWidget);
+
+      // Botão da barra superior: sólido com a leitura ligada.
+      await tester.tap(find.byIcon(Icons.balance));
+      await tester.pump();
+
+      expect(find.text('1 produto por endereçar'), findsNothing);
+      expect(find.byIcon(Icons.balance_outlined), findsOneWidget);
+    });
+
+    testWidgets('aberta com saldoAoAbrir: false, começa sem a faixa',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          pilhasIniciais:  _pilhas,
+          catalogoInicial: const [],
+          saldosIniciais:  {'BORAL': _saldo(1800)},
+          saldoAoAbrir:    false,
+        ),
+      ));
+      await tester.pump();
+
+      expect(find.text('1 produto por endereçar'), findsNothing);
+    });
+  });
+}

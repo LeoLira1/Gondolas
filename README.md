@@ -42,6 +42,21 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   e os chips das ruas com o produto ganham um ponto laranja. O painel de um
   rack tem o mesmo destaque num botão (`Destacar N posições deste produto`),
   para partir de um palete achado no mapa.
+- **Saldo do produto no palete (sistema × endereçado)**: com a leitura de
+  saldo ligada (botão da balança na barra superior, ligada por padrão), o rack
+  de um produto que ainda tem carga sem endereço fica **vermelho** e o de um
+  produto endereçado além do que o sistema registra fica **azul** — as mesmas
+  cores que as gôndolas e estantes já usam para divergência de contagem. O
+  painel do endereço mostra a conta por extenso (`Sistema 145 baldes ·
+  endereçado 90 baldes`), e ela também aparece ao escolher o produto para
+  lançar numa vaga, que é quando interessa saber quanto ainda falta distribuir.
+  O endereçado soma TODOS os locais do produto em `estoque_localizado`
+  (galpão + gôndolas + estantes) contra `estoque_mestre.qtd_sistema` — a mesma
+  conta com que o app fecha o inventário cíclico —, então um produto que também
+  está na loja não aparece em falta por causa disso. Produto sem linha no
+  `estoque_mestre` fica na cor da categoria: sem `qtd_sistema` não há saldo a
+  afirmar. A precedência das cores é Modo Conferência > busca > saldo >
+  categoria.
 - **Modo Conferência também no galpão**: o mesmo botão do mapa da loja acende
   em ciano os racks que guardam pendente de hoje (`contagem_itens`), apaga o
   resto e põe um contador `<posição> · <nº>` acima de cada pilha. O cruzamento

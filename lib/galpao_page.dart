@@ -4,11 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'embalagem.dart';
+import 'estoque_localizado_service.dart';
 import 'galpao_busca.dart';
 import 'galpao_config.dart';
 import 'galpao_pilhas.dart';
+import 'galpao_saldo.dart';
 import 'galpao_scene.dart';
 import 'galpao_service.dart';
+import 'gondola_scene.dart'
+    show corEnderecoDivergente, corEnderecoDivergentePositiva;
 import 'modo_conferencia_service.dart';
 import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
 import 'turso_service.dart';
@@ -45,6 +49,15 @@ class GalpaoPage extends StatefulWidget {
   /// as consultas ao banco (testes e uso offline).
   final ModoConferenciaResultado? conferenciaInicial;
 
+  /// Saldos (sistema × endereçado) já prontos, por código de produto. Como
+  /// [pilhasIniciais], informá-los desliga a consulta ao banco.
+  final Map<String, SaldoProduto>? saldosIniciais;
+
+  /// Abrir com a leitura de saldo desligada — o galpão nas cores de
+  /// categoria. Ligada é o padrão: a pergunta de quem está distribuindo carga
+  /// é justamente o que ainda falta endereçar.
+  final bool saldoAoAbrir;
+
   const GalpaoPage({
     super.key,
     this.pilhasIniciais,
@@ -53,6 +66,8 @@ class GalpaoPage extends StatefulWidget {
     this.codigoDestacado,
     this.conferenciaAoAbrir = false,
     this.conferenciaInicial,
+    this.saldosIniciais,
+    this.saldoAoAbrir = true,
   });
 
   @override
@@ -95,6 +110,13 @@ class _GalpaoPageState extends State<GalpaoPage> {
   bool                      _modoConferencia       = false;
   bool                      _carregandoConferencia = false;
   ModoConferenciaResultado? _conferencia;
+
+  // Saldo por produto: quanto o sistema diz que existe contra quanto já está
+  // endereçado. Ligado, pinta de vermelho o rack de produto com carga ainda
+  // por endereçar e de azul o que passou do sistema — a mesma convenção das
+  // gôndolas e estantes.
+  late bool                 _mostrarSaldo = widget.saldoAoAbrir;
+  Map<String, SaldoProduto> _saldos       = const {};
 
   DescidaPilha? _descida;
   int           _descidaSeq = 0;
@@ -161,6 +183,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// parâmetro, o que veio é o que vale — nem o botão de atualizar consulta.
   bool get _consultandoConferencia => widget.conferenciaInicial == null;
 
+  /// True quando os saldos vêm do banco. Semeados por parâmetro (testes, uso
+  /// offline), a página não consulta nada.
+  bool get _consultandoSaldos =>
+      widget.saldosIniciais == null && _persistindo;
+
   bool _carregandoPilhas = false;
 
   @override
@@ -177,6 +204,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     } else {
       _carregarCatalogo();
     }
+    _saldos = {...?widget.saldosIniciais};
     _conferencia = widget.conferenciaInicial;
     if (widget.conferenciaAoAbrir) {
       _modoConferencia = true;
@@ -215,6 +243,40 @@ class _GalpaoPageState extends State<GalpaoPage> {
       _carregandoPilhas = false;
     });
     _marcarPosicaoInicial();
+    // Depois das pilhas de propósito: a consulta de saldo se apoia nos
+    // códigos que estão em galpao_racks, e recarregá-la junto mantém as duas
+    // leituras do mesmo instante.
+    unawaited(_carregarSaldos());
+  }
+
+  /// Relê os saldos do banco. Silencioso: sem conexão o mapa volta vazio e o
+  /// galpão simplesmente fica nas cores de categoria — a leitura de saldo é
+  /// informação a mais, nunca um bloqueio para lançar carga.
+  Future<void> _carregarSaldos() async {
+    if (!_consultandoSaldos) return;
+    final saldos = await GalpaoService().carregarSaldos();
+    if (!mounted) return;
+    setState(() => _saldos = saldos);
+  }
+
+  /// Saldo de um produto para o painel, mesmo que ele ainda não tenha rack
+  /// nenhum no galpão — é o número que interessa na hora de lançar ("o
+  /// sistema tem 145, já endereçei 100").
+  ///
+  /// O mapa em memória responde primeiro; só um produto de fora dele (nunca
+  /// endereçado, ou catálogo recém-aberto) custa as duas consultas.
+  Future<SaldoProduto?> _saldoDoProduto(String codigo) async {
+    final emMemoria = _saldos[codigo];
+    if (emMemoria != null) return emMemoria;
+    if (!_consultandoSaldos) return null;
+    final servico = EstoqueLocalizadoService();
+    final info = await servico.buscarInfoMestre(codigo);
+    if (info == null) return null;
+    return SaldoProduto(
+      codigo:     codigo,
+      qtdSistema: info.qtdSistema,
+      enderecado: await servico.totalProduto(codigo),
+    );
   }
 
   /// Aplica [GalpaoPage.posicaoInicial], quando informada: isola a rua e marca
@@ -386,6 +448,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
     if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
     setState(() {
       _pilhas[posicao] = nova;
+      // O saldo do produto acompanha o lançamento na hora: o cubo que acabou
+      // de entrar não pode continuar vermelho esperando a releitura do banco.
+      _saldos = saldosComDelta(_saldos,
+          codigo: produto.codigo, delta: quantidade);
       _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
       _recentes.insert(
           0, LancamentoRecente(produto: produto, quantidade: quantidade));
@@ -404,20 +470,36 @@ class _GalpaoPageState extends State<GalpaoPage> {
     );
     if (!mounted) return;
     if (gravada == null) {
-      setState(() => _pilhas[posicao] = antes);
+      setState(() {
+        _pilhas[posicao] = antes;
+        _saldos = saldosComDelta(_saldos,
+            codigo: produto.codigo, delta: -quantidade);
+      });
       _avisar('Não deu para gravar o lançamento — confira a conexão com o '
           'banco em ⚙️.');
     } else {
       // A pilha do banco manda: se outra pessoa lançou nesta posição no meio
       // do caminho, o rack novo entrou num nível acima do previsto.
       setState(() => _pilhas[posicao] = gravada);
+      // E o saldo do banco também: o delta otimista acima ignora o que outro
+      // aparelho lançou enquanto isso.
+      unawaited(_carregarSaldos());
     }
   }
 
   Future<void> _onEsvaziar(int posicao, int ordem) async {
     final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+    // O rack que sai: o que ele levava embora deixa de estar endereçado, e o
+    // saldo do produto tem de refletir isso no mesmo frame da descida.
+    final saindo = ordem >= 1 && ordem <= antes.length
+        ? antes[ordem - 1]
+        : null;
     setState(() {
       _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
+      if (saindo != null) {
+        _saldos = saldosComDelta(_saldos,
+            codigo: saindo.produtoCodigo, delta: -saindo.quantidade);
+      }
       _descida = DescidaPilha(
         posicao:        posicao,
         aPartirDaOrdem: ordem,
@@ -433,12 +515,35 @@ class _GalpaoPageState extends State<GalpaoPage> {
     );
     if (!mounted) return;
     if (gravada == null) {
-      setState(() => _pilhas[posicao] = antes);
+      setState(() {
+        _pilhas[posicao] = antes;
+        if (saindo != null) {
+          _saldos = saldosComDelta(_saldos,
+              codigo: saindo.produtoCodigo, delta: saindo.quantidade);
+        }
+      });
       _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
     } else {
       setState(() => _pilhas[posicao] = gravada);
+      unawaited(_carregarSaldos());
     }
   }
+
+  /// Códigos com rack no galpão — a base do resumo de saldo (um produto em
+  /// oito paletes conta uma vez).
+  Iterable<String> get _codigosComRack => [
+        for (final pilha in _pilhas.values)
+          for (final rack in pilha) rack.produtoCodigo,
+      ];
+
+  /// Quantos produtos do galpão estão com falta e quantos com sobra. Vazio
+  /// com a leitura desligada (ou no Modo Conferência, que manda nas cores).
+  ({int comFalta, int comSobra}) get _resumoSaldo =>
+      _mostrarSaldo && !_modoConferencia
+          ? resumoSaldos(_saldos, _codigosComRack)
+          : (comFalta: 0, comSobra: 0);
+
+  void _toggleSaldo() => setState(() => _mostrarSaldo = !_mostrarSaldo);
 
   /// Racks ocupados no galpão inteiro.
   int get _racksOcupados =>
@@ -458,6 +563,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
   @override
   Widget build(BuildContext context) {
     final sel = _selecionado;
+    // Uma vez por frame: a conta percorre os racks todos, e a faixa a consulta
+    // em três lugares.
+    final resumoSaldo = _resumoSaldo;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0b0c0e),
@@ -476,6 +584,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
             modoConferencia:     _modoConferencia,
             codigosConferencia:  _codigosConferencia,
             contagemConferencia: _contagemConferencia,
+            mostrarSaldo:        _mostrarSaldo,
+            saldos:              _saldos,
           ),
 
           Positioned(
@@ -518,6 +628,16 @@ class _GalpaoPageState extends State<GalpaoPage> {
                         ],
                       ),
                     ),
+                    // Sem o botão de saldo durante a conferência: ali as
+                    // cores são da rota do dia, e um botão que não muda nada
+                    // na tela é pior que botão nenhum.
+                    if (!_modoConferencia) ...[
+                      _ToggleSaldoGalpao(
+                        ativo: _mostrarSaldo,
+                        onTap: _toggleSaldo,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     _ToggleConferenciaGalpao(
                       ativo: _modoConferencia,
                       onTap: _toggleConferencia,
@@ -606,6 +726,14 @@ class _GalpaoPageState extends State<GalpaoPage> {
                               : () => _filtrarRua(null),
                         ),
                       ),
+                    if (resumoSaldo.comFalta > 0 || resumoSaldo.comSobra > 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        child: _FaixaSaldo(
+                          comFalta: resumoSaldo.comFalta,
+                          comSobra: resumoSaldo.comSobra,
+                        ),
+                      ),
                     if (_modoConferencia)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -642,6 +770,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   carregandoCatalogo:  _carregandoCatalogo,
                   codigosConferencia:  _codigosConferencia,
                   destacadoCodigo:     _destacadoCodigo,
+                  saldos:              _saldos,
+                  onConsultarSaldo:    _saldoDoProduto,
                   onAlternarDestaque:  _modoConferencia
                       ? null
                       : _alternarDestaque,
@@ -923,6 +1053,15 @@ class PainelEnderecoGalpao extends StatefulWidget {
   /// Null esconde o botão (Modo Conferência manda nas cores).
   final ValueChanged<String>?      onAlternarDestaque;
 
+  /// Saldos já conhecidos (sistema × endereçado), por código de produto —
+  /// os mesmos que pintam os cubos.
+  final Map<String, SaldoProduto>  saldos;
+
+  /// Busca o saldo de um produto que não está em [saldos] — é o caso do
+  /// produto escolhido para lançar, que pode nunca ter tido endereço. Null
+  /// (testes, uso offline) mostra só o que já veio em [saldos].
+  final Future<SaldoProduto?> Function(String codigo)? onConsultarSaldo;
+
   const PainelEnderecoGalpao({
     super.key,
     required this.toque,
@@ -937,6 +1076,8 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.codigosConferencia = const {},
     this.destacadoCodigo,
     this.onAlternarDestaque,
+    this.saldos             = const {},
+    this.onConsultarSaldo,
   });
 
   @override
@@ -949,6 +1090,61 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   List<Produto> _resultados  = const [];
   Produto?      _produtoSel;
+
+  /// Saldo do produto em foco: o do rack, num endereço ocupado, ou o do
+  /// produto escolhido para lançar numa vaga livre. Null enquanto não se sabe
+  /// (produto fora do estoque_mestre, ou consulta ainda a caminho).
+  SaldoProduto? _saldo;
+
+  /// Sequência das consultas de saldo: trocar de produto invalida a resposta
+  /// da anterior, que pode chegar depois e mostrar o número do produto errado.
+  int _saldoSeq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final rack = _rackDoToque;
+    if (rack != null) _focarSaldo(rack.produtoCodigo);
+  }
+
+  /// O rack sob o endereço tocado, ou null numa vaga livre.
+  RackGalpao? get _rackDoToque {
+    final t     = widget.toque;
+    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
+    return t.ocupado && t.ordem <= pilha.length ? pilha[t.ordem - 1] : null;
+  }
+
+  /// Põe o saldo de [codigo] em foco. O mapa em memória responde na hora; se
+  /// o produto não estiver nele, a consulta assíncrona preenche depois.
+  ///
+  /// NÃO chama setState de propósito: os dois chamadores (initState e o
+  /// setState de [_selecionarProduto]) já estão num ponto em que a tela vai
+  /// ser construída em seguida. A resposta assíncrona, essa sim, avisa a tela.
+  void _focarSaldo(String codigo) {
+    final seq = ++_saldoSeq;
+    _saldo = widget.saldos[codigo];
+    if (_saldo != null) return;
+    final consulta = widget.onConsultarSaldo;
+    if (consulta == null) return;
+    unawaited(() async {
+      final saldo = await consulta(codigo);
+      if (!mounted || seq != _saldoSeq) return;
+      setState(() => _saldo = saldo);
+    }());
+  }
+
+  @override
+  void didUpdateWidget(PainelEnderecoGalpao old) {
+    super.didUpdateWidget(old);
+    // Saldo relido do banco (ou mexido por um lançamento em outro endereço)
+    // com o painel aberto: a tarja acompanha, sem setState — a tela já está
+    // sendo reconstruída aqui.
+    if (identical(old.saldos, widget.saldos)) return;
+    final codigo = _produtoSel?.codigo ?? _rackDoToque?.produtoCodigo;
+    if (codigo == null) return;
+    final novo = widget.saldos[codigo];
+    if (novo != null) _saldo = novo;
+  }
 
   @override
   void dispose() {
@@ -969,6 +1165,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
       _produtoSel = p;
       _resultados = const [];
       _buscaCtrl.clear();
+      _focarSaldo(p.codigo);
       if (quantidadeLitros != null) {
         final emUnidades = unidadeDoNome(p.nome) != null
             ? quantidadeLitros / litrosPorUnidade
@@ -1104,6 +1301,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final litros   = '${formatarNumero(rack.quantidade)} L';
     final temVaga  = pilha.length < GalpaoConfig.niveisMax;
     final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
+    final blocoSaldo = _blocoSaldo(rack.produtoNome);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1174,6 +1372,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             ),
           ],
         ),
+        if (blocoSaldo != null) ...[
+          const SizedBox(height: 10),
+          blocoSaldo,
+        ],
         if (widget.onAlternarDestaque != null) ...[
           const SizedBox(height: 10),
           _botaoDestaque(rack),
@@ -1212,6 +1414,83 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           ],
         ),
       ],
+    );
+  }
+
+  /// O saldo do produto em foco, em uma tarja: o que o sistema tem, o que já
+  /// está endereçado e a diferença entre os dois.
+  ///
+  /// É a leitura que explica a cor do cubo — vermelho falta endereçar, azul
+  /// passou do sistema —, e é também o número de que quem está distribuindo
+  /// carga precisa antes de digitar a quantidade: "o sistema tem 145, já pus
+  /// 100, faltam 45".
+  ///
+  /// Devolve null quando não há saldo conhecido (produto fora do
+  /// estoque_mestre, sem conexão, ou consulta a caminho) — melhor nada do que
+  /// um número inventado.
+  Widget? _blocoSaldo(String nomeProduto) {
+    final saldo = _saldo;
+    if (saldo == null) return null;
+
+    // As quantidades vão para a tela na unidade de manuseio do produto
+    // (baldes/caixas), a mesma do resto do painel — quem confere carga não
+    // conta litros.
+    String fmt(double valor) =>
+        quantidadeEmbalada(nomeProduto, valor) ?? formatarNumero(valor);
+
+    final cor = saldo.falta
+        ? corEnderecoDivergente
+        : saldo.sobra
+            ? corEnderecoDivergentePositiva
+            : const Color(0xFF6fcf97);
+    final icone = saldo.falta
+        ? Icons.report_problem_outlined
+        : saldo.sobra
+            ? Icons.unfold_more
+            : Icons.check_circle_outline;
+    final titulo = saldo.falta
+        ? 'Faltam ${fmt(saldo.quantoFalta)} por endereçar'
+        : saldo.sobra
+            ? 'Sobram ${fmt(saldo.quantoSobra)} endereçados'
+            : 'Tudo endereçado';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+      decoration: BoxDecoration(
+        color:        cor.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(7),
+        border:       Border.all(color: cor.withValues(alpha: 0.55)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icone, size: 13, color: cor),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  titulo,
+                  style: TextStyle(
+                      color:      cor,
+                      fontSize:   11,
+                      fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Sistema ${fmt(saldo.qtdSistema)} · '
+                  'endereçado ${fmt(saldo.enderecado)}',
+                  style: const TextStyle(
+                      color: Color(0xFF8a9aa8), fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1278,6 +1557,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   Widget _buildVazio(ToqueGalpao t) {
     final produto = _produtoSel;
+    // Saldo do produto escolhido: quanto ainda falta endereçar é justamente o
+    // que decide a quantidade a lançar neste palete.
+    final blocoSaldo = produto == null ? null : _blocoSaldo(produto.nome);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1455,6 +1737,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                   onTap: () => setState(() {
                     _produtoSel = null;
                     _qtdCtrl.clear();
+                    _saldo = null;
+                    _saldoSeq++;
                   }),
                   child: const Icon(Icons.close,
                       size: 14, color: Color(0xFF8a9aa8)),
@@ -1462,6 +1746,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
               ],
             ),
           ),
+          if (blocoSaldo != null) ...[
+            const SizedBox(height: 8),
+            blocoSaldo,
+          ],
           const SizedBox(height: 8),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -1557,6 +1845,119 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 /// Gêmeo do toggle do mapa da loja (main.dart), de propósito: é a MESMA função
 /// nos dois prédios, então tem o mesmo ícone, a mesma cor e o mesmo lugar na
 /// barra de cima. Quem aprendeu a acender a rota na loja não reaprende aqui.
+/// Liga/desliga a leitura de saldo do galpão: com ela ligada, o rack de um
+/// produto que ainda tem carga por endereçar fica vermelho e o de um produto
+/// endereçado além do sistema fica azul — as mesmas cores das gôndolas.
+///
+/// Existe como botão (e não como estado fixo) porque as duas leituras
+/// competem: a cor de saldo cobre a cor da categoria, que é como se acha um
+/// produto no mapa de longe. Desligar devolve o galpão às categorias.
+class _ToggleSaldoGalpao extends StatelessWidget {
+  final bool         ativo;
+  final VoidCallback onTap;
+
+  const _ToggleSaldoGalpao({required this.ativo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color: ativo
+              ? corCamda.withValues(alpha: 0.18)
+              : const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: ativo
+                ? corCamda
+                : Colors.white.withValues(alpha: 0.10),
+          ),
+        ),
+        child: Icon(
+          ativo ? Icons.balance : Icons.balance_outlined,
+          color: ativo ? corCamda : const Color(0xFF8a877f),
+          size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+/// Faixa de resumo do saldo: quantos produtos do galpão estão com carga por
+/// endereçar e quantos passaram do sistema.
+///
+/// Sem ela, os cubos vermelhos e azuis seriam duas cores novas sem legenda —
+/// e, com uma rua isolada pelo filtro, não haveria como saber que existem
+/// outros produtos fora da tela na mesma situação.
+class _FaixaSaldo extends StatelessWidget {
+  final int comFalta;
+  final int comSobra;
+
+  const _FaixaSaldo({required this.comFalta, required this.comSobra});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color:        const Color(0xEE141518),
+        borderRadius: BorderRadius.circular(10),
+        border:       Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        children: [
+          // Ícone contornado, o mesmo do botão apagado: o botão da barra fica
+          // sólido quando a leitura está ligada, e duas balanças sólidas na
+          // tela ao mesmo tempo confundem qual delas é o interruptor.
+          const Icon(Icons.balance_outlined,
+              size: 13, color: Color(0xFF8a877f)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 2,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (comFalta > 0)
+                  _legenda(
+                    corEnderecoDivergente,
+                    '${pluralizar(comFalta, 'produto')} por endereçar',
+                  ),
+                if (comSobra > 0)
+                  _legenda(
+                    corEnderecoDivergentePositiva,
+                    '${pluralizar(comSobra, 'produto')} acima do sistema',
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legenda(Color cor, String texto) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+              color: cor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            texto,
+            style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+          ),
+        ],
+      );
+}
+
 class _ToggleConferenciaGalpao extends StatelessWidget {
   final bool         ativo;
   final VoidCallback onTap;
