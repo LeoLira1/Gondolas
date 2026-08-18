@@ -186,8 +186,38 @@ alguém corrigir. Na primeira vez que ela roda, a limpeza pode ser grande — s�
 todas as vendas acumuladas desde a última contagem de cada produto, e todas
 elas aparecem no extrato.
 
+**Uma passada a cada 10 minutos, no máximo.** A abertura do app e a abertura
+do galpão pedem a baixa cada uma por si, e o galpão é reaberto dezenas de
+vezes num turno — cada passada lê o `estoque_localizado` inteiro, o catálogo e
+as duas tabelas do mapa. Como a baixa é idempotente por contagem, repetir tudo
+isso um minuto depois nunca acha nada de novo: dentro da janela a chamada
+devolve o resumo da passada anterior, sem tocar no banco. Religar o
+interruptor em ⚙️ zera a janela, porque pedido explícito não espera.
+
 A regra vive em `lib/baixa_por_contagem.dart` (função pura, sem banco e sem
 tela); o SQL e a ordem das gravações, em `lib/baixa_por_contagem_service.dart`.
+
+### O galpão travando ao abrir
+
+Com a baixa automática no ar, o app passou a mostrar "Gôndola CAMDA não está
+respondendo" ao abrir o galpão. A culpa não era da baixa em si, e sim de uma
+função que ela passou a chamar num tamanho novo: `gruposDeCodigos`
+(`lib/codigos_vinculados.dart`), que acha os códigos irmãos de cada produto,
+comparava CADA código com CADA nome do catálogo e recalculava a chave do nome
+a cada par. A leitura de saldo do galpão já a chamava, mas só com os ~300
+códigos que têm rack; a baixa a chama com TODOS os códigos de
+`estoque_localizado`.
+
+Medido com o catálogo real de 5000 nomes: 300 códigos custavam 7,4 s de CPU
+travada na thread da interface, 2000 códigos custavam 42 s. Daí o ANR do
+Android, que dispara com 5 s sem resposta.
+
+Agora o casamento por nome passa por um índice `chave do nome → códigos`,
+montado numa varredura só: os mesmos 3000 × 5000 saem em dezenas de
+milissegundos. Um teste em `test/codigos_vinculados_test.dart` roda esse
+tamanho com um limite de 3 s, para o laço dentro do laço não voltar sem
+ninguém ver. A baixa do galpão também espera o primeiro frame antes de
+começar, para não disputar a thread com o primeiro paint da cena 3D.
 
 ## Créditos
 

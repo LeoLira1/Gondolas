@@ -100,5 +100,54 @@ void main() {
       );
       expect(grupos['FANTASMA'], {'FANTASMA'});
     });
+
+    test('três códigos do mesmo nome somam entre si, em qualquer ordem', () {
+      final grupos = gruposDeCodigos(
+        codigos: const ['US254185', '254185'],
+        produtoIdPorCodigo: const {},
+        nomePorCodigo: const {
+          '254185':    _boral,
+          'US254185':  _boral,
+          '100254185': _boral,
+        },
+      );
+      expect(grupos['US254185'], {'254185', 'US254185', '100254185'});
+      expect(grupos['254185'],   {'254185', 'US254185', '100254185'});
+    });
+  });
+
+  // O travamento do relato: o app abria o galpão e ficava em "não está
+  // respondendo". A busca do irmão comparava CADA código de estoque_localizado
+  // com CADA nome do catálogo, recalculando a chave do nome a cada par — com
+  // 3000 endereços e 5000 produtos são 15 milhões de chaves, quase um minuto
+  // parado na thread da interface. O índice por chave deixa a conta linear.
+  //
+  // O limite é folgado de propósito (a versão nova roda em dezenas de
+  // milissegundos, a antiga passava de um minuto): o que se quer travar aqui é
+  // a VOLTA do laço dentro do laço, não a velocidade da máquina do CI.
+  group('gruposDeCodigos no tamanho real do catálogo', () {
+    test('5000 nomes × 3000 códigos não trava a interface', () {
+      const catalogo = 5000, enderecados = 3000;
+      final nomes = <String, String>{
+        for (var i = 0; i < catalogo; i++)
+          'C${100000 + i}': 'PRODUTO ${i % 900} DE 20 LITROS',
+      };
+      final codigos = [
+        for (var i = 0; i < enderecados; i++) 'C${100000 + (i * 7) % catalogo}',
+      ];
+
+      final relogio = Stopwatch()..start();
+      final grupos = gruposDeCodigos(
+        codigos:            codigos,
+        produtoIdPorCodigo: const {},
+        nomePorCodigo:      nomes,
+      );
+      relogio.stop();
+
+      expect(grupos, hasLength(codigos.toSet().length));
+      // O irmão continua sendo achado: 5000 códigos para 900 nomes distintos.
+      expect(grupos['C100000']!.length, greaterThan(1));
+      expect(relogio.elapsed, lessThan(const Duration(seconds: 3)));
+    });
   });
 }

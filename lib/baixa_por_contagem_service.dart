@@ -40,6 +40,18 @@ class BaixaPorContagemService {
   final ValueNotifier<ResumoBaixa?> ultimoResumo =
       ValueNotifier<ResumoBaixa?>(null);
 
+  /// Intervalo mínimo entre duas passadas AUTOMÁTICAS.
+  ///
+  /// A abertura do app e a abertura do galpão chamam a baixa cada uma por si,
+  /// e o galpão é reaberto dezenas de vezes num turno. Cada passada lê o
+  /// estoque_localizado inteiro, o catálogo e as duas tabelas do mapa — e a
+  /// baixa é idempotente por contagem, então repetir tudo isso um minuto
+  /// depois nunca acha nada de novo. Só uma contagem NOVA muda o resultado, e
+  /// contagem não é confirmada de dez em dez segundos.
+  static const Duration intervaloMinimoAutomatica = Duration(minutes: 10);
+
+  DateTime? _ultimaAutomaticaEm;
+
   bool _rodando = false;
 
   /// True enquanto uma passada está em andamento — as telas chamam de mais de
@@ -62,13 +74,30 @@ class BaixaPorContagemService {
     return TursoService().client;
   }
 
-  /// Roda a baixa automática, se ela estiver ligada nas preferências. É o
-  /// ponto de entrada das telas: não decide nada além de respeitar o
-  /// interruptor.
+  /// Roda a baixa automática, se ela estiver ligada nas preferências e se a
+  /// última passada não foi agora há pouco. É o ponto de entrada das telas:
+  /// não decide nada além de respeitar o interruptor e o
+  /// [intervaloMinimoAutomatica].
+  ///
+  /// Dentro da janela devolve o resumo da última passada em vez de vazio: o
+  /// que ela baixou continua sendo a explicação do mapa que o usuário está
+  /// abrindo agora.
   Future<ResumoBaixa> rodarSeAutomatica() async {
     if (!await lerAutomatica()) return ResumoBaixa.vazio;
+    final ultima = _ultimaAutomaticaEm;
+    if (ultima != null &&
+        DateTime.now().difference(ultima) < intervaloMinimoAutomatica) {
+      return ultimoResumo.value ?? ResumoBaixa.vazio;
+    }
+    _ultimaAutomaticaEm = DateTime.now();
     return executar();
   }
+
+  /// Esquece a última passada automática, para a próxima chamada de
+  /// [rodarSeAutomatica] ler o banco de novo. É o que o interruptor da
+  /// configuração usa ao ser religado: pedido explícito não espera a janela
+  /// de quem não pediu nada.
+  void esquecerJanela() => _ultimaAutomaticaEm = null;
 
   /// Uma passada completa: planeja e (se [aplicar]) grava.
   ///

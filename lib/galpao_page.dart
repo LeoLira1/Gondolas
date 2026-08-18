@@ -248,7 +248,13 @@ class _GalpaoPageState extends State<GalpaoPage> {
       // quando muda alguma coisa, e é esse aviso que traz as pilhas já
       // corrigidas. Abrir o galpão é o momento certo — é aqui que o rack
       // azul de produto vendido aparecia.
-      unawaited(_rodarBaixaAutomatica());
+      //
+      // E depois do primeiro frame: a passada decodifica o estoque_localizado
+      // inteiro na thread da interface, e no initState isso cai justamente em
+      // cima do primeiro paint da cena 3D — o mapa abria engasgado.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_rodarBaixaAutomatica());
+      });
     } else {
       _marcarPosicaoInicial();
     }
