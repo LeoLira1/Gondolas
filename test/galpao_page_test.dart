@@ -94,8 +94,12 @@ void main() {
 
       /// Painel do rack aberto com o saldo do produto (sistema 57 × 14,3
       /// endereçados — o caso que motivou o ajuste) e o callback de ajuste.
+      ///
+      /// [onEsvaziar] null é o painel só de correção: sem ele o 0 não é um
+      /// valor aceito, porque não há para onde mandar o palete que sai.
       Widget montarComAjuste(void Function(double) onAjustar,
-              {Map<String, SaldoProduto> saldos = const {}}) =>
+              {Map<String, SaldoProduto> saldos = const {},
+              VoidCallback? onEsvaziar}) =>
           MaterialApp(
             home: Scaffold(
               body: PainelEnderecoGalpao(
@@ -103,6 +107,7 @@ void main() {
                 pilhas: const {8: [rack]},
                 saldos: saldos,
                 onFechar: () {},
+                onEsvaziar: onEsvaziar,
                 onAjustarQuantidade: onAjustar,
               ),
             ),
@@ -198,7 +203,7 @@ void main() {
         expect(find.textContaining('fecha com o sistema'), findsNothing);
       });
 
-      testWidgets('quantidade vazia ou zero não deixa salvar', (tester) async {
+      testWidgets('quantidade vazia não deixa salvar', (tester) async {
         await tester.pumpWidget(montarComAjuste((_) {}));
 
         await tester.tap(find.text('14.3 unidades'));
@@ -212,13 +217,67 @@ void main() {
             tester.widget<TextButton>(
                 find.widgetWithText(TextButton, 'Salvar')).onPressed,
             isNull);
+      });
 
-        await tester.enterText(campo, '0');
+      testWidgets('sem como esvaziar, 0 continua sem salvar', (tester) async {
+        await tester.pumpWidget(montarComAjuste((_) {}));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+            find.descendant(
+                of: find.byType(AlertDialog), matching: find.byType(TextField)),
+            '0');
         await tester.pump();
+
+        expect(find.widgetWithText(TextButton, 'Esvaziar'), findsNothing);
         expect(
             tester.widget<TextButton>(
                 find.widgetWithText(TextButton, 'Salvar')).onPressed,
             isNull);
+      });
+
+      testWidgets('0 vira Esvaziar, avisa em vermelho e tira o palete',
+          (tester) async {
+        double? ajustada;
+        var esvaziou = 0;
+        await tester.pumpWidget(montarComAjuste(
+          (q) => ajustada = q,
+          onEsvaziar: () => esvaziou++,
+        ));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+            find.descendant(
+                of: find.byType(AlertDialog), matching: find.byType(TextField)),
+            '0');
+        await tester.pump();
+
+        // O aviso é a confirmação: não existe mais botão Esvaziar no painel,
+        // então é aqui que quem digitou 0 sem querer tem de ler o que vai
+        // acontecer com o palete.
+        expect(find.textContaining('tira o palete'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'Salvar'), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, 'Esvaziar'));
+        await tester.pumpAndSettle();
+
+        expect(esvaziou, 1);
+        // 0 não passa por ajuste: quantidade zero não é quantidade.
+        expect(ajustada, isNull);
+      });
+
+      testWidgets('o painel do rack não tem mais botões de ação embaixo',
+          (tester) async {
+        await tester.pumpWidget(
+            montarComAjuste((_) {}, onEsvaziar: () {}));
+
+        expect(find.byType(OutlinedButton), findsNothing);
+        expect(find.text('Esvaziar'), findsNothing);
+        expect(find.textContaining('Lançar N'), findsNothing);
+        // O lápis do número é o caminho que restou — e é o mesmo para
+        // corrigir e para tirar.
+        expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
       });
     });
 
@@ -312,7 +371,9 @@ void main() {
       expect(find.text('1 · N1'), findsOneWidget);
       expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
       expect(find.text('90 unidades'), findsOneWidget);
-      expect(find.text('Esvaziar'), findsOneWidget);
+      // Painel limpo: o número (com o lápis) é a única ação do rack.
+      expect(find.text('Esvaziar'), findsNothing);
+      expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
     });
 
     testWidgets('últimos lançados aparecem como atalho com a quantidade',
@@ -348,7 +409,7 @@ void main() {
       expect(find.text('90 unidades'), findsOneWidget);
     });
 
-    testWidgets('esvaziar a base: o de cima desce, vira N1 e anima',
+    testWidgets('0 na quantidade da base: o de cima desce, vira N1 e anima',
         (tester) async {
       await tester.pumpWidget(MaterialApp(
         home: GalpaoPage(
@@ -372,12 +433,18 @@ void main() {
       expect(find.text('1 · N1'), findsOneWidget);
       expect(find.text('PRODUTO DE BAIXO'), findsOneWidget);
 
-      await tester.tap(find.text('Esvaziar'));
+      // Tirar o palete é digitar 0 no mesmo teclado que corrige o número.
+      await tester.tap(find.text('100 unidades'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          '0');
       await tester.pump();
-      // Confirmação avisa da renumeração.
+      // O aviso do 0 conta da renumeração antes de confirmar.
       expect(find.textContaining('descem um nível'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, 'Esvaziar'));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       // A descida anima (250 ms) e termina sem exceção.
       await tester.pump(const Duration(milliseconds: 100));
@@ -440,7 +507,7 @@ void main() {
       expect(find.text('200 unidades'), findsOneWidget);
     });
 
-    testWidgets('painel do rack do topo tem o atalho para a vaga de cima',
+    testWidgets('painel do rack não tem barra de botões embaixo',
         (tester) async {
       await tester.pumpWidget(MaterialApp(
         home: GalpaoPage(
@@ -456,15 +523,16 @@ void main() {
       ));
 
       // O topo da pilha responde ao toque como rack (prioridade sobre a
-      // vaga), e o painel dá o caminho para lançar na vaga de cima.
+      // vaga), e o painel mostra só a leitura do endereço: as duas barras
+      // coloridas de ação saíram do layout.
       await tester.tapAt(centroNaTela(tester, 1, 1));
       await tester.pump();
       expect(find.text('PRODUTO A'), findsOneWidget);
-
-      await tester.tap(find.text('Lançar N2'));
-      await tester.pump();
-      expect(find.text('1 · N2'), findsOneWidget);
-      expect(find.textContaining('carga nova entra como N2'), findsOneWidget);
+      expect(find.text('Esvaziar'), findsNothing);
+      expect(find.text('Lançar N2'), findsNothing);
+      // A pilha continua anunciando quanto cabe — é a leitura que sobrou de
+      // que há vaga em cima.
+      expect(find.text('Rua 1 · 1 de 4 na pilha'), findsOneWidget);
     });
   });
 

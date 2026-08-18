@@ -823,15 +823,6 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   onEsvaziar: () => _onEsvaziar(sel.posicao, sel.ordem),
                   onAjustarQuantidade: (quantidade) =>
                       _onAjustar(sel.posicao, sel.ordem, quantidade),
-                  onIrParaVaga: () {
-                    final pilha = _pilhas[sel.posicao] ?? const [];
-                    if (pilha.length >= GalpaoConfig.niveisMax) return;
-                    setState(() => _selecionado = ToqueGalpao(
-                          posicao: sel.posicao,
-                          ordem:   pilha.length + 1,
-                          ocupado: false,
-                        ));
-                  },
                 ),
               ),
             )
@@ -1049,11 +1040,12 @@ class _FaixaDestaqueProduto extends StatelessWidget {
 
 /// Painel inferior do endereço selecionado.
 ///
-/// Ocupado: produto, quantidade, botão Esvaziar (com a descida animada da
-/// pilha) e o atalho para a vaga do topo — o toque direto no wireframe da
-/// vaga de uma pilha parcial quase sempre acerta o rack embaixo dele (regra
-/// de prioridade do hit-test), então o caminho garantido para lançar em cima
-/// é por aqui.
+/// Ocupado: produto, quantidade e saldo. Sem botões de ação embaixo — eram
+/// duas barras coloridas ocupando a largura do painel e poluindo a leitura
+/// do que importa (o produto e o número). Tirar o palete é digitar 0 no
+/// mesmo teclado que corrige a quantidade: a operação é a mesma coisa vista
+/// pelo galpão — "não tem mais nada aqui" —, e o 0 já vem com a confirmação
+/// e a descida animada da pilha.
 ///
 /// Vazio: busca de produto (qualquer parte do nome, código, dois termos
 /// soltos), últimos lançados como atalho, quantidade e Lançar.
@@ -1065,8 +1057,10 @@ class PainelEnderecoGalpao extends StatefulWidget {
   final bool                       carregandoCatalogo;
   final VoidCallback               onFechar;
   final void Function(Produto produto, double quantidade)? onLancar;
+
+  /// Tira o palete do endereço. Chamado quando a quantidade nova é 0 — não
+  /// há mais botão para isso. Null trava o 0 no teclado de quantidade.
   final VoidCallback?              onEsvaziar;
-  final VoidCallback?              onIrParaVaga;
 
   /// Corrige a quantidade do rack aberto, em unidades. Null esconde o lápis
   /// ao lado do número (testes, uso só de leitura).
@@ -1104,7 +1098,6 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.carregandoCatalogo = false,
     this.onLancar,
     this.onEsvaziar,
-    this.onIrParaVaga,
     this.onAjustarQuantidade,
     this.codigosConferencia = const {},
     this.destacadoCodigo,
@@ -1218,48 +1211,30 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   /// Abre o teclado com a quantidade atual pronta para ser trocada, e devolve
   /// o número novo a quem sabe gravar.
+  ///
+  /// Zero não é uma quantidade: é o palete saindo do endereço. O dialog só
+  /// aceita 0 quando há como esvaziar, avisa em vermelho antes de salvar, e
+  /// aqui a chamada vai para [PainelEnderecoGalpao.onEsvaziar] — que é quem
+  /// derruba os racks de cima e renumera a pilha.
   Future<void> _abrirAjuste(RackGalpao rack) async {
-    final nova = await showDialog<double>(
+    final t     = widget.toque;
+    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
+    final nova  = await showDialog<double>(
       context: context,
       builder: (_) => _DialogAjustarQuantidade(
-        toque: widget.toque,
-        rack:  rack,
-        saldo: _saldo,
+        toque:        t,
+        rack:         rack,
+        saldo:        _saldo,
+        podeEsvaziar: widget.onEsvaziar != null,
+        temAcima:     t.ordem < pilha.length,
       ),
     );
     if (!mounted || nova == null || nova == rack.quantidade) return;
+    if (nova == 0) {
+      widget.onEsvaziar?.call();
+      return;
+    }
     widget.onAjustarQuantidade?.call(nova);
-  }
-
-  Future<void> _confirmarEsvaziar() async {
-    final t     = widget.toque;
-    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
-    final temAcima = t.ordem < pilha.length;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF141a22),
-        title: Text('Esvaziar ${t.posicao} · N${t.ordem}?',
-            style: const TextStyle(color: Colors.white, fontSize: 16)),
-        content: temAcima
-            ? const Text(
-                'Os racks de cima descem um nível e a ordem é renumerada.',
-                style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13))
-            : null,
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Esvaziar',
-                style: TextStyle(color: Color(0xFFef5350))),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) widget.onEsvaziar?.call();
   }
 
   @override
@@ -1319,7 +1294,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           ),
           const SizedBox(height: 10),
           if (rack != null)
-            _buildOcupado(rack, pilha)
+            _buildOcupado(rack)
           else
             _buildVazio(t),
         ],
@@ -1329,8 +1304,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   // ── Endereço ocupado ───────────────────────────────────────────────────────
 
-  Widget _buildOcupado(RackGalpao rack, List<RackGalpao> pilha) {
-    final temVaga  = pilha.length < GalpaoConfig.niveisMax;
+  Widget _buildOcupado(RackGalpao rack) {
     final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
     final blocoSaldo    = _blocoSaldo();
     final botaoDestaque = _botaoDestaque(rack);
@@ -1377,9 +1351,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // O número é o botão: contar de novo e achar outro valor é a
-            // coisa mais comum que acontece com um palete já endereçado, e
-            // até aqui só dava para esvaziar e lançar tudo de novo.
+            // O número é o botão, e é o único caminho de escrita do rack:
+            // contar de novo e achar outro valor é a coisa mais comum que
+            // acontece com um palete já endereçado, e 0 é o palete saindo.
             InkWell(
               onTap: widget.onAjustarQuantidade == null
                   ? null
@@ -1428,39 +1402,6 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           const SizedBox(height: 8),
           botaoDestaque,
         ],
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed:
-                    widget.onEsvaziar == null ? null : _confirmarEsvaziar,
-                icon: const Icon(Icons.remove_circle_outline, size: 16),
-                label: const Text('Esvaziar'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFef5350),
-                  side: const BorderSide(color: Color(0x66ef5350)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-              ),
-            ),
-            if (temVaga && widget.onIrParaVaga != null) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: widget.onIrParaVaga,
-                  icon: const Icon(Icons.add, size: 16),
-                  label: Text('Lançar N${pilha.length + 1}'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF6fcf97),
-                    side: const BorderSide(color: Color(0x662e6b46)),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
       ],
     );
   }
@@ -1888,12 +1829,19 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
 // ── Ajuste de quantidade ─────────────────────────────────────────────────────
 
-/// Troca a quantidade de um rack que já está endereçado.
+/// Troca a quantidade de um rack que já está endereçado — e, com 0, tira o
+/// palete do endereço.
 ///
 /// Existe porque o caminho antigo para acertar um número era esvaziar e lançar
 /// de novo — o que, num palete no meio da pilha, derruba todos os racks de
 /// cima e renumera a pilha inteira (ver galpao_pilhas.dart) só para corrigir
 /// uma digitação. Aqui o palete não sai do lugar.
+///
+/// E é aqui também que ele sai, quando é para sair: com [podeEsvaziar], 0 é
+/// um valor aceito e o botão de salvar vira Esvaziar em vermelho, com o aviso
+/// da descida da pilha. O painel não tem mais botão para isso — o teclado que
+/// já se abre para conferir o número é o mesmo lugar onde se descobre que não
+/// há mais nada no endereço.
 ///
 /// Quando o produto está divergente do sistema, o dialog oferece de bandeja o
 /// número que zera a diferença: é quase sempre ele que se quer digitar — o
@@ -1903,10 +1851,20 @@ class _DialogAjustarQuantidade extends StatefulWidget {
   final RackGalpao    rack;
   final SaldoProduto? saldo;
 
+  /// 0 é aceito e sai daqui como pedido de esvaziar. Falso (uso só de
+  /// leitura, testes) mantém o dialog em correção de número.
+  final bool podeEsvaziar;
+
+  /// Há racks acima deste na pilha — o aviso do 0 precisa dizer que eles
+  /// descem um nível.
+  final bool temAcima;
+
   const _DialogAjustarQuantidade({
     required this.toque,
     required this.rack,
     required this.saldo,
+    this.podeEsvaziar = false,
+    this.temAcima     = false,
   });
 
   @override
@@ -1934,14 +1892,22 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
     super.dispose();
   }
 
+  /// O número digitado, ou null enquanto não dá para salvar. 0 só conta como
+  /// número quando há como esvaziar — sem isso ele é campo vazio, e o botão
+  /// fica desligado como antes.
   double? get _digitada {
     final q = double.tryParse(_ctrl.text.replaceAll(',', '.'));
-    return q != null && q > 0 ? q : null;
+    if (q == null || q < 0) return null;
+    if (q == 0) return widget.podeEsvaziar ? 0 : null;
+    return q;
   }
 
+  /// Salvar aqui tira o palete do endereço, não corrige o número.
+  bool get _esvaziando => _digitada == 0;
+
   /// A quantidade que faria o saldo do produto fechar com o sistema, se toda
-  /// a diferença couber NESTE rack. Null quando não há divergência conhecida
-  /// (ou quando fechar exigiria zerar o palete — para isso existe Esvaziar).
+  /// a diferença couber NESTE rack. Null quando fechar exigiria zerar o palete
+  /// — tirar o palete é decisão de quem está olhando para ele, não sugestão.
   double? get _sugestao {
     final saldo = widget.saldo;
     if (saldo == null || saldo.fecha) return null;
@@ -1959,6 +1925,9 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
     final t         = widget.toque;
     final sugestao  = _sugestao;
     final digitada  = _digitada;
+
+    const corSaindo = Color(0xFFef5350);
+    final esvaziando = _esvaziando;
 
     return AlertDialog(
       backgroundColor: const Color(0xFF141a22),
@@ -1999,14 +1968,52 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: corCamda, width: 1.5),
+                borderSide: BorderSide(
+                    color: esvaziando ? corSaindo : corCamda, width: 1.5),
               ),
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               isDense: true,
             ),
           ),
-          if (sugestao != null) ...[
+          // O 0 muda o que o botão faz, então tem de mudar o que o dialog
+          // diz: quem digitou 0 sem querer precisa ler "o palete sai" antes
+          // de encostar em Esvaziar.
+          if (esvaziando) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+              decoration: BoxDecoration(
+                color:        corSaindo.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(7),
+                border: Border.all(color: corSaindo.withValues(alpha: 0.55)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.remove_circle_outline,
+                      size: 14, color: corSaindo),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      widget.temAcima
+                          ? '0 tira o palete de ${t.posicao} · N${t.ordem}. '
+                            'Os racks de cima descem um nível e a ordem é '
+                            'renumerada.'
+                          : '0 tira o palete de ${t.posicao} · N${t.ordem} — '
+                            'o endereço fica livre.',
+                      style: const TextStyle(
+                          color: corSaindo,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (sugestao != null && !esvaziando) ...[
             const SizedBox(height: 10),
             InkWell(
               onTap: () => setState(() {
@@ -2046,8 +2053,11 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
           ],
           const SizedBox(height: 8),
           Text(
-            'Estava com ${quantidadeEmUnidades(widget.rack.quantidade)}. '
-            'Para tirar o palete inteiro, use Esvaziar.',
+            widget.podeEsvaziar
+                ? 'Estava com ${quantidadeEmUnidades(widget.rack.quantidade)}. '
+                  'Digite 0 para tirar o palete inteiro.'
+                : 'Estava com '
+                  '${quantidadeEmUnidades(widget.rack.quantidade)}.',
             style: const TextStyle(color: Color(0xFF6b7a88), fontSize: 11),
           ),
         ],
@@ -2060,8 +2070,12 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
         TextButton(
           onPressed:
               digitada == null ? null : () => Navigator.pop(context, digitada),
-          child: const Text('Salvar',
-              style: TextStyle(color: corCamda, fontWeight: FontWeight.w600)),
+          child: Text(
+            esvaziando ? 'Esvaziar' : 'Salvar',
+            style: TextStyle(
+                color:      esvaziando ? corSaindo : corCamda,
+                fontWeight: FontWeight.w600),
+          ),
         ),
       ],
     );

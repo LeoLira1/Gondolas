@@ -51,6 +51,13 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   rack tem o mesmo destaque num botão (`Destacar N posições`), que só aparece
   quando o produto está em mais de um lugar — acender a posição que já está
   aberta na tela não mostra nada.
+- **O número do palete é a única ação do rack**: tocar a quantidade no painel
+  abre o teclado que a corrige, e **0 tira o palete do endereço** (com aviso
+  em vermelho da descida da pilha antes de confirmar). O painel não tem mais a
+  barra de botões `Esvaziar` / `Lançar N<n>` embaixo — duas faixas coloridas
+  na largura toda competiam com o que se vai ler ali, que é o produto e o
+  número. Lançar em cima de uma pilha parcial é tocar o contorno da vaga no
+  mapa.
 - **Saldo do produto no palete (sistema × endereçado)**: com a leitura de
   saldo ligada (botão da balança na barra superior, ligada por padrão), o rack
   de um produto que ainda tem carga sem endereço fica **vermelho** e o de um
