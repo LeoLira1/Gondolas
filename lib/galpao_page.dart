@@ -482,6 +482,47 @@ class _GalpaoPageState extends State<GalpaoPage> {
     }
   }
 
+  /// Corrige a quantidade de um rack que já está lá — mesmo palete, mesmo
+  /// produto, número novo. Otimista como o lançamento, e pelo mesmo motivo: a
+  /// conferência é feita em pé, com o produto na frente.
+  ///
+  /// O painel NÃO fecha aqui (ao contrário de [_onLancar]): quem acabou de
+  /// corrigir quer ver a tarja de saldo fechar na hora — é a confirmação de
+  /// que o número agora bate com o sistema.
+  Future<void> _onAjustar(int posicao, int ordem, double quantidade) async {
+    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+    final rack  = ordem >= 1 && ordem <= antes.length ? antes[ordem - 1] : null;
+    if (rack == null || quantidade <= 0) return;
+    final delta = quantidade - rack.quantidade;
+    if (delta == 0) return;
+
+    setState(() {
+      _pilhas[posicao] = pilhaAposAjustar(antes, ordem, quantidade);
+      _saldos = saldosComDelta(_saldos,
+          codigo: rack.produtoCodigo, delta: delta);
+    });
+    if (!_persistindo) return;
+
+    final gravada = await GalpaoService().ajustarQuantidade(
+      posicao:    posicao,
+      ordem:      ordem,
+      quantidade: quantidade,
+    );
+    if (!mounted) return;
+    if (gravada == null) {
+      setState(() {
+        _pilhas[posicao] = antes;
+        _saldos = saldosComDelta(_saldos,
+            codigo: rack.produtoCodigo, delta: -delta);
+      });
+      _avisar('Não deu para gravar a quantidade — confira a conexão com o '
+          'banco em ⚙️.');
+    } else {
+      setState(() => _pilhas[posicao] = gravada);
+      unawaited(_carregarSaldos());
+    }
+  }
+
   Future<void> _onEsvaziar(int posicao, int ordem) async {
     final antes = _pilhas[posicao] ?? const <RackGalpao>[];
     // O rack que sai: o que ele levava embora deixa de estar endereçado, e o
@@ -780,6 +821,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   onLancar: (produto, quantidade) =>
                       _onLancar(sel.posicao, produto, quantidade),
                   onEsvaziar: () => _onEsvaziar(sel.posicao, sel.ordem),
+                  onAjustarQuantidade: (quantidade) =>
+                      _onAjustar(sel.posicao, sel.ordem, quantidade),
                   onIrParaVaga: () {
                     final pilha = _pilhas[sel.posicao] ?? const [];
                     if (pilha.length >= GalpaoConfig.niveisMax) return;
@@ -1025,6 +1068,10 @@ class PainelEnderecoGalpao extends StatefulWidget {
   final VoidCallback?              onEsvaziar;
   final VoidCallback?              onIrParaVaga;
 
+  /// Corrige a quantidade do rack aberto, em unidades. Null esconde o lápis
+  /// ao lado do número (testes, uso só de leitura).
+  final ValueChanged<double>?      onAjustarQuantidade;
+
   /// Códigos pendentes de conferência hoje: o rack cujo produto está aqui
   /// ganha a tarja ciana — quem tocou o cubo aceso precisa ver, no painel, que
   /// foi por isso que ele acendeu.
@@ -1058,6 +1105,7 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.onLancar,
     this.onEsvaziar,
     this.onIrParaVaga,
+    this.onAjustarQuantidade,
     this.codigosConferencia = const {},
     this.destacadoCodigo,
     this.onAlternarDestaque,
@@ -1166,6 +1214,21 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final quantidade = _quantidadeDigitada;
     if (produto == null || quantidade == null) return;
     widget.onLancar?.call(produto, quantidade);
+  }
+
+  /// Abre o teclado com a quantidade atual pronta para ser trocada, e devolve
+  /// o número novo a quem sabe gravar.
+  Future<void> _abrirAjuste(RackGalpao rack) async {
+    final nova = await showDialog<double>(
+      context: context,
+      builder: (_) => _DialogAjustarQuantidade(
+        toque: widget.toque,
+        rack:  rack,
+        saldo: _saldo,
+      ),
+    );
+    if (!mounted || nova == null || nova == rack.quantidade) return;
+    widget.onAjustarQuantidade?.call(nova);
   }
 
   Future<void> _confirmarEsvaziar() async {
@@ -1314,12 +1377,39 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              quantidadeEmUnidades(rack.quantidade),
-              style: const TextStyle(
-                color:      Colors.white,
-                fontSize:   18,
-                fontWeight: FontWeight.w600,
+            // O número é o botão: contar de novo e achar outro valor é a
+            // coisa mais comum que acontece com um palete já endereçado, e
+            // até aqui só dava para esvaziar e lançar tudo de novo.
+            InkWell(
+              onTap: widget.onAjustarQuantidade == null
+                  ? null
+                  : () => _abrirAjuste(rack),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      quantidadeEmUnidades(rack.quantidade),
+                      style: const TextStyle(
+                        color:      Colors.white,
+                        fontSize:   18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (widget.onAjustarQuantidade != null) ...[
+                      const SizedBox(width: 7),
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 3),
+                        child: Icon(Icons.edit_outlined,
+                            size: 15, color: corCamda),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
             const Spacer(),
@@ -1794,6 +1884,188 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         isDense: true,
       );
+}
+
+// ── Ajuste de quantidade ─────────────────────────────────────────────────────
+
+/// Troca a quantidade de um rack que já está endereçado.
+///
+/// Existe porque o caminho antigo para acertar um número era esvaziar e lançar
+/// de novo — o que, num palete no meio da pilha, derruba todos os racks de
+/// cima e renumera a pilha inteira (ver galpao_pilhas.dart) só para corrigir
+/// uma digitação. Aqui o palete não sai do lugar.
+///
+/// Quando o produto está divergente do sistema, o dialog oferece de bandeja o
+/// número que zera a diferença: é quase sempre ele que se quer digitar — o
+/// caso de "sistema 57, endereçado 14,3, e este é o único palete do produto".
+class _DialogAjustarQuantidade extends StatefulWidget {
+  final ToqueGalpao   toque;
+  final RackGalpao    rack;
+  final SaldoProduto? saldo;
+
+  const _DialogAjustarQuantidade({
+    required this.toque,
+    required this.rack,
+    required this.saldo,
+  });
+
+  @override
+  State<_DialogAjustarQuantidade> createState() =>
+      _DialogAjustarQuantidadeState();
+}
+
+class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
+  late final TextEditingController _ctrl = TextEditingController(
+    text: formatarNumero(widget.rack.quantidade),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // Cursor selecionando tudo: o gesto seguinte é digitar o número certo por
+    // inteiro, não emendar dígito no que já está lá.
+    _ctrl.selection =
+        TextSelection(baseOffset: 0, extentOffset: _ctrl.text.length);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  double? get _digitada {
+    final q = double.tryParse(_ctrl.text.replaceAll(',', '.'));
+    return q != null && q > 0 ? q : null;
+  }
+
+  /// A quantidade que faria o saldo do produto fechar com o sistema, se toda
+  /// a diferença couber NESTE rack. Null quando não há divergência conhecida
+  /// (ou quando fechar exigiria zerar o palete — para isso existe Esvaziar).
+  double? get _sugestao {
+    final saldo = widget.saldo;
+    if (saldo == null || saldo.fecha) return null;
+    // Arredondado na casa da tolerância do saldo: a subtração de dois
+    // doubles vindos de somas do banco produz "57.00000000000001", e o que
+    // se oferece para digitar não pode ter cauda de ponto flutuante.
+    final alvo = ((widget.rack.quantidade - saldo.diferenca) * 1000)
+            .roundToDouble() /
+        1000;
+    return alvo > 0 ? alvo : null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t         = widget.toque;
+    final sugestao  = _sugestao;
+    final digitada  = _digitada;
+
+    return AlertDialog(
+      backgroundColor: const Color(0xFF141a22),
+      title: Text('Quantidade em ${t.posicao} · N${t.ordem}',
+          style: const TextStyle(color: Colors.white, fontSize: 16)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.rack.produtoNome.isEmpty
+                ? widget.rack.produtoCodigo
+                : widget.rack.produtoNome,
+            style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller:   _ctrl,
+            autofocus:    true,
+            onChanged:    (_) => setState(() {}),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
+            ],
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            decoration: InputDecoration(
+              hintText:  'Unidades',
+              hintStyle: const TextStyle(color: Color(0x44ffffff)),
+              filled:    true,
+              fillColor: const Color(0xFF161c22),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF232f3a)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF232f3a)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: corCamda, width: 1.5),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              isDense: true,
+            ),
+          ),
+          if (sugestao != null) ...[
+            const SizedBox(height: 10),
+            InkWell(
+              onTap: () => setState(() {
+                _ctrl.text = formatarNumero(sugestao);
+                _ctrl.selection = TextSelection.collapsed(
+                    offset: _ctrl.text.length);
+              }),
+              borderRadius: BorderRadius.circular(7),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                decoration: BoxDecoration(
+                  color:        corCamda.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: corCamda.withValues(alpha: 0.55)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.auto_fix_high,
+                        size: 14, color: corCamda),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        'Usar ${formatarNumero(sugestao)} — fecha com o '
+                        'sistema',
+                        style: const TextStyle(
+                            color: corCamda,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text(
+            'Estava com ${quantidadeEmUnidades(widget.rack.quantidade)}. '
+            'Para tirar o palete inteiro, use Esvaziar.',
+            style: const TextStyle(color: Color(0xFF6b7a88), fontSize: 11),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        TextButton(
+          onPressed:
+              digitada == null ? null : () => Navigator.pop(context, digitada),
+          child: const Text('Salvar',
+              style: TextStyle(color: corCamda, fontWeight: FontWeight.w600)),
+        ),
+      ],
+    );
+  }
 }
 
 // ── Modo Conferência: botão e banner ─────────────────────────────────────────

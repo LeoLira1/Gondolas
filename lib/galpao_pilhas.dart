@@ -56,3 +56,36 @@ List<RackGalpao> pilhaAposEsvaziar(List<RackGalpao> pilha, int ordem) {
         ),
   ];
 }
+
+/// Pilha com a quantidade do rack de [ordem] trocada por [quantidade] — o
+/// resto (produto, nível, ordem dos outros racks) fica exatamente como estava.
+///
+/// É a correção de contagem: o palete está lá, o produto é o certo, só o
+/// número é que estava errado. Antes disso a única saída era esvaziar e lançar
+/// de novo, o que derrubava a pilha inteira em cima (regra 2) e trocava um
+/// erro de digitação por uma remontagem.
+///
+/// Ordem inexistente ou quantidade não positiva devolve a pilha como está —
+/// zerar é [pilhaAposEsvaziar], que é outra operação (o rack SAI e os de cima
+/// descem).
+List<RackGalpao> pilhaAposAjustar(
+  List<RackGalpao> pilha,
+  int ordem,
+  double quantidade,
+) {
+  if (quantidade <= 0) return pilha;
+  if (!pilha.any((r) => r.ordem == ordem)) return pilha;
+  return [
+    for (final r in pilha)
+      if (r.ordem != ordem)
+        r
+      else
+        RackGalpao(
+          posicao:       r.posicao,
+          ordem:         r.ordem,
+          produtoCodigo: r.produtoCodigo,
+          produtoNome:   r.produtoNome,
+          quantidade:    quantidade,
+        ),
+  ];
+}

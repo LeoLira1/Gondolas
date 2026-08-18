@@ -49,6 +49,40 @@ void main() {
     });
   });
 
+  group('pilhaAposAjustar', () {
+    test('troca só a quantidade do rack apontado', () {
+      final nova = pilhaAposAjustar(_pilha(3), 2, 57);
+      expect(nova.map((r) => r.quantidade), [100, 57, 300]);
+      // O palete não sai do lugar: produto, nível e ordem intactos.
+      expect(nova.map((r) => r.produtoCodigo), ['P1', 'P2', 'P3']);
+      expect(nova.map((r) => r.ordem), [1, 2, 3]);
+    });
+
+    test('a pilha de cima não desce — ajustar não é esvaziar', () {
+      final nova = pilhaAposAjustar(_pilha(4), 1, 1);
+      expect(nova.length, 4);
+      expect(nova.map((r) => r.produtoCodigo), ['P1', 'P2', 'P3', 'P4']);
+    });
+
+    test('quantidade zero ou negativa devolve a pilha como está', () {
+      final original = _pilha(2);
+      expect(pilhaAposAjustar(original, 1, 0), same(original));
+      expect(pilhaAposAjustar(original, 1, -5), same(original));
+    });
+
+    test('ordem inexistente devolve a pilha como está', () {
+      final original = _pilha(2);
+      expect(pilhaAposAjustar(original, 4, 10), same(original));
+      expect(pilhaAposAjustar(const [], 1, 10), isEmpty);
+    });
+
+    test('não muta a pilha original', () {
+      final original = _pilha(2);
+      pilhaAposAjustar(original, 1, 999);
+      expect(original[0].quantidade, 100);
+    });
+  });
+
   group('pilhaAposEsvaziar', () {
     test('esvaziar a base faz TODOS os de cima descerem e renumerarem', () {
       // É a regra que define o galpão: o nível não é identidade. Quem era

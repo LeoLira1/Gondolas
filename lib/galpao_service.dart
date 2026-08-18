@@ -300,6 +300,59 @@ class GalpaoService {
     }
   }
 
+  /// Troca a quantidade do rack de [ordem] — o palete continua onde está, com
+  /// o mesmo produto, só o número muda. Devolve a nova pilha, ou null se
+  /// falhou (sem conexão, rack inexistente, quantidade não positiva).
+  ///
+  /// É a correção de contagem que faltava: sem ela, acertar "57" num rack
+  /// lançado com 14 exigia esvaziar (derrubando a pilha de cima) e lançar de
+  /// novo. O espelho de estoque_localizado é reescrito pela mesma rotina do
+  /// lançamento, então o saldo do produto acompanha na mesma transação.
+  Future<List<RackGalpao>?> ajustarQuantidade({
+    required int    posicao,
+    required int    ordem,
+    required double quantidade,
+  }) async {
+    if (quantidade <= 0) return null; // zerar é esvaziar, que é outra coisa
+    final client = await _conexao();
+    if (client == null) return null;
+    final agora = DateTime.now().toIso8601String();
+    try {
+      final tx = await client.transaction();
+      try {
+        final antes = await tx.query(
+          'SELECT produto_codigo, quantidade FROM galpao_racks '
+          'WHERE posicao = ? AND ordem = ? LIMIT 1',
+          positional: [posicao, ordem],
+        );
+        if (antes.isEmpty) {
+          await tx.rollback();
+          return null;
+        }
+        final codigo   = antes.first['produto_codigo'] as String? ?? '';
+        final qtdAntes = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
+
+        await tx.execute(
+          'UPDATE galpao_racks SET quantidade = ?, atualizado_em = ? '
+          'WHERE posicao = ? AND ordem = ?',
+          positional: [quantidade, agora, posicao, ordem],
+        );
+
+        final pilha = await _lerPilha(tx, posicao);
+        await _reescreverEspelho(tx, posicao, pilha, agora);
+        await _registrarLog(tx, posicao, ordem, codigo,
+            anterior: qtdAntes, nova: quantidade, agora: agora);
+        await tx.commit();
+        return pilha;
+      } catch (e) {
+        await tx.rollback();
+        rethrow;
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Esvazia o rack de [ordem] e DESCE a pilha: os de cima descem um nível
   /// cada e a ordem é renumerada, tudo numa transação. Devolve a nova pilha,
   /// ou null se falhou.

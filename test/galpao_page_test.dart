@@ -71,6 +71,157 @@ void main() {
       expect(find.text('35 L'), findsNothing);
     });
 
+    testWidgets('endereço ocupado sem callback de ajuste não mostra o lápis',
+        (tester) async {
+      await tester.pumpWidget(montar(
+        const ToqueGalpao(posicao: 8, ordem: 1, ocupado: true),
+        {
+          8: const [
+            RackGalpao(
+                posicao: 8, ordem: 1, produtoCodigo: '10025267',
+                produtoNome: 'HERBICIDA BROWSER 5L', quantidade: 14.3),
+          ],
+        },
+      ));
+
+      expect(find.byIcon(Icons.edit_outlined), findsNothing);
+    });
+
+    group('ajustar a quantidade do rack', () {
+      const rack = RackGalpao(
+          posicao: 8, ordem: 1, produtoCodigo: '10025267',
+          produtoNome: 'HERBICIDA BROWSER 5L', quantidade: 14.3);
+
+      /// Painel do rack aberto com o saldo do produto (sistema 57 × 14,3
+      /// endereçados — o caso que motivou o ajuste) e o callback de ajuste.
+      Widget montarComAjuste(void Function(double) onAjustar,
+              {Map<String, SaldoProduto> saldos = const {}}) =>
+          MaterialApp(
+            home: Scaffold(
+              body: PainelEnderecoGalpao(
+                toque:  const ToqueGalpao(posicao: 8, ordem: 1, ocupado: true),
+                pilhas: const {8: [rack]},
+                saldos: saldos,
+                onFechar: () {},
+                onAjustarQuantidade: onAjustar,
+              ),
+            ),
+          );
+
+      testWidgets('tocar no número abre o dialog com a quantidade atual',
+          (tester) async {
+        await tester.pumpWidget(montarComAjuste((_) {}));
+
+        expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Quantidade em 8 · N1'), findsOneWidget);
+        // O campo já vem preenchido e selecionado: corrigir é digitar por
+        // cima, não apagar dígito a dígito.
+        final campo = tester.widget<TextField>(find.descendant(
+            of: find.byType(AlertDialog), matching: find.byType(TextField)));
+        expect(campo.controller?.text, '14.3');
+        expect(campo.controller?.selection.baseOffset, 0);
+      });
+
+      testWidgets('salvar devolve a quantidade nova sem esvaziar o palete',
+          (tester) async {
+        double? ajustada;
+        await tester.pumpWidget(montarComAjuste((q) => ajustada = q));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+            find.descendant(
+                of: find.byType(AlertDialog), matching: find.byType(TextField)),
+            '57');
+        await tester.pump();
+        await tester.tap(find.text('Salvar'));
+        await tester.pumpAndSettle();
+
+        expect(ajustada, 57);
+      });
+
+      testWidgets('cancelar não mexe em nada', (tester) async {
+        double? ajustada;
+        await tester.pumpWidget(montarComAjuste((q) => ajustada = q));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+            find.descendant(
+                of: find.byType(AlertDialog), matching: find.byType(TextField)),
+            '57');
+        await tester.pump();
+        await tester.tap(find.text('Cancelar'));
+        await tester.pumpAndSettle();
+
+        expect(ajustada, isNull);
+      });
+
+      testWidgets('quantidade divergente do sistema é oferecida de bandeja',
+          (tester) async {
+        double? ajustada;
+        await tester.pumpWidget(montarComAjuste(
+          (q) => ajustada = q,
+          saldos: const {
+            '10025267': SaldoProduto(
+                codigo: '10025267', qtdSistema: 57, enderecado: 14.3),
+          },
+        ));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+
+        // 14,3 no rack + 42,7 por endereçar = os 57 do sistema.
+        await tester.tap(find.textContaining('Usar 57'));
+        await tester.pump();
+        await tester.tap(find.text('Salvar'));
+        await tester.pumpAndSettle();
+
+        expect(ajustada, 57);
+      });
+
+      testWidgets('saldo que fecha não sugere número nenhum', (tester) async {
+        await tester.pumpWidget(montarComAjuste(
+          (_) {},
+          saldos: const {
+            '10025267': SaldoProduto(
+                codigo: '10025267', qtdSistema: 14.3, enderecado: 14.3),
+          },
+        ));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('fecha com o sistema'), findsNothing);
+      });
+
+      testWidgets('quantidade vazia ou zero não deixa salvar', (tester) async {
+        await tester.pumpWidget(montarComAjuste((_) {}));
+
+        await tester.tap(find.text('14.3 unidades'));
+        await tester.pumpAndSettle();
+        final campo = find.descendant(
+            of: find.byType(AlertDialog), matching: find.byType(TextField));
+
+        await tester.enterText(campo, '');
+        await tester.pump();
+        expect(
+            tester.widget<TextButton>(
+                find.widgetWithText(TextButton, 'Salvar')).onPressed,
+            isNull);
+
+        await tester.enterText(campo, '0');
+        await tester.pump();
+        expect(
+            tester.widget<TextButton>(
+                find.widgetWithText(TextButton, 'Salvar')).onPressed,
+            isNull);
+      });
+    });
+
     testWidgets('vaga livre anuncia em qual nível a carga entraria',
         (tester) async {
       await tester.pumpWidget(montar(
@@ -238,6 +389,55 @@ void main() {
       await tester.pump();
       expect(find.text('1 · N1'), findsOneWidget);
       expect(find.text('PRODUTO DE CIMA'), findsOneWidget);
+    });
+
+    testWidgets('ajustar a quantidade da base não derruba o rack de cima',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: _catalogoTeste,
+          pilhasIniciais: {
+            1: const [
+              RackGalpao(
+                  posicao: 1, ordem: 1, produtoCodigo: 'A',
+                  produtoNome: 'PRODUTO DE BAIXO', quantidade: 100),
+              RackGalpao(
+                  posicao: 1, ordem: 2, produtoCodigo: 'B',
+                  produtoNome: 'PRODUTO DE CIMA', quantidade: 200),
+            ],
+          },
+        ),
+      ));
+
+      await tester.tapAt(frenteNaTela(tester, 1, 1));
+      await tester.pump();
+      expect(find.text('100 unidades'), findsOneWidget);
+
+      await tester.tap(find.text('100 unidades'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          '57');
+      await tester.pump();
+      await tester.tap(find.text('Salvar'));
+      await tester.pumpAndSettle();
+
+      // O painel continua aberto no MESMO endereço, com o número novo — é a
+      // confirmação de que a correção pegou.
+      expect(find.text('1 · N1'), findsOneWidget);
+      expect(find.text('57 unidades'), findsOneWidget);
+      expect(find.text('PRODUTO DE BAIXO'), findsOneWidget);
+
+      // E a pilha continua de pé: nada desceu, nada foi renumerado.
+      expect(find.text('Rua 1 · 2 de 4 na pilha'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pump();
+      await tester.tapAt(centroNaTela(tester, 1, 2));
+      await tester.pump();
+      expect(find.text('1 · N2'), findsOneWidget);
+      expect(find.text('PRODUTO DE CIMA'), findsOneWidget);
+      expect(find.text('200 unidades'), findsOneWidget);
     });
 
     testWidgets('painel do rack do topo tem o atalho para a vaga de cima',
