@@ -12,6 +12,7 @@ on:
       - "claude/warehouse-search-highlight-all-wm1deu"
       - "claude/pallet-product-quantity-ou6pq0"
       - "claude/quantidade-sistema-discrepancia-bnuoum"
+      - "claude/rack-quantity-edit-61ezd7"
   workflow_dispatch:
 
 jobs:
