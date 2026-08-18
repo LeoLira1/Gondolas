@@ -14,6 +14,7 @@ on:
       - "claude/quantidade-sistema-discrepancia-bnuoum"
       - "claude/rack-quantity-edit-61ezd7"
       - "claude/local-cache-error-kuoiu8"
+      - "claude/galpao-segunda-parte-jd5mpt"
   workflow_dispatch:
 
 jobs:

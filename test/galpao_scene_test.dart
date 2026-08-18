@@ -103,6 +103,21 @@ void main() {
       final ordem = ruasPorProfundidade(const Vec3(30, 20, 30), visiveis: {2, 5});
       expect(ordem.map((r) => r.numero).toSet(), {2, 5});
     });
+
+    test('só as ruas da parte desenhada entram no percurso', () {
+      final parte1 = ruasPorProfundidade(const Vec3(60, 20, 1));
+      expect(parte1.map((r) => r.numero).toSet(), {1, 2, 3, 4, 5, 6, 7, 8});
+
+      final parte2 = ruasPorProfundidade(const Vec3(60, 20, 1), parte: 2);
+      expect(parte2.map((r) => r.numero).toSet(), {9, 10, 11, 12});
+
+      // O filtro de rua NÃO atravessa a parte: pedir a Rua 2 desenhando a
+      // parte 2 não traz a rua do outro bloco de volta para a tela.
+      expect(
+          ruasPorProfundidade(const Vec3(60, 20, 1),
+              parte: 2, visiveis: {2, 9}).map((r) => r.numero),
+          [9]);
+    });
   });
 
   group('cor do rack (precedência das três leituras)', () {
@@ -176,37 +191,55 @@ void main() {
   });
 
   group('enquadramento da câmera', () {
-    test('o galpão inteiro cabe na tela, em pé e deitado', () {
-      for (final size in const [Size(400, 800), Size(800, 400), Size(600, 600)]) {
-        final camera = GalpaoScene.enquadrar(size);
-        final proj = _projecao(camera, size);
-        final lim = GalpaoConfig.limites;
-        for (final x in [lim.minX, lim.maxX]) {
-          for (final z in [lim.minZ, lim.maxZ]) {
-            for (final y in [
-              0.0,
-              GalpaoConfig.yTopo(GalpaoConfig.niveisMax),
-            ]) {
-              final tela = proj(Vec3(x, y, z));
-              expect(tela, isNotNull, reason: 'canto atrás da câmera');
-              expect(tela!.dx, inInclusiveRange(0, size.width),
-                  reason: 'canto ($x, $y, $z) fora da tela $size');
-              expect(tela.dy, inInclusiveRange(0, size.height),
-                  reason: 'canto ($x, $y, $z) fora da tela $size');
+    test('a parte aberta cabe inteira na tela, em pé e deitado', () {
+      // Cada parte enquadra sozinha: o mapa desenha um bloco de cada vez, e é
+      // o envelope DELE que tem de caber.
+      for (final parte in GalpaoConfig.partes) {
+        for (final size in const [
+          Size(400, 800),
+          Size(800, 400),
+          Size(600, 600),
+        ]) {
+          final camera = GalpaoScene.enquadrar(size, parte: parte);
+          final proj = _projecao(camera, size);
+          final lim = GalpaoConfig.limitesDaParte(parte);
+          for (final x in [lim.minX, lim.maxX]) {
+            for (final z in [lim.minZ, lim.maxZ]) {
+              for (final y in [
+                0.0,
+                GalpaoConfig.yTopo(GalpaoConfig.niveisMax),
+              ]) {
+                final tela = proj(Vec3(x, y, z));
+                expect(tela, isNotNull, reason: 'canto atrás da câmera');
+                expect(tela!.dx, inInclusiveRange(0, size.width),
+                    reason: 'parte $parte · canto ($x, $y, $z) fora de $size');
+                expect(tela.dy, inInclusiveRange(0, size.height),
+                    reason: 'parte $parte · canto ($x, $y, $z) fora de $size');
+              }
             }
           }
         }
       }
     });
 
-    test('a câmera olha para o centro do galpão, de cima', () {
-      final camera = GalpaoScene.enquadrar(const Size(400, 800));
-      final lim = GalpaoConfig.limites;
-      expect(camera.target.x, closeTo((lim.minX + lim.maxX) / 2, 1e-9));
-      expect(camera.target.z, closeTo((lim.minZ + lim.maxZ) / 2, 1e-9));
-      // Bem acima do topo da pilha mais alta: é um mapa, tem de ler o chão.
-      expect(camera.position.y,
-          greaterThan(GalpaoConfig.yTopo(GalpaoConfig.niveisMax) * 3));
+    test('a câmera olha para o centro da parte aberta, de cima', () {
+      for (final parte in GalpaoConfig.partes) {
+        final camera =
+            GalpaoScene.enquadrar(const Size(400, 800), parte: parte);
+        final lim = GalpaoConfig.limitesDaParte(parte);
+        expect(camera.target.x, closeTo((lim.minX + lim.maxX) / 2, 1e-9),
+            reason: 'parte $parte');
+        expect(camera.target.z, closeTo((lim.minZ + lim.maxZ) / 2, 1e-9),
+            reason: 'parte $parte');
+        // Bem acima do topo da pilha mais alta: é um mapa, tem de ler o chão.
+        expect(camera.position.y,
+            greaterThan(GalpaoConfig.yTopo(GalpaoConfig.niveisMax) * 3),
+            reason: 'parte $parte');
+      }
+      // Enquadramentos diferentes: as duas partes estão longe uma da outra.
+      expect(GalpaoScene.enquadrar(const Size(400, 800), parte: 2).target.x,
+          greaterThan(
+              GalpaoScene.enquadrar(const Size(400, 800), parte: 1).target.x));
     });
   });
 
@@ -323,6 +356,55 @@ void main() {
         const ToqueGalpao(
             posicao: 1, ordem: GalpaoConfig.niveisMax, ocupado: true),
       ]);
+    });
+
+    testWidgets('na parte 2, o toque cai numa posição da parte 2',
+        (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: GalpaoScene(parte: 2, onTapEndereco: toques.add),
+        ),
+      ));
+
+      // Enquadramento da parte 2: o mesmo ponto de tela da posição 86 pela
+      // câmera com que a cena abre nessa parte.
+      final camera = GalpaoScene.enquadrar(tela, parte: 2);
+      final p = GalpaoConfig.porNumero(86)!;
+      final y = (GalpaoConfig.yBase(1) + GalpaoConfig.yTopo(1)) / 2;
+      await tester.tapAt(_projecao(camera, tela)(Vec3(p.x, y, p.z))!);
+      await tester.pump();
+
+      expect(toques, [
+        const ToqueGalpao(posicao: 86, ordem: 1, ocupado: false),
+      ]);
+    });
+
+    testWidgets('nenhum toque na parte 2 devolve endereço da parte 1',
+        (tester) async {
+      final toques = <ToqueGalpao?>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: GalpaoScene(parte: 2, onTapEndereco: toques.add),
+        ),
+      ));
+
+      // Varre a tela inteira: com o bloco da parte 1 fora do desenho, nenhum
+      // ponto pode devolver um endereço dele — esconder no desenho não basta,
+      // a lista de alvos do hit-test também tem de excluir a outra parte.
+      for (var x = 20.0; x < tela.width; x += 60) {
+        for (var y = 20.0; y < tela.height; y += 60) {
+          await tester.tapAt(Offset(x, y));
+          await tester.pump();
+        }
+      }
+
+      expect(toques, isNotEmpty);
+      for (final toque in toques) {
+        if (toque == null) continue;
+        expect(GalpaoConfig.parteDe(toque.posicao), 2,
+            reason: 'posição ${toque.posicao} não é da parte 2');
+      }
     });
 
     testWidgets('toque no nada desfaz a seleção (callback null)',

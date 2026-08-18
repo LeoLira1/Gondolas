@@ -16,9 +16,16 @@
 //    código de endereço textual (nada de 'GALPAO-52-N3': tal referência vence
 //    na primeira movimentação).
 //
-// A numeração das posições é GLOBAL e contínua de 1 a 85 — não reinicia por
-// rua. O endereço exibido é '<número> · N<nível>' (ex.: '52 · N3'); a rua é
-// derivada, mostrada só para orientar quem vai buscar.
+// O galpão se divide em DUAS PARTES, e elas são blocos separados no chão: a
+// parte 1, com 8 ruas e 85 posições, e a parte 2, com 4 ruas de 11 posições
+// cada (44). O mapa desenha UMA parte de cada vez — enquadrar os dois blocos
+// juntos deixaria cada rack do tamanho de um pixel —, mas a NUMERAÇÃO é uma
+// só, global e contínua de 1 a 129, sem reiniciar por rua nem por parte: o
+// número é o endereço, e o mesmo número em duas partes seriam duas vagas
+// diferentes com o mesmo nome. A parte 2 começa no 86, nas Ruas 9 a 12.
+//
+// O endereço exibido é '<número> · N<nível>' (ex.: '52 · N3'); a rua e a parte
+// são derivadas do número, mostradas só para orientar quem vai buscar.
 //
 // ATENÇÃO ao mexer aqui: as larguras de corredor embutidas nas coordenadas
 // abaixo ainda NÃO foram medidas no galpão — são estimativas. É para isso que
@@ -29,9 +36,9 @@
 
 /// Eixo ao longo do qual as posições de uma rua se sucedem.
 ///
-/// Seis das oito ruas correm em Z (o comprimento do galpão); as duas que
-/// atravessam as pontas do croqui — a Rua 2 no topo e a Rua 8 no fundo —
-/// correm em X.
+/// Dez das doze ruas correm em Z (o comprimento do galpão); as duas que
+/// atravessam as pontas do croqui da parte 1 — a Rua 2 no topo e a Rua 8 no
+/// fundo — correm em X. As quatro ruas da parte 2 são todas de eixo Z.
 enum EixoRua { x, z }
 
 /// Uma rua do galpão: uma fileira de posições no chão.
@@ -45,8 +52,14 @@ enum EixoRua { x, z }
 /// atravessa o topo para a esquerda, desce pela esquerda) — útil para uma
 /// futura rota de separação.
 class RuaGalpao {
-  /// Número da rua, 1–8, como está etiquetado no galpão.
+  /// Número da rua, 1–12, como está etiquetado no galpão. É único no galpão
+  /// inteiro: a parte 2 continua a contagem das ruas (9–12) pelo mesmo motivo
+  /// que continua a das posições.
   final int numero;
+
+  /// Parte do galpão a que a rua pertence: 1 ou 2. Manda no que o mapa
+  /// desenha — as ruas da outra parte não entram na cena nem no hit-test.
+  final int parte;
 
   /// Eixo ao longo do qual as posições se sucedem.
   final EixoRua eixo;
@@ -75,6 +88,7 @@ class RuaGalpao {
 
   const RuaGalpao({
     required this.numero,
+    required this.parte,
     required this.eixo,
     required this.coordFixa,
     required this.centro,
@@ -91,13 +105,14 @@ class RuaGalpao {
       numeroPosicao >= primeiroNumero && numeroPosicao <= ultimoNumero;
 }
 
-/// Uma das 85 posições de chão do galpão: a vaga onde uma pilha de até
+/// Uma das 129 posições de chão do galpão: a vaga onde uma pilha de até
 /// [GalpaoConfig.niveisMax] racks se apoia.
 ///
 /// Não guarda nível nenhum de propósito — o nível é a ordem do rack na pilha,
 /// e essa ordem é dado de ocupação, não de estrutura.
 class PosicaoGalpao {
-  /// Número global 1–85, único no galpão inteiro. É o endereço.
+  /// Número global 1–129, único no galpão inteiro (as duas partes dividem a
+  /// mesma contagem). É o endereço.
   final int numero;
 
   /// Rua a que a posição pertence — informação derivada, para orientação.
@@ -113,6 +128,9 @@ class PosicaoGalpao {
     required this.x,
     required this.z,
   });
+
+  /// Parte do galpão em que a posição está (1 ou 2) — a da sua rua.
+  int get parte => rua.parte;
 
   /// Tamanho da posição no eixo X. O lado de 1,20 m do rack corre ao longo da
   /// rua; nas ruas de eixo Z isso deixa 1,00 m em X, e nas de eixo X (Ruas 2 e
@@ -133,8 +151,8 @@ class PosicaoGalpao {
       : (x, z + rua.ladoCorredor * (tamanhoZ / 2 + GalpaoConfig.recuoEtiqueta));
 }
 
-/// Estrutura fixa do galpão: medidas do rack, tabela das ruas e as 85 posições
-/// derivadas dela.
+/// Estrutura fixa do galpão: medidas do rack, tabela das ruas e as 129
+/// posições derivadas dela.
 class GalpaoConfig {
   // ── Medidas do rack (metros) ───────────────────────────────────────────────
 
@@ -168,8 +186,9 @@ class GalpaoConfig {
 
   // ── Tabela das ruas ────────────────────────────────────────────────────────
   //
-  // 8 ruas, 85 posições, 340 endereços (85 × 4 níveis).
+  // 12 ruas, 129 posições, 516 endereços (129 × 4 níveis), em duas partes.
   //
+  // PARTE 1 — 8 ruas, 85 posições (1–85):
   //   Rua 1 │  1–14 │ 14 │ fileira simples (lado direito / perímetro)
   //   Rua 2 │ 15–25 │ 11 │ fileira simples, confirmada (topo, na horizontal)
   //   Rua 3 │ 26–36 │ 11 │ fileira simples (lado esquerdo / perímetro)
@@ -178,45 +197,61 @@ class GalpaoConfig {
   //   Rua 6 │ 57–67 │ 11 │ encostada fundo com fundo na Rua 7, confirmado
   //   Rua 7 │ 68–78 │ 11 │ encostada fundo com fundo na Rua 6, confirmado
   //   Rua 8 │ 79–85 │  7 │ fileira simples, na horizontal, fechando o FUNDO
+  //
+  // PARTE 2 — 4 ruas de 11 posições (86–129), todas fileiras simples com
+  // corredor dos dois lados:
+  //
+  //   Rua  9 │  86–96  │ 11 │ a da DIREITA no croqui (é o '1–11' do desenho)
+  //   Rua 10 │  97–107 │ 11 │ numerada de baixo para cima ('12–22')
+  //   Rua 11 │ 108–118 │ 11 │ de cima para baixo ('23–33')
+  //   Rua 12 │ 119–129 │ 11 │ a da ESQUERDA, de baixo para cima ('34–44')
+  //
+  // A numeração da parte 2 é uma serpentina: desce a primeira rua, sobe a
+  // seguinte, desce a outra, sobe a última — o mesmo princípio do perímetro
+  // contínuo da parte 1, e pela mesma razão (quem separa carga anda a rua
+  // inteira antes de virar para a próxima). No croqui do galpão ela está
+  // etiquetada de 1 a 44; no app o endereço é o número GLOBAL (86–129), que é
+  // o que vai para a etiqueta nova do rack — dois '44' no mesmo galpão não
+  // são endereço, são ambiguidade.
   static const List<RuaGalpao> ruas = [
     RuaGalpao(
-      numero: 1, eixo: EixoRua.z, coordFixa: 8.30, centro: 1.00,
+      numero: 1, parte: 1, eixo: EixoRua.z, coordFixa: 8.30, centro: 1.00,
       quantidade: 14, primeiroNumero: 1,
       // Sobe pela direita: o nº 1 fica no extremo Z positivo e a numeração
       // corre até o 14 no extremo Z negativo (topo do croqui).
       primeiroNoFim: true, ladoCorredor: -1,
     ),
     RuaGalpao(
-      numero: 2, eixo: EixoRua.x, coordFixa: -9.30, centro: 0.50,
+      numero: 2, parte: 1, eixo: EixoRua.x, coordFixa: -9.30, centro: 0.50,
       quantidade: 11, primeiroNumero: 15,
       // Atravessa o topo da direita para a esquerda: nº 15 em X positivo,
       // nº 25 em X negativo.
       primeiroNoFim: true, ladoCorredor: 1,
     ),
     RuaGalpao(
-      numero: 3, eixo: EixoRua.z, coordFixa: -7.60, centro: 0,
+      numero: 3, parte: 1, eixo: EixoRua.z, coordFixa: -7.60, centro: 0,
       quantidade: 11, primeiroNumero: 26,
       // Desce pela esquerda, fechando o perímetro: nº 26 no extremo Z
       // negativo.
       primeiroNoFim: false, ladoCorredor: 1,
     ),
     RuaGalpao(
-      numero: 4, eixo: EixoRua.z, coordFixa: -2.90, centro: 0,
+      numero: 4, parte: 1, eixo: EixoRua.z, coordFixa: -2.90, centro: 0,
       quantidade: 10, primeiroNumero: 37,
       primeiroNoFim: false, ladoCorredor: -1,
     ),
     RuaGalpao(
-      numero: 5, eixo: EixoRua.z, coordFixa: -1.85, centro: 0,
+      numero: 5, parte: 1, eixo: EixoRua.z, coordFixa: -1.85, centro: 0,
       quantidade: 10, primeiroNumero: 47,
       primeiroNoFim: false, ladoCorredor: 1,
     ),
     RuaGalpao(
-      numero: 6, eixo: EixoRua.z, coordFixa: 2.60, centro: 0,
+      numero: 6, parte: 1, eixo: EixoRua.z, coordFixa: 2.60, centro: 0,
       quantidade: 11, primeiroNumero: 57,
       primeiroNoFim: true, ladoCorredor: -1,
     ),
     RuaGalpao(
-      numero: 7, eixo: EixoRua.z, coordFixa: 3.65, centro: 0,
+      numero: 7, parte: 1, eixo: EixoRua.z, coordFixa: 3.65, centro: 0,
       quantidade: 11, primeiroNumero: 68,
       primeiroNoFim: false, ladoCorredor: 1,
     ),
@@ -230,27 +265,80 @@ class GalpaoConfig {
     // (x = -6,20) e a fileira andando para a direita até o 85, então o centro
     // é -6,20 + 3 passos = -2,18. A ponta direita do fundo fica livre.
     RuaGalpao(
-      numero: 8, eixo: EixoRua.x, coordFixa: 11.30, centro: -2.18,
+      numero: 8, parte: 1, eixo: EixoRua.x, coordFixa: 11.30, centro: -2.18,
       quantidade: 7, primeiroNumero: 79,
       // Ao contrário da Rua 2, a numeração sobe com o X: nº 79 no extremo X
       // negativo (lado da Rua 3), nº 85 em direção ao meio do galpão.
       primeiroNoFim: false, ladoCorredor: -1,
     ),
+
+    // ── Parte 2 ──────────────────────────────────────────────────────────────
+    //
+    // Quatro fileiras simples paralelas, com corredor entre TODAS elas (não há
+    // par costas com costas aqui). O passo de 4,45 m entre os eixos é 1,00 m
+    // de rack + 3,45 m de corredor livre — a mesma folga que a parte 1 estima
+    // entre a Rua 5 e a Rua 6. Como todo o resto das coordenadas, ainda é
+    // estimativa: a medição do galpão troca estes seis números e nada mais.
+    //
+    // O bloco fica deslocado no X, depois do fim da parte 1 (x = 8,80), com um
+    // vão de ~6,7 m entre os dois. O mapa nunca desenha as duas partes juntas,
+    // mas mantê-las em lugares diferentes do mesmo plano é o que deixa a
+    // planta coerente se um dia forem vistas de uma vez.
+    RuaGalpao(
+      numero: 9, parte: 2, eixo: EixoRua.z, coordFixa: 29.35, centro: 0,
+      quantidade: 11, primeiroNumero: 86,
+      // A rua da direita do croqui: o 86 (o '1' do desenho) fica no topo, em Z
+      // negativo, e a numeração desce a rua.
+      primeiroNoFim: false, ladoCorredor: -1,
+    ),
+    RuaGalpao(
+      numero: 10, parte: 2, eixo: EixoRua.z, coordFixa: 24.90, centro: 0,
+      quantidade: 11, primeiroNumero: 97,
+      // A serpentina vira aqui: o 97 (o '12') fica embaixo, encostado no 96,
+      // e a numeração sobe de volta.
+      primeiroNoFim: true, ladoCorredor: -1,
+    ),
+    RuaGalpao(
+      numero: 11, parte: 2, eixo: EixoRua.z, coordFixa: 20.45, centro: 0,
+      quantidade: 11, primeiroNumero: 108,
+      primeiroNoFim: false, ladoCorredor: -1,
+    ),
+    RuaGalpao(
+      numero: 12, parte: 2, eixo: EixoRua.z, coordFixa: 16.00, centro: 0,
+      quantidade: 11, primeiroNumero: 119,
+      primeiroNoFim: true, ladoCorredor: -1,
+    ),
   ];
 
-  /// Total de posições de chão do galpão (contado no galpão: 85).
+  /// Passo entre os eixos de duas ruas simples vizinhas da parte 2: rack
+  /// (1,00 m) + corredor. Não entra no cálculo das posições — as coordenadas
+  /// acima já o embutem —, fica aqui como a medida que um teste cobra das
+  /// quatro ruas quando elas forem remedidas, igual a
+  /// [distanciaParCostas] na parte 1.
+  static const double passoRuaSimples = 4.45;
+
+  /// As partes do galpão, em ordem. São dois blocos separados no chão, e o
+  /// mapa desenha um de cada vez.
+  static const List<int> partes = [1, 2];
+
+  /// Total de posições de chão do galpão, as duas partes somadas (129).
   static int get totalPosicoes =>
       ruas.fold(0, (soma, r) => soma + r.quantidade);
+
+  /// Ruas de uma parte, na ordem da tabela. Vazio se a parte não existe.
+  static List<RuaGalpao> ruasDaParte(int parte) =>
+      [for (final r in ruas) if (r.parte == parte) r];
 
   /// Total de endereços possíveis: posições × níveis.
   static int get totalEnderecos => totalPosicoes * niveisMax;
 
-  // ── Seed das 85 posições ───────────────────────────────────────────────────
+  // ── Seed das 129 posições ──────────────────────────────────────────────────
 
   static List<PosicaoGalpao>? _cachePosicoes;
   static Map<int, PosicaoGalpao>? _cachePorNumero;
 
-  /// As 85 posições, em ordem de número global (1 → 85).
+  /// As 129 posições, em ordem de número global (1 → 129), as duas partes na
+  /// mesma lista.
   ///
   /// Memoizada e imutável: a cena, o hit-test e os rótulos pedem esta lista o
   /// tempo todo, e ela é geometria fixa — remontá-la a cada frame seria lixo
@@ -258,7 +346,7 @@ class GalpaoConfig {
   static List<PosicaoGalpao> get posicoes =>
       _cachePosicoes ??= List.unmodifiable(_montarPosicoes());
 
-  /// Posição pelo número global, ou null se fora de 1–85.
+  /// Posição pelo número global, ou null se fora de 1–129.
   static PosicaoGalpao? porNumero(int numero) {
     final index = _cachePorNumero ??= {
       for (final p in posicoes) p.numero: p,
@@ -289,7 +377,26 @@ class GalpaoConfig {
     return index[numeroRua] ?? const <PosicaoGalpao>[];
   }
 
-  /// Rua a que um número de posição pertence, ou null se fora de 1–85.
+  static Map<int, List<PosicaoGalpao>>? _cachePorParte;
+
+  /// Posições de uma parte, em ordem de número global — lista vazia se a parte
+  /// não existe.
+  ///
+  /// É o que a cena desenha e o que o hit-test recebe como alvos: o mapa mostra
+  /// uma parte de cada vez, e o que sumiu da tela não pode continuar aceitando
+  /// toque. Memoizada pelo mesmo motivo de [posicoes].
+  static List<PosicaoGalpao> posicoesDaParte(int parte) {
+    final index = _cachePorParte ??= {
+      for (final p in partes)
+        p: List.unmodifiable(posicoes.where((pos) => pos.parte == p).toList()),
+    };
+    return index[parte] ?? const <PosicaoGalpao>[];
+  }
+
+  /// Parte em que está um número de posição, ou null se fora de 1–129.
+  static int? parteDe(int numeroPosicao) => ruaDe(numeroPosicao)?.parte;
+
+  /// Rua a que um número de posição pertence, ou null se fora de 1–129.
   static RuaGalpao? ruaDe(int numeroPosicao) {
     for (final r in ruas) {
       if (r.contem(numeroPosicao)) return r;
@@ -331,11 +438,29 @@ class GalpaoConfig {
 
   // ── Envelope do galpão (para enquadrar a câmera) ───────────────────────────
 
-  /// Retângulo que contém todas as posições, já com a meia-medida do rack.
-  static ({double minX, double maxX, double minZ, double maxZ}) get limites {
+  /// Retângulo que contém as posições de uma PARTE, já com a meia-medida do
+  /// rack.
+  ///
+  /// É o envelope que a câmera enquadra, que o piso desenha e a que o pan se
+  /// prende — e é por parte, não do galpão inteiro: os dois blocos ficam
+  /// distantes um do outro no plano, e enquadrar os dois juntos deixaria a
+  /// parte aberta pequena no canto da tela, com metade do quadro em cima de
+  /// chão vazio.
+  static ({double minX, double maxX, double minZ, double maxZ}) limitesDaParte(
+      int parte) {
+    final lista = posicoesDaParte(parte);
+    return _envelope(lista.isEmpty ? posicoes : lista);
+  }
+
+  /// Retângulo que contém TODAS as posições, as duas partes somadas.
+  static ({double minX, double maxX, double minZ, double maxZ}) get limites =>
+      _envelope(posicoes);
+
+  static ({double minX, double maxX, double minZ, double maxZ}) _envelope(
+      List<PosicaoGalpao> lista) {
     var minX = double.infinity, maxX = double.negativeInfinity;
     var minZ = double.infinity, maxZ = double.negativeInfinity;
-    for (final p in posicoes) {
+    for (final p in lista) {
       final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
       if (p.x - hx < minX) minX = p.x - hx;
       if (p.x + hx > maxX) maxX = p.x + hx;
