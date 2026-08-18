@@ -376,6 +376,9 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   Future<void> _alterarBaixaAutomatica(bool ligada) async {
     setState(() => _baixaAutomatica = ligada);
     await BaixaPorContagemService.salvarAutomatica(ligada);
+    // Religar o interruptor é pedido explícito: a próxima tela roda a baixa na
+    // hora, sem esperar a janela de [intervaloMinimoAutomatica].
+    if (ligada) BaixaPorContagemService().esquecerJanela();
   }
 
   // ── Mapa da loja ───────────────────────────────────────────────────────────

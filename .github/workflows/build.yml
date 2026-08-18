@@ -17,6 +17,7 @@ on:
       - "claude/galpao-segunda-parte-jd5mpt"
       - "claude/gondola-1-counting-mode-qfm26n"
       - "claude/auto-sync-inventory-count-bx9jdg"
+      - "claude/investigar-travamento-ambne8"
   workflow_dispatch:
 
 jobs:
