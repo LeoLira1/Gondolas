@@ -457,12 +457,17 @@ class _LojaPageState extends State<LojaPage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              'Sincronizado com o banco online ✓')
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
     if (ok && _modoConferencia) _carregarConferencia();
   }
@@ -2021,12 +2026,17 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              'Sincronizado com o banco online ✓')
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
     // A recarga pós-sync NÃO é feita aqui: sincronizar() incrementa
     // dataRevision, e o listener _aoAtualizarDados já descarta os layouts em
@@ -3596,12 +3606,17 @@ class _EstantePageState extends State<EstantePage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              'Sincronizado com o banco online ✓')
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
     // A recarga pós-sync é feita só pelo listener _aoAtualizarDados (disparado
     // pelo dataRevision que sincronizar() incrementa) — ver a nota do gêmeo em

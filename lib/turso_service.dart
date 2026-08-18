@@ -11,6 +11,7 @@ import 'galpao_migracao_unidades.dart';
 import 'layout_cache.dart';
 import 'models.dart';
 import 'palete_registry.dart';
+import 'replica_local.dart';
 
 /// Cronometra uma etapa de banco e imprime o tempo no log, só em debug.
 ///
@@ -38,6 +39,10 @@ class TursoService {
   static const String keyDbToken    = 'turso_db_token';
   static const String keyCacheLocal = 'turso_cache_local';
   static const String keyUltimaSync = 'turso_ultima_sync';
+  // Marca que a replica local ATUAL já puxou a base do remoto. Some junto com
+  // os arquivos da replica (ver _apagarArquivosDaReplica), então nunca fica
+  // valendo para um arquivo novo.
+  static const String keyBaseLocalOk = 'turso_base_local_ok';
 
   static const Map<String, String> categoriaCores = {
     'Lubrificantes': '#2e7d4f',
@@ -60,8 +65,14 @@ class TursoService {
   // filesystem), onde o app segue conectando direto no remoto.
   bool      _modoLocal           = false;
   bool      _sincronizando       = false;
+  // True enquanto a replica local ainda não puxou (pull) os frames que o
+  // servidor já tem. Nesse estado NADA pode ser escrito no arquivo local: os
+  // frames locais sairiam na frente dos do servidor e o push passaria a falhar
+  // para sempre com InvalidPushFrameConflict. Ver _estabelecerBaseLocal.
+  bool      _basePendente        = false;
   DateTime? _ultimaSincronizacao;
   String?   _ultimoErroSync;
+  String?   _ultimoAvisoSync;
 
   // Credenciais/modo da conexão ativa. Enquanto não mudarem, init()
   // reaproveita a conexão (e o esquema já criado) em vez de reconectar e
@@ -74,7 +85,7 @@ class TursoService {
   // Cache do catálogo (estoque_mestre): evita repetir o SELECT de até 5000
   // linhas toda vez que uma página abre. No modo local o TTL é ignorado (ver
   // fetchProdutos): a base do dispositivo só muda em sincronizar() /
-  // _bootstrapEmBackground, e os dois já zeram este cache — o relógio ali só
+  // _estabelecerBaseLocal, e os dois já zeram este cache — o relógio ali só
   // garantia uma reconsulta inútil em toda sessão longa. O TTL continua valendo
   // no modo remoto, onde um app irmão pode mexer no estoque_mestre por fora.
   List<Produto>? _produtosCache;
@@ -109,6 +120,12 @@ class TursoService {
   /// Descrição curta (para o usuário) do motivo da última falha de
   /// sincronização, ou null se a última tentativa deu certo.
   String? get ultimoErroSync => _ultimoErroSync;
+
+  /// Recado da última sincronização BEM-SUCEDIDA que não foi rotina — hoje,
+  /// só a reconstrução automática da replica divergente, que o usuário precisa
+  /// saber que aconteceu (ela descarta gravações locais não sincronizadas).
+  /// Null quando o sync foi o de sempre.
+  String? get ultimoAvisoSync => _ultimoAvisoSync;
 
   // Acessor para serviços satélite (ex: EstoqueLocalizadoService) reaproveitarem
   // esta mesma conexão, em vez de abrir uma segunda.
@@ -178,16 +195,17 @@ class TursoService {
 
     try {
       if (conectouLocal) {
-        // Replica local recém-criada (arquivo ainda vazio): NÃO cria o esquema
-        // localmente antes do primeiro sync — escrever numa replica nova antes
-        // de estabelecer a base do remoto gera conflito de frame
-        // (InvalidPushFrameConflict). Marca conectado já (leitura local
-        // instantânea, sem depender da rede) e baixa a base em segundo plano;
-        // quando chega, dataRevision recarrega a cena. Se o arquivo já tem
-        // dados, aplica o esquema idempotente (inclui os índices) e a migração
-        // normalmente.
-        final vazio = await _bancoLocalVazio(client);
-        if (!vazio) {
+        // Replica local sem a base do remoto estabelecida (primeira abertura
+        // deste arquivo): NÃO escreve NADA localmente antes do primeiro pull.
+        // O connect() já trouxe o snapshot do banco — dá para ler tudo —, mas
+        // o protocolo de sync ainda considera a replica no frame 0; criar o
+        // esquema ou rodar migração agora deixaria frames locais na frente dos
+        // do servidor, e a partir daí todo sync falharia com
+        // InvalidPushFrameConflict (foi exatamente o que quebrou o cache local
+        // em produção). Só quando o arquivo já está em dia é que o esquema
+        // idempotente (inclui os índices) e as migrações rodam direto.
+        final precisaBase = await _replicaPrecisaBaixarBase(client);
+        if (!precisaBase) {
           await _criarEsquema(client);
           await _migrarEsquemaLabelsEstante3(client);
           await _migrarPaletesCadastroDinamico(client);
@@ -199,7 +217,18 @@ class TursoService {
         _urlAtiva        = url;
         _tokenAtivo      = token;
         _cacheLocalAtivo = cacheLocal;
-        if (vazio) unawaited(_bootstrapEmBackground());
+        _basePendente    = precisaBase;
+        if (precisaBase) {
+          try {
+            await _estabelecerBaseLocal(client, _timeoutBootstrap);
+            _ultimoErroSync = null;
+          } catch (e) {
+            // Sem rede agora: a replica continua legível (o arquivo veio do
+            // remoto no connect) e _basePendente segue true — o esquema, as
+            // migrações e a base entram no próximo Sincronizar, nunca antes.
+            _ultimoErroSync = descreverErroSync(e);
+          }
+        }
       } else {
         // Modo remoto (Web ou falha ao abrir o arquivo local): cria o esquema
         // e conecta direto ao remoto, como antes.
@@ -210,14 +239,15 @@ class TursoService {
         _client          = client;
         _connected       = true;
         _modoLocal       = false;
+        _basePendente    = false;
         _urlAtiva        = url;
         _tokenAtivo      = token;
         _cacheLocalAtivo = cacheLocal;
       }
       // Fim do init: os paletes precisam estar em memória antes do primeiro
       // build do mapa e do carrossel (ordemNavegacaoEstantes consulta
-      // PaleteRegistry().ativos). Numa replica recém-criada a tabela ainda
-      // não existe — carregar() engole a falha e o _bootstrapEmBackground
+      // PaleteRegistry().ativos). Numa replica sem base a tabela pode ainda
+      // não existir — carregar() engole a falha e _estabelecerBaseLocal
       // recarrega quando a base chegar.
       await PaleteRegistry().carregar();
     } catch (_) {
@@ -238,52 +268,147 @@ class TursoService {
     return '${dir.path}/camda_gondolas_cache.db';
   }
 
-  Future<LibsqlClient?> _conectarComCacheLocal(String url, String token) async {
+  Future<LibsqlClient?> _conectarComCacheLocal(String url, String token,
+      {bool podeReconstruir = true}) async {
     LibsqlClient? client;
     try {
       final path = await _caminhoCacheLocal();
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
+      // Atenção: quando o arquivo local ainda não existe, este connect() NÃO é
+      // local — o libsql baixa do Turso o snapshot inteiro do banco antes de
+      // devolver a conexão (daí o timeout). Da segunda abertura em diante ele
+      // é local e instantâneo, e a rede só volta a entrar no Sincronizar.
       await client.connect().timeout(_timeoutConexao);
-      // Local-first: nunca bloqueia na rede aqui. Abrir o app usa só o arquivo
-      // local (instantâneo). A carga inicial — quando o arquivo ainda está
-      // vazio — é disparada em segundo plano por _init (via _bootstrapEm-
-      // Background), e a rede volta a entrar só quando o usuário toca em
-      // Sincronizar. Assim o app não trava esperando o sync e as leituras
-      // funcionam mesmo com internet ruim, sem cair pro modo remoto.
       return client;
-    } catch (_) {
+    } catch (e) {
       if (client != null) {
         unawaited(client.dispose().catchError((_) {}));
+      }
+      // Arquivo local em estado que o libsql se recusa a abrir (ex: o `.db`
+      // apagado sem o `-info` ao lado) — nenhuma tentativa futura muda isso.
+      // Apaga os arquivos e refaz do zero, uma vez, em vez de cair calado pro
+      // modo remoto e deixar o cache local quebrado para sempre. Falha de rede
+      // não entra aqui: aí o arquivo está bom e o fallback remoto é o certo.
+      if (podeReconstruir &&
+          erroDeReplicaDivergente(e) &&
+          await _apagarArquivosDaReplica()) {
+        return _conectarComCacheLocal(url, token, podeReconstruir: false);
       }
       return null;
     }
   }
 
-  // Carga inicial da replica local (primeira execução): estabelece a base a
-  // partir do remoto SEM travar a abertura do app. Só depois que a base chega é
-  // que o esquema idempotente (com os índices) e a migração são aplicados —
-  // escrever antes do primeiro sync geraria conflito de frame. Ao concluir,
-  // avisa a UI por dataRevision. Se falhar (sem internet), não cai pro modo
-  // remoto nem trava: tenta de novo na próxima abertura.
-  Future<void> _bootstrapEmBackground() async {
-    final client = _client;
-    if (client == null) return;
+  /// Estabelece a base do remoto numa replica local que ainda está no frame 0:
+  /// primeiro PUXA tudo o que o servidor já tem, e só depois aplica o esquema
+  /// idempotente e as migrações. A ordem é o ponto: escrever antes do pull
+  /// coloca frames locais na frente dos do servidor, e o push seguinte morre
+  /// com InvalidPushFrameConflict — para sempre, porque o cliente sempre
+  /// recomeça do mesmo frame.
+  Future<void> _estabelecerBaseLocal(
+      LibsqlClient client, Duration limite) async {
+    await client.sync().timeout(limite);
+    // O sync do libsql devolve sucesso quando a requisição HTTP não completa
+    // (falha de rede vira "0 frames sincronizados"). Se a replica continua no
+    // frame 0 depois dele, o estado é ambíguo: ou o servidor realmente não
+    // tinha frames nesta geração, ou não deu para falar com ele. Um SELECT 1
+    // no remoto separa os dois — e no segundo caso é proibido escrever aqui.
+    if (await _replicaNoFrameZero() && !await _remotoAlcancavel()) {
+      throw const BaseLocalNaoBaixada();
+    }
+    await _criarEsquema(client);
+    await _migrarEsquemaLabelsEstante3(client);
+    await _migrarPaletesCadastroDinamico(client);
+    await migrarGalpaoParaUnidades(client);
+    _basePendente = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(keyBaseLocalOk, true);
+    await PaleteRegistry().carregar();
+    // Antes do dataRevision: os listeners disparam de forma síncrona no
+    // `value++` e chamam _carregarLayout na hora — limpar depois os serviria
+    // com as linhas de antes do sync.
+    _invalidarCachesDeLeitura();
+    await _registrarSincronizacao();
+    dataRevision.value++;
+  }
+
+  /// True quando a replica local ainda precisa puxar a base do remoto antes de
+  /// qualquer escrita. A resposta está no `<banco>-info` que o libsql mantém
+  /// ao lado do arquivo: `durable_frame_num == 0` significa "snapshot baixado,
+  /// frames ainda não" — que é o estado em que o connect() deixa uma replica
+  /// recém-criada, mesmo com o arquivo já cheio de dados. Sem esse arquivo (ou
+  /// com formato desconhecido), cai no teste antigo de banco vazio.
+  Future<bool> _replicaPrecisaBaixarBase(LibsqlClient client) async {
+    // Base já estabelecida para ESTE arquivo: nada a puxar, nem que o frame
+    // confirmado siga em 0 (acontece quando o servidor acabou de fazer
+    // checkpoint e a geração nova ainda não tem frames). Sem esta marca, toda
+    // abertura do app repetiria o sync — e, sem internet, esperaria os
+    // timeouts antes de mostrar o mapa.
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(keyBaseLocalOk) ?? false) return false;
+
+    final frame = await _frameDuravelAtual();
+    if (frame != null) return frame == 0;
+    return _bancoLocalVazio(client);
+  }
+
+  /// Frame confirmado da replica local, ou null se o `-info` não existe / não
+  /// dá para ler.
+  Future<int?> _frameDuravelAtual() async {
     try {
-      await client.sync().timeout(_timeoutBootstrap);
-      await _criarEsquema(client);
-      await _migrarEsquemaLabelsEstante3(client);
-      await _migrarPaletesCadastroDinamico(client);
-      await migrarGalpaoParaUnidades(client);
-      await PaleteRegistry().carregar();
-      // Antes do dataRevision: os listeners disparam de forma síncrona no
-      // `value++` e chamam _carregarLayout na hora — limpar depois os serviria
-      // com as linhas de antes do sync.
-      _invalidarCachesDeLeitura();
-      await _registrarSincronizacao();
-      _ultimoErroSync  = null;
-      dataRevision.value++;
-    } catch (e) {
-      _ultimoErroSync = _descreverErroSync(e);
+      final info = File('${await _caminhoCacheLocal()}-info');
+      if (!await info.exists()) return null;
+      return frameDuravelDaReplica(await info.readAsString());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _replicaNoFrameZero() async => (await _frameDuravelAtual()) == 0;
+
+  /// Round-trip curto no banco online, só para saber se há rede. Usado para
+  /// desempatar o sync que "deu certo" sem falar com o servidor.
+  Future<bool> _remotoAlcancavel() async {
+    final url   = _urlAtiva;
+    final token = _tokenAtivo;
+    if (url == null || token == null) return false;
+    LibsqlClient? remoto;
+    try {
+      remoto = LibsqlClient.remote(url, authToken: token);
+      await remoto.connect().timeout(_timeoutConexao);
+      await remoto.query('SELECT 1').timeout(_timeoutConexao);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      final aberto = remoto;
+      if (aberto != null) unawaited(aberto.dispose().catchError((_) {}));
+    }
+  }
+
+  /// Apaga o arquivo da replica local e TODOS os sidecars que o libsql mantém
+  /// ao lado dele. Varre por prefixo de propósito: além do `-wal`/`-shm`/
+  /// `-journal` do SQLite existe o `-info` (geração e frame confirmados do
+  /// sync), e deixar o `-info` órfão faz a próxima abertura falhar com
+  /// InvalidLocalState — ou seja, "limpar o cache" deixaria o app pior do que
+  /// estava.
+  Future<bool> _apagarArquivosDaReplica() async {
+    try {
+      final caminho = await _caminhoCacheLocal();
+      final arquivo = File(caminho);
+      final nome    = arquivo.uri.pathSegments.last;
+      final pasta   = arquivo.parent;
+      if (await pasta.exists()) {
+        await for (final item in pasta.list(followLinks: false)) {
+          if (item is! File) continue;
+          if (item.uri.pathSegments.last.startsWith(nome)) await item.delete();
+        }
+      }
+      // A marca de base estabelecida vale para o arquivo que acabou de sumir.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(keyBaseLocalOk);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -501,49 +626,98 @@ class TursoService {
           : 'configure URL e token do banco em ⚙️';
       return false;
     }
-    _sincronizando = true;
+    _sincronizando   = true;
+    _ultimoAvisoSync = null;
     try {
-      if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
-      // O sync pode ter trazido paletes cadastrados em outro dispositivo.
-      await PaleteRegistry().carregar();
-      // Antes do dataRevision — ver a nota em _bootstrapEmBackground.
-      _invalidarCachesDeLeitura();
-      await _registrarSincronizacao();
-      _ultimoErroSync = null;
-      dataRevision.value++;
-      return true;
-    } catch (e) {
-      _ultimoErroSync = _descreverErroSync(e);
+      final erro = await _tentarSincronizar();
+      if (erro == null) {
+        _ultimoErroSync = null;
+        return true;
+      }
+      // Replica divergente: os frames locais nunca mais serão aceitos pelo
+      // servidor, então tentar de novo do mesmo jeito daria o mesmo erro para
+      // sempre. Reconstrói o arquivo local a partir do remoto uma vez, aqui
+      // mesmo — o usuário pediu para sincronizar e não tem como resolver isso
+      // sozinho. As gravações locais que ainda não subiram se perdem (elas já
+      // estavam perdidas: era esse o motivo do conflito), por isso o aviso.
+      if (_modoLocal &&
+          erroDeReplicaDivergente(erro) &&
+          await _reconstruirReplicaLocal()) {
+        _ultimoErroSync  = null;
+        _ultimoAvisoSync = 'Cache local reconstruído do banco online — '
+            'gravações locais não sincronizadas foram perdidas';
+        return true;
+      }
+      _ultimoErroSync = descreverErroSync(erro);
       return false;
     } finally {
       _sincronizando = false;
     }
   }
 
-  /// Traduz a exceção do sync numa dica curta e acionável — a causa real
-  /// (token expirado ≠ sem internet ≠ demora da rede) muda o que o usuário
-  /// precisa fazer para resolver.
-  String _descreverErroSync(Object e) {
-    if (e is TimeoutException) {
-      return 'a rede demorou demais para responder — tente novamente';
+  /// Uma tentativa de sincronização: devolve null se deu certo, ou o erro (sem
+  /// traduzir) para quem chama decidir se dá para reagir a ele.
+  Future<Object?> _tentarSincronizar() async {
+    try {
+      if (_modoLocal && _basePendente) {
+        // A base nunca foi estabelecida (primeira abertura sem internet, ou
+        // reconstrução recente): puxa tudo e só então grava esquema e
+        // migrações — nunca o contrário. Ver _estabelecerBaseLocal.
+        await _estabelecerBaseLocal(_client!, _timeoutSync);
+        return null;
+      }
+      if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
+      // O sync pode ter trazido paletes cadastrados em outro dispositivo.
+      await PaleteRegistry().carregar();
+      // Antes do dataRevision — ver a nota em _estabelecerBaseLocal.
+      _invalidarCachesDeLeitura();
+      await _registrarSincronizacao();
+      dataRevision.value++;
+      return null;
+    } catch (e) {
+      return e;
     }
-    final msg   = e.toString().replaceAll('\n', ' ').trim();
-    final lower = msg.toLowerCase();
-    if (lower.contains('401') ||
-        lower.contains('unauthorized') ||
-        lower.contains('forbidden') ||
-        lower.contains('auth')) {
-      return 'token inválido ou expirado — confira em ⚙️';
+  }
+
+  /// Apaga a replica local divergente e refaz o arquivo a partir do Turso.
+  /// É a única saída quando o servidor recusa os frames locais — sem isso o
+  /// app fica preso repetindo o mesmo erro a cada Sincronizar. Devolve false
+  /// se não deu (sem internet, por exemplo): aí a conexão anterior já foi
+  /// solta, mas o próximo init() reconecta e tenta de novo.
+  Future<bool> _reconstruirReplicaLocal() async {
+    final url   = _urlAtiva;
+    final token = _tokenAtivo;
+    if (url == null || token == null) return false;
+
+    final clienteAntigo = _client;
+    _connected    = false;
+    _client       = null;
+    _modoLocal    = false;
+    _basePendente = false;
+    _invalidarCachesDeLeitura();
+    if (clienteAntigo != null) {
+      try {
+        await clienteAntigo.dispose();
+      } catch (_) {}
     }
-    if (lower.contains('dns') ||
-        lower.contains('socket') ||
-        lower.contains('network') ||
-        lower.contains('connection refused') ||
-        lower.contains('failed to connect') ||
-        lower.contains('timed out')) {
-      return 'sem conexão com o banco — verifique a internet';
+
+    if (!await _apagarArquivosDaReplica()) return false;
+
+    final client = await _conectarComCacheLocal(url, token);
+    if (client == null) return false;
+
+    _client       = client;
+    _connected    = true;
+    _modoLocal    = true;
+    _basePendente = true;
+    try {
+      await _estabelecerBaseLocal(client, _timeoutBootstrap);
+      return true;
+    } catch (_) {
+      // Arquivo novo e vazio de frames: fica marcado como base pendente, então
+      // nada será escrito nele até o próximo Sincronizar completar o pull.
+      return false;
     }
-    return msg.length > 140 ? '${msg.substring(0, 140)}…' : msg;
   }
 
   /// Apaga o arquivo de cache local (embedded replica) e reseta a conexão,
@@ -560,7 +734,9 @@ class TursoService {
     _tokenAtivo      = null;
     _cacheLocalAtivo = null;
     _modoLocal       = false;
+    _basePendente    = false;
     _ultimoErroSync  = null;
+    _ultimoAvisoSync = null;
     _invalidarCachesDeLeitura();
 
     if (clienteAntigo != null) {
@@ -569,15 +745,7 @@ class TursoService {
       } catch (_) {}
     }
 
-    try {
-      final base = await _caminhoCacheLocal();
-      for (final sufixo in ['', '-wal', '-shm', '-journal']) {
-        final arquivo = File('$base$sufixo');
-        if (await arquivo.exists()) await arquivo.delete();
-      }
-    } catch (_) {
-      return false;
-    }
+    if (!await _apagarArquivosDaReplica()) return false;
 
     _ultimaSincronizacao = null;
     final prefs = await SharedPreferences.getInstance();
@@ -665,7 +833,7 @@ class TursoService {
   ///
   /// No modo local a validade não é por relógio: a base do dispositivo só muda
   /// via `client.sync()`, que só acontece em `sincronizar()` e
-  /// `_bootstrapEmBackground` — e os dois zeram o cache. Cache não-nulo ali
+  /// `_estabelecerBaseLocal` — e os dois zeram o cache. Cache não-nulo ali
   /// significa "em dia", ponto. O TTL fica valendo só no modo remoto, onde um
   /// app irmão pode alterar o estoque_mestre por fora sem avisar.
   bool get _catalogoEmCacheValido {

@@ -239,12 +239,17 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              'Sincronizado com o banco online ✓')
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
   }
 
@@ -261,8 +266,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         ),
         content: const Text(
           'Apaga o arquivo de dados salvo neste dispositivo e baixa tudo de '
-          'novo do banco online. Use quando a sincronização falhar de forma '
-          'persistente (conflito de replica).\n\n'
+          'novo do banco online. O Sincronizar já refaz o cache sozinho quando '
+          'ele diverge do banco — use este botão só se o problema insistir.\n\n'
           'Gravações feitas offline e ainda não sincronizadas serão perdidas.',
           style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13, height: 1.4),
         ),
