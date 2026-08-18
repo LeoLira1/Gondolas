@@ -6,6 +6,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 // Se um upgrade do libsql_dart mover o arquivo, é aqui que quebra.
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 
+import 'codigos_vinculados.dart';
 import 'galpao_config.dart';
 import 'galpao_saldo.dart';
 import 'galpao_scene.dart' show RackGalpao;
@@ -112,45 +113,139 @@ class GalpaoService {
     }
   }
 
-  /// Saldo (sistema × endereçado) dos produtos que têm rack no galpão.
+  /// Saldo (sistema × endereçado) dos produtos que têm rack no galpão, mais
+  /// os de [codigosExtras] (o produto que o painel está prestes a lançar e
+  /// ainda não tem rack nenhum).
   ///
-  /// Uma consulta só, restrita aos códigos que aparecem em galpao_racks: sem
-  /// esse recorte a query varreria estoque_localizado inteira — inclusive
-  /// milhares de produtos que só existem na loja e nunca vão pintar um cubo.
+  /// As duas metades da conta somam TODOS os códigos do mesmo produto — é o
+  /// que o app do scanner faz, e a falta disso era o "sistema 388" de um
+  /// produto que na mão dá 559 (171 + 388). Ver codigos_vinculados.dart.
   ///
-  /// O endereçado soma TODOS os locais do produto, não só o galpão (ver a nota
-  /// em galpao_saldo.dart). Produto sem linha em estoque_mestre fica de fora:
-  /// sem qtd_sistema não dá para dizer se falta ou sobra, e chutar zero
-  /// pintaria de azul todo rack de produto fora do cadastro.
-  Future<Map<String, SaldoProduto>> carregarSaldos() async {
+  /// Quatro consultas, todas agregadas ou pequenas, contra as 85 posições:
+  /// os códigos com rack, o estoque_mestre (mesmo teto de 5000 linhas do
+  /// catálogo), o vínculo de códigos do mapa e a soma por código de
+  /// estoque_localizado. O endereçado soma TODOS os locais do produto, não só
+  /// o galpão (ver a nota em galpao_saldo.dart).
+  Future<Map<String, SaldoProduto>> carregarSaldos({
+    Set<String> codigosExtras = const {},
+  }) async {
     final client = await _conexao();
     if (client == null) return {};
     try {
-      final stmt = await client.prepare(
-        'SELECT el.produto_codigo AS codigo, '
-        'SUM(el.quantidade) AS enderecado, '
-        'MAX(em.qtd_sistema) AS qtd_sistema '
-        'FROM estoque_localizado el '
-        'JOIN estoque_mestre em ON em.codigo = el.produto_codigo '
-        'WHERE el.produto_codigo IN (SELECT produto_codigo FROM galpao_racks) '
-        'GROUP BY el.produto_codigo',
+      // Os códigos entram como estão em galpao_racks (é a chave que a cena
+      // usa para achar a cor do cubo); a normalização acontece lá dentro.
+      final codigos = await _codigosComRack(client);
+      codigos.addAll(codigosExtras);
+      if (codigos.isEmpty) return {};
+
+      final mestre = await _lerMestre(client);
+      final grupos = gruposDeCodigos(
+        codigos:            codigos,
+        produtoIdPorCodigo: await _lerVinculosDoMapa(client),
+        nomePorCodigo:      {
+          for (final e in mestre.entries) e.key: e.value.nome,
+        },
       );
-      final rows = await stmt.query() as List<dynamic>;
-      final saldos = <String, SaldoProduto>{};
-      for (final dynamic row in rows) {
-        final r      = row as Map<String, dynamic>;
-        final codigo = r['codigo'] as String? ?? '';
-        if (codigo.isEmpty) continue;
-        saldos[codigo] = SaldoProduto(
-          codigo:     codigo,
-          qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
-          enderecado: (r['enderecado']  as num?)?.toDouble() ?? 0,
-        );
-      }
-      return saldos;
+      return montarSaldos(
+        codigos:             codigos,
+        grupos:              grupos,
+        sistemaPorCodigo:    {
+          for (final e in mestre.entries) e.key: e.value.qtdSistema,
+        },
+        enderecadoPorCodigo: await _lerEnderecado(client),
+      );
     } catch (_) {
       return {};
     }
+  }
+
+  /// O saldo de UM produto, mesmo que ele ainda não tenha rack no galpão — o
+  /// número de que quem vai lançar precisa antes de digitar a quantidade.
+  Future<SaldoProduto?> carregarSaldo(String codigo) async {
+    if (codigo.trim().isEmpty) return null;
+    return (await carregarSaldos(codigosExtras: {codigo}))[codigo];
+  }
+
+  Future<Set<String>> _codigosComRack(LibsqlClient client) async {
+    final stmt = await client.prepare(
+      'SELECT DISTINCT produto_codigo FROM galpao_racks',
+    );
+    final rows = await stmt.query() as List<dynamic>;
+    final codigos = <String>{};
+    for (final dynamic row in rows) {
+      final r = row as Map<String, dynamic>;
+      final codigo = r['produto_codigo'] as String? ?? '';
+      if (codigo.trim().isNotEmpty) codigos.add(codigo);
+    }
+    return codigos;
+  }
+
+  /// Nome e qtd_sistema de cada código do estoque_mestre.
+  ///
+  /// A tabela inteira (com o mesmo teto do catálogo) porque o irmão de um
+  /// código sem vínculo no mapa só é achável pelo NOME — ler só os códigos
+  /// com rack devolveria de novo meio saldo, que é o bug que isto conserta.
+  Future<Map<String, ({String nome, double qtdSistema})>> _lerMestre(
+      LibsqlClient client) async {
+    final stmt = await client.prepare(
+      'SELECT codigo, produto, qtd_sistema FROM estoque_mestre LIMIT 5000',
+    );
+    final rows = await stmt.query() as List<dynamic>;
+    final mestre = <String, ({String nome, double qtdSistema})>{};
+    for (final dynamic row in rows) {
+      final r = row as Map<String, dynamic>;
+      final codigo = normalizarCodigo(r['codigo'] as String?);
+      if (codigo == null) continue;
+      mestre[codigo] = (
+        nome:       r['produto'] as String? ?? '',
+        qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
+      );
+    }
+    return mestre;
+  }
+
+  /// Código → produto_id do mapa de produtos (principal e secundários).
+  ///
+  /// As duas tabelas são criadas pelo dashboard e podem não existir num banco
+  /// onde o mapa nunca foi usado; a ausência de uma não pode derrubar a
+  /// leitura da outra nem a consulta de saldo — sem mapa, resta o nome.
+  Future<Map<String, String>> _lerVinculosDoMapa(LibsqlClient client) async {
+    final vinculos = <String, String>{};
+    for (final tabela in const ['mapa_produtos', 'mapa_produtos_codigos']) {
+      try {
+        final stmt = await client.prepare(
+          'SELECT produto_id, codigo FROM $tabela WHERE codigo IS NOT NULL',
+        );
+        final rows = await stmt.query() as List<dynamic>;
+        for (final dynamic row in rows) {
+          final r = row as Map<String, dynamic>;
+          final codigo = normalizarCodigo(r['codigo'] as String?);
+          final produtoId = (r['produto_id']?.toString() ?? '').trim();
+          if (codigo == null || produtoId.isEmpty) continue;
+          vinculos[codigo] = produtoId;
+        }
+      } catch (_) {
+        // Tabela ausente (ou coluna diferente): segue sem ela.
+      }
+    }
+    return vinculos;
+  }
+
+  /// Soma de estoque_localizado por código, em todos os locais.
+  Future<Map<String, double>> _lerEnderecado(LibsqlClient client) async {
+    final stmt = await client.prepare(
+      'SELECT produto_codigo, SUM(quantidade) AS enderecado '
+      'FROM estoque_localizado GROUP BY produto_codigo',
+    );
+    final rows = await stmt.query() as List<dynamic>;
+    final total = <String, double>{};
+    for (final dynamic row in rows) {
+      final r = row as Map<String, dynamic>;
+      final codigo = normalizarCodigo(r['produto_codigo'] as String?);
+      if (codigo == null) continue;
+      total[codigo] = (r['enderecado'] as num?)?.toDouble() ?? 0;
+    }
+    return total;
   }
 
   /// Lança um rack no TOPO da pilha da posição. Devolve a nova pilha, ou null

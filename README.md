@@ -30,8 +30,16 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   `galpao_racks` (ocupação, com renumeração transacional), espelhadas em
   `estoque_localizado` com `local_tipo = 'galpao'` para o estoque do galpão
   contar nos mesmos totais dos apps irmãos.
-- Quantidades são lançadas na unidade que se conta no chão — baldes (produto
-  de 20 L) ou caixas (5 L × 4) — e gravadas em litros.
+- **Quantidade em UNIDADES, do ERP ao cubo.** O galpão já converteu para
+  litros (baldes/caixas × 20) e isso era discrepância garantida contra o
+  `qtd_sistema` do `estoque_mestre`, que está em unidade: o mesmo produto que
+  o app do scanner (`LeoLira1/scanner`) mostra com 559 aparecia aqui como
+  "sistema 19.4". Agora não há conversão em lugar nenhum — o que se digita é o
+  que se grava, é o que se soma no endereçado e é o que se compara com o
+  sistema. Os racks lançados na convenção antiga são convertidos uma única vez
+  pela migração `galpao_quantidade_em_unidades_v1`, que divide por 20 os
+  produtos de 20 L e 5 L em `galpao_racks` e no espelho de
+  `estoque_localizado`.
 - **Busca acende TODAS as posições do produto**: procurar um produto no mapa
   da loja abre o galpão com o endereço escolhido marcado e todos os racks
   daquele produto acesos em laranja — o mesmo produto costuma ocupar vários
@@ -40,16 +48,19 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   (mesma regra do Modo Conferência). Quando as posições cruzam mais de uma
   rua, o filtro fica em `Todas` em vez de isolar a rua do endereço escolhido,
   e os chips das ruas com o produto ganham um ponto laranja. O painel de um
-  rack tem o mesmo destaque num botão (`Destacar N posições deste produto`),
-  para partir de um palete achado no mapa.
+  rack tem o mesmo destaque num botão (`Destacar N posições`), que só aparece
+  quando o produto está em mais de um lugar — acender a posição que já está
+  aberta na tela não mostra nada.
 - **Saldo do produto no palete (sistema × endereçado)**: com a leitura de
   saldo ligada (botão da balança na barra superior, ligada por padrão), o rack
   de um produto que ainda tem carga sem endereço fica **vermelho** e o de um
   produto endereçado além do que o sistema registra fica **azul** — as mesmas
   cores que as gôndolas e estantes já usam para divergência de contagem. O
-  painel do endereço mostra a conta por extenso (`Sistema 145 baldes ·
-  endereçado 90 baldes`), e ela também aparece ao escolher o produto para
-  lançar numa vaga, que é quando interessa saber quanto ainda falta distribuir.
+  painel do endereço mostra a conta por extenso (`Faltam 55 unidades por
+  endereçar` / `Sistema 145 · endereçado 90`), e ela também aparece ao escolher
+  o produto para lançar numa vaga, que é quando interessa saber quanto ainda
+  falta distribuir. Saldo que FECHA não ganha caixa colorida — vira uma linha
+  quieta (`Tudo endereçado · sistema 2112 unidades`); a moldura é do aviso.
   O endereçado soma TODOS os locais do produto em `estoque_localizado`
   (galpão + gôndolas + estantes) contra `estoque_mestre.qtd_sistema` — a mesma
   conta com que o app fecha o inventário cíclico —, então um produto que também
@@ -57,6 +68,21 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   `estoque_mestre` fica na cor da categoria: sem `qtd_sistema` não há saldo a
   afirmar. A precedência das cores é Modo Conferência > busca > saldo >
   categoria.
+- **Os dois lados da conta somam TODOS os códigos do produto.** O mesmo item
+  tem mais de uma linha em `estoque_mestre` (`254185` e `US254185`), e ler só
+  a do rack mostrava metade do saldo. O agrupamento é o mesmo do app do
+  scanner (`lib/codigos_vinculados.dart`): primeiro o cadastro
+  (`mapa_produtos` + `mapa_produtos_codigos`), e só na falta dele o nome do
+  produto, ignorando irmão já vinculado a outro produto. Quando mais de um
+  código entra na soma, a tarja diz quais (`códigos somados · 254185 +
+  US254185`).
+- **Camadas de cima enxutas.** O cabeçalho é `Galpão` + vagas livres em uma
+  linha cada (o título espremido quebrava em duas e o subtítulo descia por
+  cima dos chips de rua, que ficam numa camada própria e não empurram nada),
+  e as faixas de destaque e de saldo cabem numa linha cada — empilhadas em
+  duas linhas, as duas juntas comiam um quarto da tela por cima do mapa. O
+  atalho `Ver todas as ruas` saiu da faixa de destaque: o chip `Todas` está
+  logo acima, na barra de ruas, fazendo o mesmo.
 - **Modo Conferência também no galpão**: o mesmo botão do mapa da loja acende
   em ciano os racks que guardam pendente de hoje (`contagem_itens`), apaga o
   resto e põe um contador `<posição> · <nº>` acima de cada pilha. O cruzamento

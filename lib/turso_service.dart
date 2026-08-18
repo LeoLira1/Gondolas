@@ -7,6 +7,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'galpao_config.dart';
+import 'galpao_migracao_unidades.dart';
 import 'layout_cache.dart';
 import 'models.dart';
 import 'palete_registry.dart';
@@ -190,6 +191,7 @@ class TursoService {
           await _criarEsquema(client);
           await _migrarEsquemaLabelsEstante3(client);
           await _migrarPaletesCadastroDinamico(client);
+          await migrarGalpaoParaUnidades(client);
         }
         _client          = client;
         _connected       = true;
@@ -204,6 +206,7 @@ class TursoService {
         await _criarEsquema(client);
         await _migrarEsquemaLabelsEstante3(client);
         await _migrarPaletesCadastroDinamico(client);
+        await migrarGalpaoParaUnidades(client);
         _client          = client;
         _connected       = true;
         _modoLocal       = false;
@@ -270,6 +273,7 @@ class TursoService {
       await _criarEsquema(client);
       await _migrarEsquemaLabelsEstante3(client);
       await _migrarPaletesCadastroDinamico(client);
+      await migrarGalpaoParaUnidades(client);
       await PaleteRegistry().carregar();
       // Antes do dataRevision: os listeners disparam de forma síncrona no
       // `value++` e chamam _carregarLayout na hora — limpar depois os serviria

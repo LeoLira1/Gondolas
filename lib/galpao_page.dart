@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'embalagem.dart';
-import 'estoque_localizado_service.dart';
 import 'galpao_busca.dart';
 import 'galpao_config.dart';
 import 'galpao_pilhas.dart';
@@ -16,6 +14,7 @@ import 'gondola_scene.dart'
 import 'modo_conferencia_service.dart';
 import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
 import 'turso_service.dart';
+import 'unidades.dart';
 
 /// Mapa 3D do galpão de racks.
 ///
@@ -264,19 +263,15 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// sistema tem 145, já endereçei 100").
   ///
   /// O mapa em memória responde primeiro; só um produto de fora dele (nunca
-  /// endereçado, ou catálogo recém-aberto) custa as duas consultas.
+  /// endereçado, ou catálogo recém-aberto) custa a consulta. Ela é a MESMA de
+  /// [GalpaoService.carregarSaldos] — inclusive na soma dos códigos irmãos do
+  /// produto —, para o painel nunca mostrar um número diferente do da tarja
+  /// que já estava na tela.
   Future<SaldoProduto?> _saldoDoProduto(String codigo) async {
     final emMemoria = _saldos[codigo];
     if (emMemoria != null) return emMemoria;
     if (!_consultandoSaldos) return null;
-    final servico = EstoqueLocalizadoService();
-    final info = await servico.buscarInfoMestre(codigo);
-    if (info == null) return null;
-    return SaldoProduto(
-      codigo:     codigo,
-      qtdSistema: info.qtdSistema,
-      enderecado: await servico.totalProduto(codigo),
-    );
+    return GalpaoService().carregarSaldo(codigo);
   }
 
   /// Aplica [GalpaoPage.posicaoInicial], quando informada: isola a rua e marca
@@ -605,8 +600,21 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Uma linha cada, sempre: o título espremido entre
+                          // os botões quebrava em duas e empurrava o subtítulo
+                          // para CIMA dos chips de rua, que ficam logo abaixo
+                          // numa camada própria (top: 68). Reticências em vez
+                          // de quebra é o que mantém as duas camadas sem se
+                          // atropelar em tela estreita.
+                          // 'Galpão', e não 'CAMDA · Galpão': entre o botão
+                          // de voltar, os dois interruptores e o campo do
+                          // número sobram menos de 100 px para o título em
+                          // tela estreita, e a marca aqui só servia para
+                          // empurrar o resto para fora.
                           const Text(
-                            'CAMDA · Galpão',
+                            'Galpão',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color:      Colors.white,
                               fontSize:   15,
@@ -617,9 +625,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           Text(
                             _carregandoPilhas
                                 ? 'Carregando ocupação…'
-                                : '${GalpaoConfig.totalPosicoes} posições · '
-                                  '${_racksOcupados} racks · '
-                                  '${_vagasLivres} vagas livres',
+                                : '$_vagasLivres vagas livres',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color:    Colors.white.withValues(alpha: 0.45),
                               fontSize: 11,
@@ -645,7 +653,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                     const SizedBox(width: 10),
                     // Ir para o número: digita 52, isola a rua e marca.
                     SizedBox(
-                      width: 92,
+                      width: 74,
                       child: TextField(
                         controller: _irParaCtrl,
                         keyboardType: TextInputType.number,
@@ -660,15 +668,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           hintText: 'nº',
                           hintStyle: const TextStyle(
                               color: Color(0x44ffffff), fontSize: 13),
-                          prefixIcon: const Icon(Icons.my_location,
-                              color: Color(0xFF8a877f), size: 16),
-                          prefixIconConstraints: const BoxConstraints(
-                              minWidth: 30, minHeight: 30),
                           filled: true,
                           fillColor: const Color(0xEE141518),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 12),
+                              horizontal: 10, vertical: 12),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide(
@@ -714,21 +718,18 @@ class _GalpaoPageState extends State<GalpaoPage> {
                     // então o destaque de busca não aparece — nem a faixa.
                     if (_destacadoCodigo != null && !_modoConferencia)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                         child: _FaixaDestaqueProduto(
                           nome:      _nomeDestacado,
                           posicoes:  _posicoesComDestaque.length,
                           racks:     _racksDestacados.length,
                           onLimpar:  () =>
                               setState(() => _destacadoCodigo = null),
-                          onVerTodas: _ruasVisiveis == null
-                              ? null
-                              : () => _filtrarRua(null),
                         ),
                       ),
                     if (resumoSaldo.comFalta > 0 || resumoSaldo.comSobra > 0)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                         child: _FaixaSaldo(
                           comFalta: resumoSaldo.comFalta,
                           comSobra: resumoSaldo.comSobra,
@@ -736,7 +737,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       ),
                     if (_modoConferencia)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                         child: _BannerConferenciaGalpao(
                           carregando: _carregandoConferencia,
                           resultado:  _conferencia,
@@ -936,16 +937,11 @@ class _FaixaDestaqueProduto extends StatelessWidget {
   final int           racks;
   final VoidCallback  onLimpar;
 
-  /// Tirar o filtro de rua para ver o produto no galpão inteiro. Null quando
-  /// já está em 'Todas'.
-  final VoidCallback? onVerTodas;
-
   const _FaixaDestaqueProduto({
     required this.nome,
     required this.posicoes,
     required this.racks,
     required this.onLimpar,
-    this.onVerTodas,
   });
 
   @override
@@ -954,61 +950,50 @@ class _FaixaDestaqueProduto extends StatelessWidget {
     // posição são dois paletes e um lugar só —, então a linha diz os dois
     // quando eles não coincidem.
     final resumo = posicoes == 0
-        ? 'nenhuma posição no galpão'
+        ? 'nenhuma posição'
         : racks == posicoes
             ? pluralizar(posicoes, 'posição', 'posições')
             : '${pluralizar(posicoes, 'posição', 'posições')} · '
               '${pluralizar(racks, 'rack')}';
 
+    // Uma linha só: o nome estica e o resumo fica colado nele. A versão de
+    // duas linhas empilhava com a faixa de saldo e as duas juntas comiam um
+    // quarto da tela por cima do mapa. O atalho 'Ver todas as ruas' saiu
+    // daqui: o chip 'Todas' está logo acima, na barra de ruas, fazendo
+    // exatamente a mesma coisa.
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+      padding: const EdgeInsets.fromLTRB(10, 5, 4, 5),
       decoration: BoxDecoration(
-        color:        corCamda.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(10),
-        border:       Border.all(color: corCamda.withValues(alpha: 0.55)),
+        color:        corCamda.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(9),
+        border:       Border.all(color: corCamda.withValues(alpha: 0.45)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.search, size: 14, color: corCamda),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  nome,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color:      Colors.white,
-                      fontSize:   12,
-                      fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  'aceso em $resumo',
-                  style: const TextStyle(color: corCamda, fontSize: 11),
-                ),
-              ],
+          const Icon(Icons.search, size: 13, color: corCamda),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(
+              nome,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  color:      Colors.white,
+                  fontSize:   12,
+                  fontWeight: FontWeight.w600),
             ),
           ),
-          if (onVerTodas != null)
-            TextButton(
-              onPressed: onVerTodas,
-              style: TextButton.styleFrom(
-                foregroundColor: corCamda,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 30),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('Ver todas as ruas',
-                  style: TextStyle(fontSize: 11)),
-            ),
+          const SizedBox(width: 6),
+          Text(
+            resumo,
+            maxLines: 1,
+            style: const TextStyle(color: corCamda, fontSize: 11),
+          ),
           GestureDetector(
             onTap: onLimpar,
             child: const Padding(
               padding: EdgeInsets.all(6),
-              child: Icon(Icons.close, size: 16, color: corCamda),
+              child: Icon(Icons.close, size: 15, color: corCamda),
             ),
           ),
         ],
@@ -1157,45 +1142,30 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     setState(() => _resultados = buscarProdutosGalpao(q, widget.catalogo));
   }
 
-  /// [quantidadeLitros] é o que o banco guarda; o campo mostra a quantidade
-  /// na unidade de manuseio do produto (45 baldes = digita 45), então o
-  /// prefill dos recentes converte de volta antes de preencher.
-  void _selecionarProduto(Produto p, {double? quantidadeLitros}) {
+  /// [quantidade] é o número de UNIDADES — a mesma conta do banco, do campo
+  /// e do sistema (ver unidades.dart), então o prefill dos recentes só
+  /// formata o que veio.
+  void _selecionarProduto(Produto p, {double? quantidade}) {
     setState(() {
       _produtoSel = p;
       _resultados = const [];
       _buscaCtrl.clear();
       _focarSaldo(p.codigo);
-      if (quantidadeLitros != null) {
-        final emUnidades = unidadeDoNome(p.nome) != null
-            ? quantidadeLitros / litrosPorUnidade
-            : quantidadeLitros;
-        _qtdCtrl.text = formatarNumero(emUnidades);
-      }
+      if (quantidade != null) _qtdCtrl.text = formatarNumero(quantidade);
     });
   }
 
+  /// Unidades digitadas — o que vai ao banco, sem conversão nenhuma.
   double? get _quantidadeDigitada {
     final q = double.tryParse(_qtdCtrl.text.replaceAll(',', '.'));
     return q != null && q > 0 ? q : null;
   }
 
-  /// O que foi digitado convertido para litros — a conta que vai ao banco.
-  /// Produto sem unidade dedutível grava o número como digitado.
-  double? get _quantidadeEmLitros {
-    final digitada = _quantidadeDigitada;
-    final produto  = _produtoSel;
-    if (digitada == null || produto == null) return null;
-    return unidadeDoNome(produto.nome) != null
-        ? litrosDeUnidades(digitada)
-        : digitada;
-  }
-
   void _lancar() {
-    final produto = _produtoSel;
-    final litros  = _quantidadeEmLitros;
-    if (produto == null || litros == null) return;
-    widget.onLancar?.call(produto, litros);
+    final produto    = _produtoSel;
+    final quantidade = _quantidadeDigitada;
+    if (produto == null || quantidade == null) return;
+    widget.onLancar?.call(produto, quantidade);
   }
 
   Future<void> _confirmarEsvaziar() async {
@@ -1297,11 +1267,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   // ── Endereço ocupado ───────────────────────────────────────────────────────
 
   Widget _buildOcupado(RackGalpao rack, List<RackGalpao> pilha) {
-    final embalada = quantidadeEmbalada(rack.produtoNome, rack.quantidade);
-    final litros   = '${formatarNumero(rack.quantidade)} L';
     final temVaga  = pilha.length < GalpaoConfig.niveisMax;
     final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
-    final blocoSaldo = _blocoSaldo(rack.produtoNome);
+    final blocoSaldo    = _blocoSaldo();
+    final botaoDestaque = _botaoDestaque(rack);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1346,24 +1315,13 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Text(
-              embalada ?? formatarNumero(rack.quantidade),
+              quantidadeEmUnidades(rack.quantidade),
               style: const TextStyle(
                 color:      Colors.white,
                 fontSize:   18,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            if (embalada != null) ...[
-              const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  litros,
-                  style: const TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 12),
-                ),
-              ),
-            ],
             const Spacer(),
             Text(
               'cód. ${rack.produtoCodigo}',
@@ -1373,12 +1331,12 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           ],
         ),
         if (blocoSaldo != null) ...[
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           blocoSaldo,
         ],
-        if (widget.onAlternarDestaque != null) ...[
-          const SizedBox(height: 10),
-          _botaoDestaque(rack),
+        if (widget.onAlternarDestaque != null && botaoDestaque != null) ...[
+          const SizedBox(height: 8),
+          botaoDestaque,
         ],
         const SizedBox(height: 12),
         Row(
@@ -1428,15 +1386,13 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// Devolve null quando não há saldo conhecido (produto fora do
   /// estoque_mestre, sem conexão, ou consulta a caminho) — melhor nada do que
   /// um número inventado.
-  Widget? _blocoSaldo(String nomeProduto) {
+  Widget? _blocoSaldo() {
     final saldo = _saldo;
     if (saldo == null) return null;
 
-    // As quantidades vão para a tela na unidade de manuseio do produto
-    // (baldes/caixas), a mesma do resto do painel — quem confere carga não
-    // conta litros.
-    String fmt(double valor) =>
-        quantidadeEmbalada(nomeProduto, valor) ?? formatarNumero(valor);
+    // Uma unidade só nos dois lados da conta — a mesma do sistema e a mesma
+    // que se digita ao lançar (ver unidades.dart).
+    String fmt(double valor) => quantidadeEmUnidades(valor);
 
     final cor = saldo.falta
         ? corEnderecoDivergente
@@ -1454,14 +1410,23 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             ? 'Sobram ${fmt(saldo.quantoSobra)} endereçados'
             : 'Tudo endereçado';
 
+    // Caixa colorida SÓ quando há divergência: é aviso, e aviso que aparece
+    // sempre vira moldura. Saldo que fecha é uma linha de texto quieta, com o
+    // número do sistema junto — que é o que se quer conferir de relance.
+    final alarme = saldo.falta || saldo.sobra;
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-      decoration: BoxDecoration(
-        color:        cor.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(7),
-        border:       Border.all(color: cor.withValues(alpha: 0.55)),
-      ),
+      padding: alarme
+          ? const EdgeInsets.symmetric(horizontal: 9, vertical: 7)
+          : EdgeInsets.zero,
+      decoration: alarme
+          ? BoxDecoration(
+              color:        cor.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(7),
+              border:       Border.all(color: cor.withValues(alpha: 0.55)),
+            )
+          : null,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1473,19 +1438,38 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  titulo,
+                  alarme
+                      ? titulo
+                      : '$titulo · sistema ${fmt(saldo.qtdSistema)}',
                   style: TextStyle(
                       color:      cor,
                       fontSize:   11,
                       fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Sistema ${fmt(saldo.qtdSistema)} · '
-                  'endereçado ${fmt(saldo.enderecado)}',
-                  style: const TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 11),
-                ),
+                if (alarme) ...[
+                  const SizedBox(height: 2),
+                  // Números crus: a unidade já está no título logo acima, e
+                  // repeti-la duas vezes fazia a linha quebrar em duas.
+                  Text(
+                    'Sistema ${formatarNumero(saldo.qtdSistema)} · '
+                    'endereçado ${formatarNumero(saldo.enderecado)}',
+                    style: const TextStyle(
+                        color: Color(0xFF8a9aa8), fontSize: 11),
+                  ),
+                ],
+                // O sistema do produto soma mais de um código: dizer QUAIS é
+                // o que faz o número conferir com o app do scanner na mão de
+                // quem está olhando — sem isso, "sistema 559" num rack de
+                // código US254185 parece número inventado.
+                if (saldo.temCodigosSomados)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'códigos somados · ${saldo.codigosSomados.join(' + ')}',
+                      style: const TextStyle(
+                          color: Color(0xFF6b7a88), fontSize: 10),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1497,9 +1481,14 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// Acende (ou apaga) todas as posições deste produto no mapa. É a mesma
   /// leitura que a busca da loja entrega ao abrir o galpão — só que a partir
   /// de um rack que a pessoa já tem na mão.
-  Widget _botaoDestaque(RackGalpao rack) {
+  ///
+  /// Devolve null quando o produto só está NESTE lugar: acender uma posição
+  /// só, com o painel dela já aberto, não mostra nada que não esteja na tela
+  /// — e o botão ficava ali em todo rack, cobrando espaço sem servir.
+  Widget? _botaoDestaque(RackGalpao rack) {
     final quantas = _posicoesDoProduto(rack.produtoCodigo);
     final aceso   = widget.destacadoCodigo == rack.produtoCodigo;
+    if (quantas <= 1 && !aceso) return null;
 
     return GestureDetector(
       onTap: () => widget.onAlternarDestaque?.call(rack.produtoCodigo),
@@ -1527,10 +1516,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             const SizedBox(width: 6),
             Text(
               aceso
-                  ? 'Apagar destaque · '
-                    '${pluralizar(quantas, 'posição', 'posições')}'
-                  : 'Destacar ${pluralizar(quantas, 'posição', 'posições')} '
-                    'deste produto',
+                  ? 'Apagar destaque'
+                  : 'Destacar ${pluralizar(quantas, 'posição', 'posições')}',
               style: TextStyle(
                 color: aceso ? corCamda : const Color(0xFF8a9aa8),
                 fontSize: 11,
@@ -1559,7 +1546,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final produto = _produtoSel;
     // Saldo do produto escolhido: quanto ainda falta endereçar é justamente o
     // que decide a quantidade a lançar neste palete.
-    final blocoSaldo = produto == null ? null : _blocoSaldo(produto.nome);
+    final blocoSaldo = produto == null ? null : _blocoSaldo();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1663,7 +1650,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                 for (final r in widget.recentes)
                   InkWell(
                     onTap: () => _selecionarProduto(r.produto,
-                        quantidadeLitros: r.quantidade),
+                        quantidade: r.quantidade),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -1751,46 +1738,24 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             blocoSaldo,
           ],
           const SizedBox(height: 8),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox(
-                width: 110,
-                child: TextField(
-                  controller: _qtdCtrl,
-                  onChanged: (_) => setState(() {}),
-                  keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
-                  ],
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  // Digita-se o que se CONTA no galpão: baldes ou caixas.
-                  // Litros são derivados ao lado, nunca digitados — quem vê
-                  // 45 baldes lança 45.
-                  decoration: _decoracaoCampo(
-                      _rotuloUnidade(produto.nome), null),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Conversão ao vivo para litros (o que o banco guarda).
-              Expanded(
-                child: Text(
-                  _quantidadeEmLitros == null ||
-                          unidadeDoNome(produto.nome) == null
-                      ? ''
-                      : '= ${formatarNumero(_quantidadeEmLitros!)} L',
-                  style: const TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 12),
-                ),
-              ),
+          TextField(
+            controller: _qtdCtrl,
+            onChanged: (_) => setState(() {}),
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
             ],
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+            // Digita-se o que se CONTA — e é o mesmo número que o sistema
+            // mostra. Não há mais conversão nenhuma no meio do caminho.
+            decoration: _decoracaoCampo('Unidades', null),
           ),
           const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: _quantidadeEmLitros == null ? null : _lancar,
+              onPressed: _quantidadeDigitada == null ? null : _lancar,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2e6b46),
                 padding: const EdgeInsets.symmetric(vertical: 11),
@@ -1801,15 +1766,6 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         ],
       ],
     );
-  }
-
-  /// Rótulo do campo de quantidade: a unidade em que se conta.
-  static String _rotuloUnidade(String nomeProduto) {
-    switch (unidadeDoNome(nomeProduto)) {
-      case 'balde': return 'Baldes';
-      case 'caixa': return 'Caixas';
-      default:      return 'Quantidade';
-    }
   }
 
   InputDecoration _decoracaoCampo(String hint, IconData? icone) =>
@@ -1900,11 +1856,14 @@ class _FaixaSaldo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Legenda das cores do mapa, não relatório: rótulo curto para caber numa
+    // linha só mesmo com os dois lados acesos. O detalhe por produto está no
+    // painel do endereço, que é onde a pergunta 'quanto falta neste?' nasce.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color:        const Color(0xEE141518),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(9),
         border:       Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
       child: Row(
@@ -1915,25 +1874,15 @@ class _FaixaSaldo extends StatelessWidget {
           const Icon(Icons.balance_outlined,
               size: 13, color: Color(0xFF8a877f)),
           const SizedBox(width: 8),
-          Expanded(
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 2,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (comFalta > 0)
-                  _legenda(
-                    corEnderecoDivergente,
-                    '${pluralizar(comFalta, 'produto')} por endereçar',
-                  ),
-                if (comSobra > 0)
-                  _legenda(
-                    corEnderecoDivergentePositiva,
-                    '${pluralizar(comSobra, 'produto')} acima do sistema',
-                  ),
-              ],
-            ),
-          ),
+          if (comFalta > 0)
+            Flexible(
+                child: _legenda(
+                    corEnderecoDivergente, '$comFalta por endereçar')),
+          if (comFalta > 0 && comSobra > 0) const SizedBox(width: 12),
+          if (comSobra > 0)
+            Flexible(
+                child: _legenda(corEnderecoDivergentePositiva,
+                    '$comSobra acima do sistema')),
         ],
       ),
     );
@@ -1950,9 +1899,13 @@ class _FaixaSaldo extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            texto,
-            style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+          Flexible(
+            child: Text(
+              texto,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+            ),
           ),
         ],
       );
