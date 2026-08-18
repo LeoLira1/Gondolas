@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/galpao_config.dart';
 import 'package:gondola_camda/galpao_page.dart';
+import 'package:gondola_camda/galpao_saldo.dart';
 import 'package:gondola_camda/galpao_scene.dart';
 import 'package:gondola_camda/gondola_scene.dart'
     show Camera, ProjecaoCamera, Vec3;
@@ -455,7 +456,7 @@ void main() {
       await tester.pump();
 
       // A faixa diz o que está aceso e em quantos lugares.
-      expect(find.textContaining('aceso em 2 posições'), findsOneWidget);
+      expect(find.text('2 posições'), findsOneWidget);
       // E o filtro ficou em 'Todas': nenhuma rua foi isolada, então os dois
       // paletes estão na tela ao mesmo tempo.
       expect(_corDoChip(tester, 'Todas'), corCamda);
@@ -490,7 +491,7 @@ void main() {
       ));
       await tester.pump();
 
-      expect(find.textContaining('aceso em 2 posições'), findsOneWidget);
+      expect(find.text('2 posições'), findsOneWidget);
       expect(_corDoChip(tester, 'R7'), corCamda);
       expect(_corDoChip(tester, 'Todas'), isNot(corCamda));
       // Rua 7 é a única com o produto: um ponto laranja só.
@@ -517,10 +518,10 @@ void main() {
       ));
       await tester.pump();
 
-      expect(find.textContaining('aceso em 1 posição'), findsOneWidget);
+      expect(find.text('1 posição'), findsOneWidget);
       await tester.tap(find.byIcon(Icons.close));
       await tester.pump();
-      expect(find.textContaining('aceso em'), findsNothing);
+      expect(find.text('HERBICIDA ARTYS 20L'), findsNothing);
     });
 
     testWidgets('painel do rack acende as outras posições do mesmo produto',
@@ -548,12 +549,76 @@ void main() {
 
       await tester.tapAt(centroNaTela(tester, 1, 1));
       await tester.pump();
-      expect(find.text('Destacar 2 posições deste produto'), findsOneWidget);
+      expect(find.text('Destacar 2 posições'), findsOneWidget);
 
-      await tester.tap(find.text('Destacar 2 posições deste produto'));
+      await tester.tap(find.text('Destacar 2 posições'));
       await tester.pump();
-      expect(find.textContaining('aceso em 2 posições'), findsOneWidget);
-      expect(find.text('Apagar destaque · 2 posições'), findsOneWidget);
+      // A faixa do topo passa a dizer em quantos lugares o produto está…
+      expect(find.text('2 posições'), findsOneWidget);
+      // …e o botão do painel vira o desligamento do destaque.
+      expect(find.text('Apagar destaque'), findsOneWidget);
+    });
+
+    testWidgets('em tela estreita o cabeçalho não invade a barra de ruas',
+        (tester) async {
+      // O relato: num celular de 360 dp o título quebrava em duas linhas e o
+      // subtítulo descia POR CIMA dos chips de rua, que moram numa camada
+      // própria (Positioned top: 68) e não empurram nada.
+      tester.view.physicalSize      = const Size(360, 720);
+      tester.view.devicePixelRatio  = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(const MaterialApp(
+          home: GalpaoPage(catalogoInicial: [], pilhasIniciais: {})));
+      await tester.pump();
+
+      final subtitulo = tester.getRect(find.textContaining('vagas'));
+      final chips     = tester.getRect(find.text('Todas'));
+      expect(subtitulo.bottom, lessThanOrEqualTo(chips.top));
+    });
+
+    testWidgets('faixa de destaque e faixa de saldo cabem numa linha cada',
+        (tester) async {
+      // As duas juntas comiam um quarto da tela por cima do mapa. Uma linha
+      // cada, e sem estouro de layout no celular estreito — o teste quebra
+      // sozinho se alguma delas voltar a quebrar em duas.
+      tester.view.physicalSize     = const Size(360, 720);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          codigoDestacado: 'ARTYS',
+          pilhasIniciais: {
+            1: const [
+              RackGalpao(
+                  posicao: 1, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 45),
+            ],
+            68: const [
+              RackGalpao(
+                  posicao: 68, ordem: 1, produtoCodigo: 'SOBRA',
+                  produtoNome: 'ADUBO FOLIAR 20L', quantidade: 90),
+            ],
+          },
+          saldosIniciais: const {
+            'ARTYS': SaldoProduto(
+                codigo: 'ARTYS', qtdSistema: 100, enderecado: 45),
+            'SOBRA': SaldoProduto(
+                codigo: 'SOBRA', qtdSistema: 10, enderecado: 90),
+          },
+        ),
+      ));
+      await tester.pump();
+
+      // Cada faixa em uma linha: a altura do texto não passa de uma linha de
+      // 11 px com folga.
+      expect(tester.getSize(find.text('1 posição')).height, lessThan(20));
+      expect(tester.getSize(find.text('1 por endereçar')).height, lessThan(20));
+      expect(
+          tester.getSize(find.text('1 acima do sistema')).height,
+          lessThan(20));
     });
 
     testWidgets('número fora de 1–78 avisa e não muda nada', (tester) async {

@@ -227,8 +227,7 @@ void main() {
       await tester.pumpWidget(_painel({'BORAL': _saldo(90)}));
 
       expect(find.text('Faltam 55 unidades por endereçar'), findsOneWidget);
-      expect(find.text('Sistema 145 unidades · endereçado 90 unidades'),
-          findsOneWidget);
+      expect(find.text('Sistema 145 · endereçado 90'), findsOneWidget);
     });
 
     testWidgets('endereçado acima do sistema mostra a sobra', (tester) async {
@@ -248,18 +247,20 @@ void main() {
         ),
       }));
 
-      expect(find.text('Sistema 559 unidades · endereçado 512 unidades'),
-          findsOneWidget);
+      expect(find.text('Sistema 559 · endereçado 512'), findsOneWidget);
       expect(find.text('códigos somados · 254185 + US254185'), findsOneWidget);
     });
 
     testWidgets('saldo que fecha, e produto sem saldo sem tarja nenhuma',
         (tester) async {
+      // Saldo que fecha não ganha caixa colorida: vira uma linha quieta, com
+      // o número do sistema junto — aviso que aparece sempre vira moldura.
       await tester.pumpWidget(_painel({'BORAL': _saldo(145)}));
-      expect(find.text('Tudo endereçado'), findsOneWidget);
+      expect(find.text('Tudo endereçado · sistema 145 unidades'),
+          findsOneWidget);
 
       await tester.pumpWidget(_painel(const {}, chave: 'sem-saldo'));
-      expect(find.text('Tudo endereçado'), findsNothing);
+      expect(find.textContaining('Tudo endereçado'), findsNothing);
       expect(find.textContaining('por endereçar'), findsNothing);
     });
   });
@@ -278,13 +279,13 @@ void main() {
       await tester.pumpWidget(pagina());
       await tester.pump();
 
-      expect(find.text('1 produto por endereçar'), findsOneWidget);
+      expect(find.text('1 por endereçar'), findsOneWidget);
 
       // Botão da barra superior: sólido com a leitura ligada.
       await tester.tap(find.byIcon(Icons.balance));
       await tester.pump();
 
-      expect(find.text('1 produto por endereçar'), findsNothing);
+      expect(find.text('1 por endereçar'), findsNothing);
       expect(find.byIcon(Icons.balance_outlined), findsOneWidget);
     });
 
@@ -300,7 +301,7 @@ void main() {
       ));
       await tester.pump();
 
-      expect(find.text('1 produto por endereçar'), findsNothing);
+      expect(find.text('1 por endereçar'), findsNothing);
     });
   });
 }
