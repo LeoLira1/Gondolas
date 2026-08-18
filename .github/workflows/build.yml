@@ -13,6 +13,7 @@ on:
       - "claude/pallet-product-quantity-ou6pq0"
       - "claude/quantidade-sistema-discrepancia-bnuoum"
       - "claude/rack-quantity-edit-61ezd7"
+      - "claude/local-cache-error-kuoiu8"
   workflow_dispatch:
 
 jobs:
