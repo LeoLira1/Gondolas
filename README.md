@@ -17,10 +17,31 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 Prédio separado da loja, com racks metálicos empilháveis — o rack é a própria
 unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
 
-- **85 posições de chão em 8 ruas**, numeradas de 1 a 85 de forma global e
-  contínua (não reinicia por rua). O endereço exibido é `<número> · N<nível>`.
-  As Ruas 2 (15–25) e 8 (79–85) atravessam as pontas do galpão na horizontal;
-  as outras seis correm no comprimento.
+- **Duas partes, 129 posições de chão em 12 ruas**, numeradas de 1 a 129 de
+  forma global e contínua (não reinicia por rua nem por parte). O endereço
+  exibido é `<número> · N<nível>`.
+  - **Parte 1** — 85 posições em 8 ruas. As Ruas 2 (15–25) e 8 (79–85)
+    atravessam as pontas do galpão na horizontal; as outras seis correm no
+    comprimento.
+  - **Parte 2** — 44 posições em 4 ruas de 11 (86–129), quatro fileiras
+    simples com corredor entre todas. A numeração é uma serpentina: desce a
+    Rua 9 (86–96), sobe a 10 (97–107), desce a 11 (108–118), sobe a 12
+    (119–129) — o mesmo princípio do perímetro contínuo da parte 1, para quem
+    separa carga andar a rua inteira antes de virar. No croqui do galpão ela
+    está etiquetada de 1 a 44; no app o endereço é o número global, e é ele
+    que vai para a etiqueta nova do rack: dois `44` no mesmo galpão não são
+    endereço, são ambiguidade.
+- **O mapa desenha uma parte de cada vez**, trocada pelo seletor `Parte 1` /
+  `Parte 2` acima dos chips de rua — os dois blocos ficam longe um do outro no
+  chão, e enquadrar os dois juntos deixaria cada rack do tamanho de um pixel.
+  A câmera reenquadra ao trocar, os chips passam a ser os da parte aberta
+  (`R1`–`R8` ou `R9`–`R12`) e o filtro volta para `Todas`. O que não está
+  desenhado também não recebe toque: a lista de alvos do hit-test é a da parte
+  aberta. Os pontos dos chips de parte (ciano de conferência, laranja de
+  busca) são o que impede o outro bloco de sumir do mundo — é a marca que diz
+  que o produto procurado, ou a contagem de hoje, também está lá. O campo
+  `nº` atravessa as partes sozinho: digitar 100 abre a parte 2 no endereço,
+  porque quem tem o número na mão não pensa em bloco.
 - **O nível não é identidade**: é a ordem do rack dentro da pilha. Esvaziar um
   rack faz os de cima descerem, e o que era N2 passa a ser N1 — por isso o
   nível nunca é gravado dentro de um código de endereço textual.

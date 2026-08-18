@@ -120,8 +120,13 @@ class _GalpaoPageState extends State<GalpaoPage> {
   DescidaPilha? _descida;
   int           _descidaSeq = 0;
 
-  /// Ruas visíveis: null = Todas. Isolar uma rua tira as outras do desenho E
-  /// da lista de alvos do toque (a cena reconstrói os alvos).
+  /// Parte do galpão aberta no mapa: 1 ou 2. O galpão são dois blocos
+  /// separados, e a tela mostra um de cada vez — ver GalpaoConfig.
+  int _parte = 1;
+
+  /// Ruas visíveis: null = Todas as da parte aberta. Isolar uma rua tira as
+  /// outras do desenho E da lista de alvos do toque (a cena reconstrói os
+  /// alvos).
   Set<int>? _ruasVisiveis;
 
   final _irParaCtrl = TextEditingController();
@@ -131,6 +136,22 @@ class _GalpaoPageState extends State<GalpaoPage> {
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
     _irParaCtrl.dispose();
     super.dispose();
+  }
+
+  /// Troca a parte desenhada. Volta o filtro para `Todas` (um R3 guardado da
+  /// parte 1 esconderia o galpão inteiro na parte 2, que só tem R9–R12) e
+  /// fecha o painel de um endereço que ficou no outro bloco — ele mostraria um
+  /// endereço que não está mais na tela, do mesmo jeito que o filtro de rua.
+  void _trocarParte(int parte) {
+    if (parte == _parte) return;
+    setState(() {
+      _parte        = parte;
+      _ruasVisiveis = null;
+      final sel = _selecionado;
+      if (sel != null && GalpaoConfig.parteDe(sel.posicao) != parte) {
+        _selecionado = null;
+      }
+    });
   }
 
   void _filtrarRua(int? numeroRua) {
@@ -148,8 +169,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
     });
   }
 
-  /// "Ir para o número": isola a rua da posição e marca o endereço — o rack
-  /// do topo se houver pilha, senão a vaga do chão.
+  /// "Ir para o número": abre a parte do número, isola a rua da posição e
+  /// marca o endereço — o rack do topo se houver pilha, senão a vaga do chão.
+  ///
+  /// O número é global (1–129), então digitar 100 leva à parte 2 sem precisar
+  /// trocar de bloco antes: quem tem o endereço na mão não pensa em parte.
   void _irParaPosicao(String texto) {
     final numero = int.tryParse(texto.trim());
     final posicao = numero == null ? null : GalpaoConfig.porNumero(numero);
@@ -163,6 +187,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     }
     final pilha = _pilhas[posicao.numero] ?? const <RackGalpao>[];
     setState(() {
+      _parte        = posicao.parte;
       _ruasVisiveis = {posicao.rua.numero};
       _selecionado = ToqueGalpao(
         posicao: posicao.numero,
@@ -290,6 +315,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
     // procurou o herbicida veria um palete e concluiria que é o único.
     final ruasDoProduto = _ruasComDestaque;
     setState(() {
+      // A parte é a do endereço escolhido, mesmo com o produto espalhado pelos
+      // dois blocos: o mapa mostra um de cada vez, e o ponto laranja no chip
+      // da outra parte é o que diz que há mais paletes lá.
+      _parte        = posicao.parte;
       _ruasVisiveis =
           ruasDoProduto.length > 1 ? null : {posicao.rua.numero};
       _selecionado = ToqueGalpao(
@@ -313,7 +342,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     ];
   }
 
-  /// Posições (1–85) que guardam o produto destacado.
+  /// Posições (1–129) que guardam o produto destacado.
   Set<int> get _posicoesComDestaque =>
       {for (final rack in _racksDestacados) rack.posicao};
 
@@ -327,6 +356,19 @@ class _GalpaoPageState extends State<GalpaoPage> {
       if (rua != null) ruas.add(rua.numero);
     }
     return ruas;
+  }
+
+  /// Partes que guardam o produto destacado — ponto laranja no chip da parte,
+  /// pelo mesmo motivo do ponto dos chips de rua: o mapa desenha um bloco de
+  /// cada vez, e sem essa marca os paletes do outro bloco simplesmente não
+  /// existiriam para quem está olhando.
+  Set<int> get _partesComDestaque {
+    final partes = <int>{};
+    for (final numero in _posicoesComDestaque) {
+      final parte = GalpaoConfig.parteDe(numero);
+      if (parte != null) partes.add(parte);
+    }
+    return partes;
   }
 
   /// Nome do produto destacado, lido dos próprios racks (o catálogo pode
@@ -424,6 +466,19 @@ class _GalpaoPageState extends State<GalpaoPage> {
       if (rua != null) ruas.add(rua.numero);
     }
     return ruas;
+  }
+
+  /// Partes que têm posição pendente hoje — ponto ciano no chip da parte, o
+  /// análogo de [_ruasComPendencia] entre os dois blocos.
+  Set<int> get _partesComPendencia {
+    final contagem = _contagemConferencia;
+    if (contagem.isEmpty) return const {};
+    final partes = <int>{};
+    for (final numero in contagem.keys) {
+      final parte = GalpaoConfig.parteDe(numero);
+      if (parte != null) partes.add(parte);
+    }
+    return partes;
   }
 
   /// Lança na tela primeiro e no banco em seguida (UI otimista): o galpão é
@@ -616,6 +671,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
             destacadoCodigo:     _destacadoCodigo,
             onTapEndereco:       _onTapEndereco,
             descida:             _descida,
+            parte:               _parte,
             ruasVisiveis:        _ruasVisiveis,
             modoConferencia:     _modoConferencia,
             codigosConferencia:  _codigosConferencia,
@@ -747,7 +803,16 @@ class _GalpaoPageState extends State<GalpaoPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    _BarraDePartes(
+                      parte: _parte,
+                      onSelecionar: _trocarParte,
+                      comPendencia: _partesComPendencia,
+                      comDestaque: _modoConferencia
+                          ? const {}
+                          : _partesComDestaque,
+                    ),
                     _BarraDeRuas(
+                      parte: _parte,
                       visiveis: _ruasVisiveis,
                       onSelecionar: _filtrarRua,
                       comPendencia: _ruasComPendencia,
@@ -856,11 +921,62 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 }
 
+// ── Seletor de parte ─────────────────────────────────────────────────────────
+
+/// `Parte 1` · `Parte 2`: troca o bloco desenhado no mapa.
+///
+/// Não é filtro, é troca de planta — os dois blocos ficam longe um do outro no
+/// chão, e desenhar os dois juntos deixaria cada rack do tamanho de um pixel.
+/// Por isso fica ACIMA dos chips de rua, que passam a ser os da parte aberta.
+///
+/// Os pontos (ciano de pendência, laranja de destaque) são o que impede a
+/// outra parte de sumir do mundo: com um bloco fora da tela, é a marca no chip
+/// que diz que o produto procurado — ou a conferência de hoje — também está lá.
+class _BarraDePartes extends StatelessWidget {
+  final int               parte;
+  final ValueChanged<int> onSelecionar;
+  final Set<int>          comPendencia;
+  final Set<int>          comDestaque;
+
+  const _BarraDePartes({
+    required this.parte,
+    required this.onSelecionar,
+    this.comPendencia = const {},
+    this.comDestaque  = const {},
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 30,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          for (final p in GalpaoConfig.partes)
+            _ChipGalpao(
+              texto:     'Parte $p',
+              ativo:     p == parte,
+              onTap:     () => onSelecionar(p),
+              pendente:  comPendencia.contains(p),
+              destacada: comDestaque.contains(p),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Barra de filtro por rua ──────────────────────────────────────────────────
 
-/// `Todas` + `R1`…`R7`. Isolar uma rua faz as outras sumirem da cena — e,
-/// junto com elas, da lista de alvos do toque.
+/// `Todas` + as ruas da parte aberta (`R1`…`R8` na parte 1, `R9`…`R12` na
+/// parte 2). Isolar uma rua faz as outras sumirem da cena — e, junto com elas,
+/// da lista de alvos do toque.
 class _BarraDeRuas extends StatelessWidget {
+  /// Parte aberta: manda em QUAIS chips existem. Sem isto a barra ofereceria
+  /// ruas que não estão desenhadas, e tocá-las esvaziaria a tela.
+  final int                parte;
+
   final Set<int>?          visiveis;
   final ValueChanged<int?> onSelecionar;
 
@@ -873,6 +989,7 @@ class _BarraDeRuas extends StatelessWidget {
   final Set<int>           comDestaque;
 
   const _BarraDeRuas({
+    required this.parte,
     required this.visiveis,
     required this.onSelecionar,
     this.comPendencia = const {},
@@ -887,22 +1004,46 @@ class _BarraDeRuas extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         children: [
-          _chip('Todas', visiveis == null, () => onSelecionar(null)),
-          for (final rua in GalpaoConfig.ruas)
-            _chip(
-              'R${rua.numero}',
-              visiveis != null && visiveis!.contains(rua.numero),
-              () => onSelecionar(rua.numero),
-              pendente: comPendencia.contains(rua.numero),
+          _ChipGalpao(
+            texto: 'Todas',
+            ativo: visiveis == null,
+            onTap: () => onSelecionar(null),
+          ),
+          for (final rua in GalpaoConfig.ruasDaParte(parte))
+            _ChipGalpao(
+              texto:     'R${rua.numero}',
+              ativo:     visiveis != null && visiveis!.contains(rua.numero),
+              onTap:     () => onSelecionar(rua.numero),
+              pendente:  comPendencia.contains(rua.numero),
               destacada: comDestaque.contains(rua.numero),
             ),
         ],
       ),
     );
   }
+}
 
-  Widget _chip(String texto, bool ativo, VoidCallback onTap,
-          {bool pendente = false, bool destacada = false}) =>
+/// O chip das duas barras de cima (parte e rua): mesmo formato, mesmos pontos
+/// de pendência e destaque. É um widget só porque as duas barras ficam
+/// coladas na tela — dois desenhos parecidos mas diferentes ali seriam lidos
+/// como coisas de naturezas diferentes, que não são.
+class _ChipGalpao extends StatelessWidget {
+  final String       texto;
+  final bool         ativo;
+  final VoidCallback onTap;
+  final bool         pendente;
+  final bool         destacada;
+
+  const _ChipGalpao({
+    required this.texto,
+    required this.ativo,
+    required this.onTap,
+    this.pendente  = false,
+    this.destacada = false,
+  });
+
+  @override
+  Widget build(BuildContext context) =>
       Padding(
         padding: const EdgeInsets.only(right: 6),
         child: GestureDetector(

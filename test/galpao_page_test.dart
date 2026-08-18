@@ -730,8 +730,13 @@ void main() {
       expect(_corDoChip(tester, 'Todas'), corCamda);
       expect(_corDoChip(tester, 'R7'), isNot(corCamda));
       // Os chips das duas ruas com o produto ganham o ponto laranja, para
-      // quem isolar uma rua depois saber onde estão as outras posições.
-      expect(_pontosLaranja(tester), 2);
+      // quem isolar uma rua depois saber onde estão as outras posições. O
+      // terceiro ponto é o do chip 'Parte 1', que está no mesmo bloco.
+      expect(_chipComPonto(tester, 'R1', corCamda), isTrue);
+      expect(_chipComPonto(tester, 'R7', corCamda), isTrue);
+      expect(_chipComPonto(tester, 'Parte 1', corCamda), isTrue);
+      expect(_chipComPonto(tester, 'Parte 2', corCamda), isFalse);
+      expect(_pontosLaranja(tester), 3);
     });
 
     testWidgets('produto todo numa rua só continua isolando a rua',
@@ -762,8 +767,11 @@ void main() {
       expect(find.text('2 posições'), findsOneWidget);
       expect(_corDoChip(tester, 'R7'), corCamda);
       expect(_corDoChip(tester, 'Todas'), isNot(corCamda));
-      // Rua 7 é a única com o produto: um ponto laranja só.
-      expect(_pontosLaranja(tester), 1);
+      // Rua 7 é a única com o produto: um ponto laranja na barra de ruas,
+      // mais o da parte em que ela está.
+      expect(_chipComPonto(tester, 'R7', corCamda), isTrue);
+      expect(_chipComPonto(tester, 'Parte 1', corCamda), isTrue);
+      expect(_pontosLaranja(tester), 2);
       // A rua isolada de fato tira as outras da tela.
       await tester.tapAt(centroNaTela(tester, 1, 1));
       await tester.pump();
@@ -840,9 +848,13 @@ void main() {
           home: GalpaoPage(catalogoInicial: [], pilhasIniciais: {})));
       await tester.pump();
 
+      // A camada de cima agora começa pelo seletor de parte, então é ELE que
+      // o cabeçalho não pode invadir — a barra de ruas vem logo abaixo.
       final subtitulo = tester.getRect(find.textContaining('vagas'));
+      final partes    = tester.getRect(find.text('Parte 1'));
       final chips     = tester.getRect(find.text('Todas'));
-      expect(subtitulo.bottom, lessThanOrEqualTo(chips.top));
+      expect(subtitulo.bottom, lessThanOrEqualTo(partes.top));
+      expect(partes.bottom, lessThanOrEqualTo(chips.top));
     });
 
     testWidgets('faixa de destaque e faixa de saldo cabem numa linha cada',
@@ -889,11 +901,11 @@ void main() {
           lessThan(20));
     });
 
-    testWidgets('número fora de 1–78 avisa e não muda nada', (tester) async {
+    testWidgets('número fora de 1–129 avisa e não muda nada', (tester) async {
       await tester.pumpWidget(const MaterialApp(
           home: GalpaoPage(catalogoInicial: [])));
 
-      await tester.enterText(find.widgetWithText(TextField, 'nº'), '99');
+      await tester.enterText(find.widgetWithText(TextField, 'nº'), '130');
       await tester.testTextInput.receiveAction(TextInputAction.go);
       await tester.pump();
 
@@ -903,6 +915,112 @@ void main() {
       await tester.tapAt(centroNaTela(tester, 1, 1));
       await tester.pump();
       expect(find.text('1 · N1'), findsOneWidget);
+    });
+  });
+
+  group('as duas partes do galpão', () {
+    GalpaoScene cena(WidgetTester tester) =>
+        tester.widget<GalpaoScene>(find.byType(GalpaoScene));
+
+    testWidgets('abre na parte 1, com os chips das ruas dela', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: GalpaoPage(catalogoInicial: [], pilhasIniciais: {})));
+      await tester.pump();
+
+      expect(cena(tester).parte, 1);
+      expect(_corDoChip(tester, 'Parte 1'), corCamda);
+      expect(find.text('R1'), findsOneWidget);
+      expect(find.text('R8'), findsOneWidget);
+      // As ruas da parte 2 não estão na barra: o mapa não as desenha, e um
+      // chip que esvazia a tela é pior que chip nenhum.
+      expect(find.text('R9'), findsNothing);
+      expect(find.text('R12'), findsNothing);
+    });
+
+    testWidgets('tocar Parte 2 troca a planta e os chips de rua',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: GalpaoPage(catalogoInicial: [], pilhasIniciais: {})));
+      await tester.pump();
+
+      await tester.tap(find.text('Parte 2'));
+      await tester.pump();
+
+      expect(cena(tester).parte, 2);
+      expect(_corDoChip(tester, 'Parte 2'), corCamda);
+      expect(find.text('R9'), findsOneWidget);
+      expect(find.text('R12'), findsOneWidget);
+      expect(find.text('R1'), findsNothing);
+      // E a cena volta a mostrar o bloco inteiro: um R3 guardado da parte 1
+      // esconderia tudo aqui.
+      expect(cena(tester).ruasVisiveis, isNull);
+      expect(_corDoChip(tester, 'Todas'), corCamda);
+    });
+
+    testWidgets('trocar de parte fecha o painel do endereço do outro bloco',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: GalpaoPage(catalogoInicial: [], pilhasIniciais: {})));
+      await tester.pump();
+
+      // Abre o painel de um endereço da parte 1 pelo campo do número.
+      await tester.enterText(find.widgetWithText(TextField, 'nº'), '52');
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pump();
+      expect(find.text('52 · N1'), findsOneWidget);
+
+      await tester.tap(find.text('Parte 2'));
+      await tester.pump();
+
+      // O endereço não está mais na tela: o painel dele também não pode estar.
+      expect(find.text('52 · N1'), findsNothing);
+    });
+
+    testWidgets('ir para o nº 100 atravessa para a parte 2', (tester) async {
+      // O número é global, então quem tem o endereço na mão não precisa saber
+      // em que bloco ele está.
+      await tester.pumpWidget(const MaterialApp(
+          home: GalpaoPage(catalogoInicial: [], pilhasIniciais: {})));
+      await tester.pump();
+
+      await tester.enterText(find.widgetWithText(TextField, 'nº'), '100');
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pump();
+
+      expect(cena(tester).parte, 2);
+      expect(find.text('100 · N1'), findsOneWidget);
+      // Rua 10, isolada como o campo sempre fez.
+      expect(_corDoChip(tester, 'R10'), corCamda);
+    });
+
+    testWidgets('busca num endereço da parte 2 abre já nela', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: GalpaoPage(
+          catalogoInicial: const [],
+          posicaoInicial:  129,
+          codigoDestacado: 'ARTYS',
+          pilhasIniciais: {
+            129: const [
+              RackGalpao(
+                  posicao: 129, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+            1: const [   // o mesmo produto no outro bloco
+              RackGalpao(
+                  posicao: 1, ordem: 1, produtoCodigo: 'ARTYS',
+                  produtoNome: 'HERBICIDA ARTYS 20L', quantidade: 900),
+            ],
+          },
+        ),
+      ));
+      await tester.pump();
+
+      expect(cena(tester).parte, 2);
+      expect(find.text('129 · N1'), findsOneWidget);
+      // O produto está nos dois blocos: os dois chips de parte acendem o
+      // ponto laranja, que é o que diz que há mais paletes fora do desenho.
+      expect(_chipComPonto(tester, 'Parte 1', corCamda), isTrue);
+      expect(_chipComPonto(tester, 'Parte 2', corCamda), isTrue);
     });
   });
 }
@@ -921,7 +1039,10 @@ const _catalogoTeste = [
 Color? _corDoChip(WidgetTester tester, String texto) =>
     tester.widget<Text>(find.text(texto)).style?.color;
 
-/// Quantos chips de rua estão com o ponto laranja do produto destacado.
+/// Quantos chips (de rua ou de parte) estão com o ponto laranja do produto
+/// destacado. Conta a tela inteira: o chip da parte também ganha o ponto
+/// quando o produto está no outro bloco, e é justamente essa marca que diz
+/// que há mais paletes fora do desenho.
 int _pontosLaranja(WidgetTester tester) => tester
     .widgetList<Container>(find.byType(Container))
     .where((c) {
@@ -931,6 +1052,22 @@ int _pontosLaranja(WidgetTester tester) => tester
           d.color == corCamda;
     })
     .length;
+
+/// Se o chip de rótulo [texto] (`R7`, `Parte 2`, …) está com um ponto da cor
+/// [cor]. Olha só a subárvore daquele chip — a tela tem duas barras de chips,
+/// e contar os pontos da tela inteira não diz em qual deles eles estão.
+bool _chipComPonto(WidgetTester tester, String texto, Color cor) {
+  final chip = find
+      .ancestor(of: find.text(texto), matching: find.byType(Container))
+      .first;
+  return tester
+      .widgetList<Container>(
+          find.descendant(of: chip, matching: find.byType(Container)))
+      .any((c) {
+    final d = c.decoration;
+    return d is BoxDecoration && d.shape == BoxShape.circle && d.color == cor;
+  });
+}
 
 Offset? _projetar(Camera camera, Size size, Vec3 v) {
   final olho   = camera.position;

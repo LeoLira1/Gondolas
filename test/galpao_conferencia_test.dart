@@ -79,8 +79,29 @@ void main() {
         find.textContaining('Conferência do dia: 1 produto em 1 posição'),
         findsOneWidget,
       );
-      // A posição 52 é da Rua 5: só o chip dela ganha o ponto ciano.
-      expect(_pontoDeRuaPendente, findsOneWidget);
+      // A posição 52 é da Rua 5, na parte 1: ganham o ponto ciano o chip
+      // dessa rua e o da parte em que ela está — nenhum outro.
+      expect(_pontoDeRuaPendente, findsNWidgets(2));
+      expect(
+        find.descendant(
+          of: find
+              .ancestor(
+                  of: find.text('R5'), matching: find.byType(Container))
+              .first,
+          matching: _pontoDeRuaPendente,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find
+              .ancestor(
+                  of: find.text('Parte 1'), matching: find.byType(Container))
+              .first,
+          matching: _pontoDeRuaPendente,
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('desligar o modo devolve a cena às cores de produto',
@@ -178,7 +199,7 @@ void main() {
         pilhas:              _pilhas,
         modoConferencia:     true,
         codigosConferencia:  const {'BORAL'},
-        // 999 não existe na planta (são 85 posições): não pode desenhar nada
+        // 999 não existe na planta (são 129 posições): não pode desenhar nada
         // nem derrubar o frame.
         contagemConferencia: const {999: 3},
       ).paint(Canvas(recorder), tela);

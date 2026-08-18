@@ -24,13 +24,15 @@ import 'scene_gestures.dart';
 // ordem correta de desenho sai do PERCURSO dos índices, de trás para frente,
 // sem comparar nada:
 //
-//   * as 8 ruas são ordenadas entre si (8 elementos, custo desprezível);
+//   * as ruas da parte aberta são ordenadas entre si (no máximo 8 elementos,
+//     custo desprezível);
 //   * dentro da rua, as posições são percorridas das pontas para o meio, na
 //     direção do olho (duas agulhas, O(n) — ver [ordemDeDesenho]);
 //   * dentro da posição, de baixo para cima: a câmera fica sempre acima da
 //     pilha, então o rack mais alto é o mais próximo.
 //
-// Com até 340 racks na tela isso troca um sort de ~1.000 faces por frame por
+// Com até 340 racks na tela (a parte 1 cheia) isso troca um sort de ~1.000
+// faces por frame por
 // um percurso linear. É intencional, não descuido: se um dia a grade deixar de
 // ser regular, este é o primeiro lugar a rever.
 
@@ -41,7 +43,7 @@ import 'scene_gestures.dart';
 /// descerem, e a ordem de todos eles muda. Ver a discussão em
 /// galpao_config.dart.
 class RackGalpao {
-  final int    posicao;        // 1–85
+  final int    posicao;        // 1–129
   final int    ordem;          // 1–GalpaoConfig.niveisMax
   final String produtoCodigo;
   final String produtoNome;
@@ -62,7 +64,7 @@ class RackGalpao {
 /// numa posição com vaga o toque no contorno devolve a PRÓXIMA ordem livre,
 /// que é onde uma carga nova entraria (produto novo sempre entra no topo).
 class ToqueGalpao {
-  final int  posicao;  // 1–85
+  final int  posicao;  // 1–129
   final int  ordem;    // 1–GalpaoConfig.niveisMax
   final bool ocupado;
 
@@ -210,12 +212,16 @@ List<PosicaoGalpao> ordemDeDesenho(RuaGalpao rua, double coordOlho) {
   return ordenado;
 }
 
-/// As ruas da mais longe para a mais perto do olho.
+/// As ruas de uma PARTE, da mais longe para a mais perto do olho.
 ///
-/// São 8: ordenar é mais barato e mais claro que qualquer esquema esperto, e
-/// o resultado não depende de as ruas serem paralelas (as Ruas 2 e 8 são
-/// perpendiculares às outras).
-List<RuaGalpao> ruasPorProfundidade(Vec3 olho, {Set<int>? visiveis}) {
+/// São 8 na parte 1 e 4 na parte 2: ordenar é mais barato e mais claro que
+/// qualquer esquema esperto, e o resultado não depende de as ruas serem
+/// paralelas (as Ruas 2 e 8 são perpendiculares às outras).
+///
+/// A parte filtra antes de [visiveis]: o mapa desenha um bloco de cada vez, e
+/// uma rua da outra parte não entra na cena nem que o filtro a peça.
+List<RuaGalpao> ruasPorProfundidade(Vec3 olho,
+    {Set<int>? visiveis, int parte = 1}) {
   double distancia(RuaGalpao r) {
     final cx = r.eixo == EixoRua.z ? r.coordFixa : r.centro;
     final cz = r.eixo == EixoRua.z ? r.centro : r.coordFixa;
@@ -224,7 +230,7 @@ List<RuaGalpao> ruasPorProfundidade(Vec3 olho, {Set<int>? visiveis}) {
   }
 
   final lista = [
-    for (final r in GalpaoConfig.ruas)
+    for (final r in GalpaoConfig.ruasDaParte(parte))
       if (visiveis == null || visiveis.contains(r.numero)) r,
   ]..sort((a, b) => distancia(b).compareTo(distancia(a)));
   return lista;
@@ -235,7 +241,7 @@ List<RuaGalpao> ruasPorProfundidade(Vec3 olho, {Set<int>? visiveis}) {
 class GalpaoPainter extends CustomPainter {
   final Camera camera;
 
-  /// Pilhas por posição (1–85), cada uma ordenada por [RackGalpao.ordem].
+  /// Pilhas por posição (1–129), cada uma ordenada por [RackGalpao.ordem].
   /// Posição ausente ou lista vazia = vaga livre no chão.
   final Map<int, List<RackGalpao>> pilhas;
 
@@ -263,8 +269,14 @@ class GalpaoPainter extends CustomPainter {
   /// >= aPartirDe, desenhados [dy] metros acima do lugar final.
   final ({int posicao, int aPartirDe, double dy})? descida;
 
-  /// Ruas visíveis (filtro R1–R7), ou null para todas. As ruas fora do
-  /// conjunto somem por inteiro: cubos, contornos, números e rótulo.
+  /// Parte do galpão desenhada: 1 ou 2. O mapa mostra um bloco de cada vez —
+  /// as ruas, posições e etiquetas da outra parte não são desenhadas, e o
+  /// piso e o enquadramento seguem só o envelope desta.
+  final int parte;
+
+  /// Ruas visíveis (filtro R1–R8 na parte 1, R9–R12 na parte 2), ou null para
+  /// todas as da parte. As ruas fora do conjunto somem por inteiro: cubos,
+  /// contornos, números e rótulo.
   final Set<int>? ruasVisiveis;
 
   /// Modo Conferência: o galpão troca a cor de produto pela leitura de rota —
@@ -276,7 +288,7 @@ class GalpaoPainter extends CustomPainter {
   /// preso a (posição, ordem) acenderia o rack errado depois disso.
   final Set<String> codigosConferencia;
 
-  /// Posição (1–85) → nº de produtos pendentes ali, para o badge contador.
+  /// Posição (1–129) → nº de produtos pendentes ali, para o badge contador.
   final Map<int, int> contagemConferencia;
 
   /// Leitura de saldo ligada: rack de produto com carga por endereçar fica
@@ -295,6 +307,7 @@ class GalpaoPainter extends CustomPainter {
     this.selecionado,
     this.destacadoCodigo,
     this.descida,
+    this.parte              = 1,
     this.ruasVisiveis,
     this.modoConferencia    = false,
     this.codigosConferencia = const {},
@@ -357,7 +370,8 @@ class GalpaoPainter extends CustomPainter {
             ? desc.dy
             : 0.0;
 
-    for (final rua in ruasPorProfundidade(proj.eye, visiveis: ruasVisiveis)) {
+    for (final rua
+        in ruasPorProfundidade(proj.eye, visiveis: ruasVisiveis, parte: parte)) {
       final coordOlho = rua.eixo == EixoRua.z ? proj.eye.z : proj.eye.x;
       for (final posicao in ordemDeDesenho(rua, coordOlho)) {
         final pilha = pilhas[posicao.numero] ?? const <RackGalpao>[];
@@ -432,12 +446,12 @@ class GalpaoPainter extends CustomPainter {
 
   // ── Piso ───────────────────────────────────────────────────────────────────
 
-  /// Grade discreta no chão, do tamanho do galpão. Não entra na ordem de
-  /// desenho: a câmera está sempre acima do piso, então ele é sempre a
+  /// Grade discreta no chão, do tamanho da parte aberta. Não entra na ordem
+  /// de desenho: a câmera está sempre acima do piso, então ele é sempre a
   /// superfície mais ao fundo.
   void _desenharPiso(Canvas canvas, ProjecaoCamera proj) {
     const passo = 2.0;
-    final lim = GalpaoConfig.limites;
+    final lim = GalpaoConfig.limitesDaParte(parte);
     final x0 = lim.minX - 1.0, x1 = lim.maxX + 1.0;
     final z0 = lim.minZ - 1.0, z1 = lim.maxZ + 1.0;
 
@@ -629,7 +643,7 @@ class GalpaoPainter extends CustomPainter {
     final margem = Rect.fromLTWH(
         -40, -40, proj.larguraPx + 80, proj.alturaPx + 80);
 
-    for (final p in GalpaoConfig.posicoes) {
+    for (final p in GalpaoConfig.posicoesDaParte(parte)) {
       if (ruasVisiveis != null && !ruasVisiveis!.contains(p.rua.numero)) {
         continue;
       }
@@ -659,7 +673,7 @@ class GalpaoPainter extends CustomPainter {
 
     // Nome da rua na ponta de menor coordenada, para orientar quem está
     // procurando um endereço.
-    for (final rua in GalpaoConfig.ruas) {
+    for (final rua in GalpaoConfig.ruasDaParte(parte)) {
       if (ruasVisiveis != null && !ruasVisiveis!.contains(rua.numero)) {
         continue;
       }
@@ -718,6 +732,7 @@ class GalpaoPainter extends CustomPainter {
     for (final entry in contagemConferencia.entries) {
       final posicao = GalpaoConfig.porNumero(entry.key);
       if (posicao == null) continue;
+      if (posicao.parte != parte) continue;
       if (ruasVisiveis != null &&
           !ruasVisiveis!.contains(posicao.rua.numero)) {
         continue;
@@ -782,6 +797,7 @@ class GalpaoPainter extends CustomPainter {
       old.selecionado         != selecionado      ||
       old.destacadoCodigo     != destacadoCodigo  ||
       old.descida             != descida          ||
+      old.parte               != parte            ||
       !setEquals(old.ruasVisiveis, ruasVisiveis)  ||
       old.mostrarSaldo        != mostrarSaldo      ||
       !identical(old.saldos, saldos)              ||
@@ -811,7 +827,12 @@ class GalpaoScene extends StatefulWidget {
   /// mudança do [DescidaPilha.id].
   final DescidaPilha? descida;
 
-  /// Ruas visíveis (filtro), ou null para todas.
+  /// Parte do galpão desenhada: 1 ou 2 (ver [GalpaoPainter.parte]). Trocar de
+  /// parte reenquadra a câmera — os dois blocos ficam longe um do outro no
+  /// plano, e manter a câmera onde estava abriria a parte nova fora da tela.
+  final int parte;
+
+  /// Ruas visíveis dentro da parte (filtro), ou null para todas.
   final Set<int>? ruasVisiveis;
 
   /// Modo Conferência ligado: racks com pendente de hoje em ciano, resto
@@ -839,6 +860,7 @@ class GalpaoScene extends StatefulWidget {
     this.destacadoCodigo,
     this.onTapEndereco,
     this.descida,
+    this.parte              = 1,
     this.ruasVisiveis,
     this.modoConferencia    = false,
     this.codigosConferencia = const {},
@@ -847,7 +869,7 @@ class GalpaoScene extends StatefulWidget {
     this.saldos             = const {},
   });
 
-  /// Câmera isométrica que enquadra o galpão inteiro numa tela de [size].
+  /// Câmera isométrica que enquadra a [parte] pedida numa tela de [size].
   ///
   /// O enquadramento é calculado, não chutado. Para um ponto p, com
   /// a = p − alvo e o olho em alvo + dir·dist, vale que `dot(a, right)` e
@@ -863,14 +885,14 @@ class GalpaoScene extends StatefulWidget {
   /// fundo. Uma primeira versão ortográfica ignorava esse termo e compensava
   /// com uma folga arbitrária; o canto de baixo escapava da tela no formato
   /// deitado.
-  static Camera enquadrar(Size size) {
+  static Camera enquadrar(Size size, {int parte = 1}) {
     // Azimute pequeno de propósito: o galpão é um retângulo de ~16 × 20 m e a
     // tela do celular também é um retângulo em pé. Girar muito faz o galpão
     // atravessar a tela na diagonal, e a caixa que o contém na tela cresce
     // sem que o galpão apareça maior — sobra tarja preta em cima e embaixo.
     // 0,20 rad dá volume aos cubos sem jogar a planta na diagonal.
     const rotY = 0.20, rotX = 0.95;
-    final lim  = GalpaoConfig.limites;
+    final lim  = GalpaoConfig.limitesDaParte(parte);
     final alvo = Vec3(
       (lim.minX + lim.maxX) / 2,
       GalpaoConfig.yTopo(GalpaoConfig.niveisMax) / 2,
@@ -929,10 +951,11 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// Posições que podem receber toque AGORA — a lista de alvos do hit-test.
   ///
   /// ⚠️ Existe porque esconder no desenho não basta: se o hit-test varrer a
-  /// grade inteira, os cubos das ruas filtradas continuam roubando o toque e
-  /// o usuário seleciona uma posição de outra rua sem entender por quê. Por
-  /// isso ela é RECONSTRUÍDA a cada mudança de filtro (didUpdateWidget), e
-  /// não recalculada por conta própria dentro do _hitTest.
+  /// grade inteira, os cubos das ruas filtradas — e os da outra parte, que
+  /// nem estão na tela — continuam roubando o toque e o usuário seleciona uma
+  /// posição que não está vendo. Por isso ela é RECONSTRUÍDA a cada mudança
+  /// de parte ou de filtro (didUpdateWidget), e não recalculada por conta
+  /// própria dentro do _hitTest.
   late List<PosicaoGalpao> _alvos;
 
   @override
@@ -947,10 +970,11 @@ class _GalpaoSceneState extends State<GalpaoScene>
 
   void _reconstruirAlvos() {
     final visiveis = widget.ruasVisiveis;
+    final daParte  = GalpaoConfig.posicoesDaParte(widget.parte);
     _alvos = visiveis == null
-        ? GalpaoConfig.posicoes
+        ? daParte
         : [
-            for (final p in GalpaoConfig.posicoes)
+            for (final p in daParte)
               if (visiveis.contains(p.rua.numero)) p,
           ];
   }
@@ -958,9 +982,15 @@ class _GalpaoSceneState extends State<GalpaoScene>
   @override
   void didUpdateWidget(GalpaoScene old) {
     super.didUpdateWidget(old);
-    if (!setEquals(old.ruasVisiveis, widget.ruasVisiveis)) {
+    if (old.parte != widget.parte ||
+        !setEquals(old.ruasVisiveis, widget.ruasVisiveis)) {
       _reconstruirAlvos();
     }
+    // Parte nova, enquadramento novo: os dois blocos estão a dezenas de metros
+    // um do outro, então a câmera da parte anterior aponta para chão vazio.
+    // Zerar aqui faz o build seguinte reenquadrar com o tamanho real da tela,
+    // que é a única coisa que o enquadramento precisa saber além da parte.
+    if (old.parte != widget.parte) _camera = null;
     final d = widget.descida;
     if (d != null && d.id != old.descida?.id) {
       _descidaCtrl.forward(from: 0);
@@ -1041,7 +1071,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
 
       final dx = delta.dx * metrosPorPx;
       final dz = delta.dy * metrosPorPx / inclinacao;
-      final lim = GalpaoConfig.limites;
+      final lim = GalpaoConfig.limitesDaParte(widget.parte);
 
       setState(() {
         _camera = Camera(
@@ -1084,8 +1114,9 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// A vaga continua ganhando quando é o único alvo da posição no caminho do
   /// raio (posição vazia, ou toque no contorno em área que não cobre rack).
   ///
-  /// Percorre [_alvos] — a lista reconstruída pelo filtro de rua —, nunca a
-  /// grade inteira: o que sumiu da tela não pode continuar recebendo toque.
+  /// Percorre [_alvos] — a lista reconstruída pela parte e pelo filtro de rua
+  /// —, nunca a grade inteira: o que sumiu da tela não pode continuar
+  /// recebendo toque.
   ToqueGalpao? _hitTest(Camera camera, Offset toque, Size size) {
     final eye   = camera.position;
     final fwd   = (camera.target - eye).normalized;
@@ -1178,7 +1209,8 @@ class _GalpaoSceneState extends State<GalpaoScene>
         // Enquadra na primeira medida útil da tela. Atribuir aqui (e não num
         // post-frame com setState) evita um frame com a câmera no lugar
         // errado; é idempotente e não muda nada visível depois disso.
-        final camera = _camera ??= GalpaoScene.enquadrar(constraints.biggest);
+        final camera = _camera ??=
+            GalpaoScene.enquadrar(constraints.biggest, parte: widget.parte);
 
         return Listener(
           onPointerDown:   aoEncostarDedo,
@@ -1197,6 +1229,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
                 selecionado:         widget.selecionado,
                 destacadoCodigo:     widget.destacadoCodigo,
                 descida:             _descidaDoFrame,
+                parte:               widget.parte,
                 ruasVisiveis:        widget.ruasVisiveis,
                 modoConferencia:     widget.modoConferencia,
                 codigosConferencia:  widget.codigosConferencia,
