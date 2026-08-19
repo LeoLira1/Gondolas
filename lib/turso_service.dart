@@ -94,6 +94,7 @@ class TursoService {
   bool?   _cacheLocalAtivo;
   Future<void>? _initEmAndamento;
   bool _forcarReconexao = false;
+  String? _motivoFalhaCacheLocal;
 
   // Cache do catálogo (estoque_mestre): evita repetir o SELECT de até 5000
   // linhas toda vez que uma página abre. No modo local o TTL é ignorado (ver
@@ -151,6 +152,10 @@ class TursoService {
   /// mostrava a preferência e escondia o que estava acontecendo de verdade.
   bool get caiuParaRemoto =>
       _connected && !_modoLocal && (_cacheLocalAtivo ?? false);
+
+  /// Por que a última tentativa de abrir o cache local não deu certo, ou null
+  /// se ela deu. Mostrado junto do aviso em ⚙️ — ver `_conectarComCacheLocal`.
+  String? get motivoFalhaCacheLocal => _motivoFalhaCacheLocal;
 
   bool get sincronizando => _sincronizando;
 
@@ -389,6 +394,8 @@ class TursoService {
   Future<LibsqlClient?> _conectarComCacheLocal(String url, String token,
       {bool podeReconstruir = true}) async {
     LibsqlClient? client;
+    // Fora do try: o catch precisa do valor para explicar um timeout.
+    var limite = _timeoutConexao;
     try {
       final path = await _caminhoCacheLocal();
       // Atenção: quando o arquivo local ainda não existe, este connect() NÃO é
@@ -404,11 +411,19 @@ class TursoService {
       // Esperar mais não custa tela: o `init()` roda solto na abertura (ver
       // main.dart) e o mapa aparece de qualquer jeito.
       final primeiraVez = !await File(path).exists();
-      final limite = primeiraVez ? _timeoutBootstrap : _timeoutConexao;
+      limite = primeiraVez ? _timeoutBootstrap : _timeoutConexao;
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       await client.connect().timeout(limite);
+      _motivoFalhaCacheLocal = null;
       return client;
     } catch (e) {
+      // Guarda o PORQUÊ. Sem isto o app só sabia dizer "não pôde ser aberto",
+      // e a causa (estourou o tempo do download? token recusado? arquivo em
+      // estado inválido?) pede correções completamente diferentes — cada uma
+      // some junto com o erro engolido aqui.
+      _motivoFalhaCacheLocal = e is TimeoutException
+          ? 'o download da base passou de ${limite.inSeconds}s'
+          : descreverErroSync(e);
       if (client != null) {
         unawaited(client.dispose().catchError((_) {}));
       }
