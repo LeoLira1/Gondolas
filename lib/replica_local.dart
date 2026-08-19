@@ -36,7 +36,7 @@ int? frameDuravelDaReplica(String conteudoInfo) {
 }
 
 /// True quando o erro indica que a replica local não tem mais como conversar
-/// com o servidor — nem sincronizando, nem reabrindo. São três situações, e
+/// com o servidor — nem sincronizando, nem reabrindo. São quatro situações, e
 /// todas têm a mesma (única) saída: apagar o arquivo local e rebaixar tudo.
 ///
 /// * `InvalidPushFrameConflict(a, b)` — o servidor recusou os frames locais.
@@ -46,6 +46,16 @@ int? frameDuravelDaReplica(String conteudoInfo) {
 ///   libsql se recusa a abrir a replica nesse estado.
 /// * `InvalidLocalGeneration` — a geração local ficou à frente da do servidor
 ///   (o banco remoto foi recriado ou restaurado por fora).
+/// * `Generation ID mismatch` dentro de um `PushFrame(400, …)` — o caso
+///   inverso do anterior: quem virou a geração foi o SERVIDOR (checkpoint do
+///   Turso, restore, banco recriado) e a replica local continua empurrando
+///   frames carimbados com a geração velha. O servidor devolve HTTP 400 e a
+///   replica repete o mesmo push a cada Sincronizar, para sempre.
+///
+/// Qualquer `PushFrame(400, …)` entra na regra, e não só o texto da geração:
+/// 400 é o servidor dizendo que os frames locais estão errados, e repetir o
+/// envio idêntico nunca muda a resposta. Erro de rede e token vêm com outro
+/// formato (socket, 401/403), então não caem aqui por engano.
 ///
 /// A comparação é por texto porque o `libsql_dart` faz `unwrap()` no lado Rust:
 /// o que chega no Dart é uma `PanicException` com a mensagem do erro dentro,
@@ -54,7 +64,9 @@ bool erroDeReplicaDivergente(Object erro) {
   final texto = erro.toString();
   return texto.contains('InvalidPushFrameConflict') ||
       texto.contains('InvalidLocalState') ||
-      texto.contains('InvalidLocalGeneration');
+      texto.contains('InvalidLocalGeneration') ||
+      texto.contains('Generation ID mismatch') ||
+      texto.contains('PushFrame(400');
 }
 
 /// A base do remoto não pôde ser baixada porque o servidor não respondeu.
