@@ -348,13 +348,44 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     await prefs.setString(TursoService.keyDbUrl,   _urlCtrl.text.trim());
     await prefs.setString(TursoService.keyDbToken, _tokenCtrl.text.trim());
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Configuração salva'),
-        backgroundColor: Color(0xFF2e6b46),
-        duration: Duration(seconds: 2),
-      ),
-    );
+
+    // Conecta AGORA, e não "quando der". A primeira conexão da replica baixa
+    // o banco inteiro e é a ÚNICA que depende de rede boa; antes ela ficava
+    // para o próximo _garantirConexao(), ou seja, para o momento imprevisível
+    // em que o app fosse consultar algo — tipicamente já no galpão, com sinal
+    // fraco, que é como se cai no modo remoto sem perceber. Aqui o usuário
+    // está parado na tela de ⚙️ e vê o resultado.
+    setState(() => _reconectando = true);
+    await TursoService().reconectar();
+    if (!mounted) return;
+    setState(() => _reconectando = false);
+
+    final servico = TursoService();
+    final (texto, cor) = switch (servico) {
+      _ when !servico.isConnected => (
+          'Configuração salva, mas não deu para conectar — confira URL, '
+              'token e a internet.',
+          const Color(0xFF8b1a1a),
+        ),
+      _ when servico.caiuParaRemoto => (
+          'Salvo, mas o cache local não pôde ser aberto — veja o aviso '
+              'logo abaixo.',
+          const Color(0xFF8b6a1a),
+        ),
+      _ when servico.modoLocal => (
+          'Salvo ✓ — cache local pronto, os dados já estão no aparelho.',
+          const Color(0xFF2e6b46),
+        ),
+      _ => (
+          'Salvo ✓ — conectado direto no banco online.',
+          const Color(0xFF2e6b46),
+        ),
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(texto),
+      backgroundColor: cor,
+      duration: Duration(seconds: servico.modoLocal ? 3 : 6),
+    ));
   }
 
   Future<void> _testarConexao() async {
@@ -463,9 +494,13 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
             const SizedBox(height: 28),
 
             ElevatedButton.icon(
-              onPressed: _salvarConfig,
+              // Desabilitado enquanto conecta: a primeira vez baixa o banco
+              // inteiro e pode levar bem mais que um toque de botão sugere.
+              onPressed: _reconectando ? null : _salvarConfig,
               icon: const Icon(Icons.save_outlined, size: 16),
-              label: const Text('Salvar configuração'),
+              label: Text(_reconectando
+                  ? 'Salvando e conectando…'
+                  : 'Salvar configuração'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2e6b46),
                 foregroundColor: Colors.white,
