@@ -594,6 +594,18 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                   fontSize: 11,
                                   height: 1.4),
                             ),
+                            if (TursoService().motivoFalhaCacheLocal !=
+                                null) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Motivo: '
+                                '${TursoService().motivoFalhaCacheLocal}',
+                                style: const TextStyle(
+                                    color: Color(0xFFe0a33e),
+                                    fontSize: 11,
+                                    height: 1.3),
+                              ),
+                            ],
                             const SizedBox(height: 8),
                             OutlinedButton.icon(
                               onPressed:
