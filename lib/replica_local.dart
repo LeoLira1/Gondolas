@@ -24,15 +24,105 @@ import 'dart:convert';
 ///
 /// Devolve null quando o JSON não é o esperado (versão nova do libsql, arquivo
 /// truncado) — quem chama decide o fallback em vez de adivinhar aqui.
-int? frameDuravelDaReplica(String conteudoInfo) {
+int? frameDuravelDaReplica(String conteudoInfo) =>
+    estadoDaReplica(conteudoInfo)?.frame;
+
+/// Geração + frame confirmado da replica local, lidos juntos do `-info`.
+///
+/// Os dois só fazem sentido em par: o frame é um contador DENTRO da geração,
+/// e o servidor zera esse contador toda vez que a geração vira (checkpoint,
+/// restore, banco recriado). Comparar frames de gerações diferentes diria
+/// "andou para trás" num sync que na verdade deu certo.
+class EstadoDaReplica {
+  final int geracao;
+  final int frame;
+
+  const EstadoDaReplica({required this.geracao, required this.frame});
+
+  /// True quando este estado é posterior a [anterior] — ou seja, quando o
+  /// libsql realmente moveu frames com o servidor entre as duas leituras.
+  /// Geração nova conta como avanço mesmo com frame menor, pelo motivo acima.
+  bool avancouSobre(EstadoDaReplica anterior) => geracao == anterior.geracao
+      ? frame > anterior.frame
+      : geracao > anterior.geracao;
+
+  @override
+  String toString() => 'EstadoDaReplica(geracao: $geracao, frame: $frame)';
+}
+
+/// Lê `{"generation":…,"durable_frame_num":…}` do arquivo `-info`.
+///
+/// `durable_frame_num` é obrigatório: sem ele não há o que comparar e quem
+/// chama precisa saber que a leitura não serve (null), em vez de receber um
+/// zero que passaria por "replica recém-baixada". Já a geração é opcional —
+/// versões do libsql que não a escrevem viram geração 0, e a comparação
+/// continua valendo entre duas leituras do mesmo formato.
+EstadoDaReplica? estadoDaReplica(String conteudoInfo) {
   try {
     final json = jsonDecode(conteudoInfo);
     if (json is! Map) return null;
     final frame = json['durable_frame_num'];
-    return frame is int ? frame : null;
+    if (frame is! int) return null;
+    final geracao = json['generation'];
+    return EstadoDaReplica(
+      geracao: geracao is int ? geracao : 0,
+      frame:   frame,
+    );
   } catch (_) {
     return null;
   }
+}
+
+/// O que se pode afirmar sobre um `client.sync()` que voltou SEM exceção.
+///
+/// Existe porque "sem exceção" não quer dizer "sincronizou": o `sync()` do
+/// libsql engole falha de rede e devolve sucesso quando a requisição HTTP não
+/// completa (o mesmo defeito que `BaseLocalNaoBaixada` trata na carga inicial).
+/// É esse retorno mudo que fazia o app piscar "Sincronizado ✓" em menos de um
+/// segundo sem ter falado com o servidor.
+enum ResultadoDoSync {
+  /// O arquivo local avançou (frame ou geração). Só o servidor faz isso
+  /// acontecer, então aqui não há o que confirmar — e é o caminho de graça:
+  /// nenhuma ida à rede além do próprio sync.
+  confirmado,
+
+  /// Nada avançou. Pode ser "já estava tudo em dia" ou o sync que voltou
+  /// calado sem falar com o servidor — o `-info` sozinho NÃO separa os dois,
+  /// e chutar "deu certo" aqui é justamente o bug. Quem chama desempata com
+  /// um round-trip curto no remoto.
+  naoVerificado,
+}
+
+/// Classifica um `sync()` comparando o `-info` de antes e o de depois.
+///
+/// Só afirma o lado positivo: frame (ou geração) que andou é prova de que o
+/// servidor respondeu. O contrário não é prova de nada — daí `naoVerificado`
+/// em vez de "falhou". Sem os dois lados da comparação (arquivo ausente,
+/// formato novo do libsql) cai no mesmo caso: confere com o servidor.
+ResultadoDoSync avaliarSync({
+  required EstadoDaReplica? antes,
+  required EstadoDaReplica? depois,
+}) =>
+    antes != null && depois != null && depois.avancouSobre(antes)
+        ? ResultadoDoSync.confirmado
+        : ResultadoDoSync.naoVerificado;
+
+/// O `sync()` voltou sem erro, mas nada saiu do aparelho.
+///
+/// Tipo próprio pelo mesmo motivo de `BaseLocalNaoBaixada`: é uma falha que o
+/// libsql não levanta: quem a detecta é o app, comparando o `-info` (ver
+/// `avaliarSync`). As gravações continuam salvas localmente — a mensagem
+/// precisa dizer isso, senão o usuário acha que perdeu o lançamento.
+class SincronizacaoNaoConfirmada implements Exception {
+  /// Quantas gravações locais continuavam esperando o envio.
+  final int pendentes;
+
+  const SincronizacaoNaoConfirmada([this.pendentes = 0]);
+
+  @override
+  String toString() =>
+      'SincronizacaoNaoConfirmada: o servidor não confirmou o envio '
+      '($pendentes pendente(s))';
 }
 
 /// True quando o erro indica que a replica local não tem mais como conversar
@@ -83,6 +173,20 @@ class BaseLocalNaoBaixada implements Exception {
   String toString() => 'BaseLocalNaoBaixada: o servidor não respondeu';
 }
 
+/// Texto do Sincronizar que deu certo, para o snackbar.
+///
+/// [enviadas] é quantas gravações locais o servidor aceitou nesta rodada. O
+/// número aparece de propósito: "Sincronizado ✓" sozinho é exatamente o que o
+/// app dizia quando NÃO sincronizava nada, então deixou de ser uma informação
+/// em que dá para confiar. Com a contagem, quem acabou de lançar cinco paletes
+/// vê os cinco subirem — ou vê "0" e sabe que ainda não subiram.
+String resumoDoSync(int enviadas) {
+  if (enviadas <= 0) return 'Sincronizado com o banco online ✓';
+  return enviadas == 1
+      ? 'Sincronizado ✓ — 1 gravação enviada'
+      : 'Sincronizado ✓ — $enviadas gravações enviadas';
+}
+
 /// Traduz a exceção do sync numa dica curta e acionável — a causa real
 /// (replica divergente ≠ token expirado ≠ sem internet ≠ demora da rede) muda
 /// o que o usuário precisa fazer para resolver.
@@ -93,6 +197,19 @@ String descreverErroSync(Object e) {
   if (e is BaseLocalNaoBaixada) {
     return 'sem conexão para baixar a base do cache local — '
         'conecte à internet e sincronize de novo';
+  }
+  if (e is SincronizacaoNaoConfirmada) {
+    // O aparelho não perdeu nada — insistir nisso é o ponto da mensagem: o
+    // usuário que vê "não sincronizou" logo depois de lançar precisa saber
+    // que o lançamento continua guardado e vai subir na próxima tentativa.
+    final quantas = e.pendentes == 1
+        ? '1 gravação continua'
+        : '${e.pendentes} gravações continuam';
+    return e.pendentes > 0
+        ? 'o envio não chegou ao banco online — $quantas salvas no aparelho; '
+            'verifique a internet e sincronize de novo'
+        : 'não deu para falar com o banco online — verifique a internet e '
+            'sincronize de novo';
   }
   // Antes das buscas genéricas: o texto de uma PanicException traz o backtrace
   // inteiro e casaria com elas por acidente.

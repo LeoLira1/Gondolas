@@ -68,6 +68,9 @@ class GalpaoService {
           );
         }
         await tx.commit();
+        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
+        // esta marca, um push que não sai passaria por "nada a enviar".
+        TursoService().marcarGravacaoLocal();
       } catch (e) {
         await tx.rollback();
         rethrow;
@@ -290,6 +293,9 @@ class GalpaoService {
         await _registrarLog(tx, posicao, ordem, produtoCodigo,
             anterior: null, nova: quantidade, agora: agora);
         await tx.commit();
+        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
+        // esta marca, um push que não sai passaria por "nada a enviar".
+        TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
         await tx.rollback();
@@ -345,6 +351,9 @@ class GalpaoService {
             anterior: qtdAntes, nova: quantidade, agora: agora,
             origem: origem);
         await tx.commit();
+        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
+        // esta marca, um push que não sai passaria por "nada a enviar".
+        TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
         await tx.rollback();
@@ -407,6 +416,9 @@ class GalpaoService {
         await _registrarLog(tx, posicao, ordem, codigo,
             anterior: qtdAntes, nova: 0, agora: agora, origem: origem);
         await tx.commit();
+        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
+        // esta marca, um push que não sai passaria por "nada a enviar".
+        TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
         await tx.rollback();
