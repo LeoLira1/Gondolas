@@ -486,7 +486,9 @@ class _LojaPageState extends State<LojaPage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              resumoDoSync(TursoService().enviadasNoUltimoSync))
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -2067,7 +2069,9 @@ class _GondolaPageState extends State<GondolaPage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              resumoDoSync(TursoService().enviadasNoUltimoSync))
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -3647,7 +3651,9 @@ class _EstantePageState extends State<EstantePage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              resumoDoSync(TursoService().enviadasNoUltimoSync))
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),

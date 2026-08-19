@@ -93,6 +93,7 @@ class TursoService {
   String? _tokenAtivo;
   bool?   _cacheLocalAtivo;
   Future<void>? _initEmAndamento;
+  bool _forcarReconexao = false;
 
   // Cache do catálogo (estoque_mestre): evita repetir o SELECT de até 5000
   // linhas toda vez que uma página abre. No modo local o TTL é ignorado (ver
@@ -138,6 +139,18 @@ class TursoService {
 
   /// True quando a conexão ativa usa o cache local (arquivo no dispositivo).
   bool get modoLocal => _modoLocal;
+
+  /// True quando o cache local está LIGADO em ⚙️ mas o app acabou conectando
+  /// direto no banco online assim mesmo.
+  ///
+  /// Acontece quando `_conectarComCacheLocal` falha — tipicamente sinal ruim
+  /// durante o download do snapshot inicial, que é a única abertura em que
+  /// esse connect() usa a rede — e o `_init` cai calado para o remoto. Nesse
+  /// estado TODA gravação vai pela rede (e falha sem sinal) e o Sincronizar
+  /// não tem replica para empurrar. A tela precisa dizer isso: até aqui, ⚙️
+  /// mostrava a preferência e escondia o que estava acontecendo de verdade.
+  bool get caiuParaRemoto =>
+      _connected && !_modoLocal && (_cacheLocalAtivo ?? false);
 
   bool get sincronizando => _sincronizando;
 
@@ -224,7 +237,23 @@ class TursoService {
     return novo;
   }
 
+  /// Refaz a conexão do zero, mesmo que nada tenha mudado nas preferências.
+  ///
+  /// Existe para o caso do fallback silencioso: quando abrir o arquivo local
+  /// falha (sinal ruim durante o download do snapshot, por exemplo), o `_init`
+  /// cai para a conexão direta e o app fica em modo remoto pelo resto da
+  /// sessão — o reaproveitamento de conexão impede qualquer nova tentativa.
+  /// Sem isto, a única saída era fechar e reabrir o app.
+  Future<void> reconectar() {
+    _forcarReconexao = true;
+    return init();
+  }
+
   Future<void> _init() async {
+    // Consumido já: uma reconexão forçada vale para ESTA passada, senão toda
+    // abertura de página passaria a reconectar.
+    final forcado    = _forcarReconexao;
+    _forcarReconexao = false;
     final prefs      = await SharedPreferences.getInstance();
     final url        = prefs.getString(keyDbUrl)   ?? '';
     final token      = prefs.getString(keyDbToken) ?? '';
@@ -240,7 +269,8 @@ class TursoService {
     // disco não pode depender de a conexão ter dado certo.
     _urlConfigurada = url;
 
-    if (_connected &&
+    if (!forcado &&
+        _connected &&
         _client != null &&
         url == _urlAtiva &&
         token == _tokenAtivo &&
@@ -361,12 +391,22 @@ class TursoService {
     LibsqlClient? client;
     try {
       final path = await _caminhoCacheLocal();
-      client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       // Atenção: quando o arquivo local ainda não existe, este connect() NÃO é
       // local — o libsql baixa do Turso o snapshot inteiro do banco antes de
-      // devolver a conexão (daí o timeout). Da segunda abertura em diante ele
-      // é local e instantâneo, e a rede só volta a entrar no Sincronizar.
-      await client.connect().timeout(_timeoutConexao);
+      // devolver a conexão. Da segunda abertura em diante ele é local e
+      // instantâneo, e a rede só volta a entrar no Sincronizar.
+      //
+      // Por isso o limite é dobrado JUSTO nessa primeira vez: 20s de 4G fraco
+      // no galpão não baixam o banco, o connect estoura, e o `_init` cai
+      // calado para o modo remoto — onde toda gravação passa a depender da
+      // rede e o Sincronizar não tem replica para empurrar. Era o caminho mais
+      // provável para o app acabar em modo remoto com o cache local ligado.
+      // Esperar mais não custa tela: o `init()` roda solto na abertura (ver
+      // main.dart) e o mapa aparece de qualquer jeito.
+      final primeiraVez = !await File(path).exists();
+      final limite = primeiraVez ? _timeoutBootstrap : _timeoutConexao;
+      client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
+      await client.connect().timeout(limite);
       return client;
     } catch (e) {
       if (client != null) {
@@ -481,6 +521,23 @@ class TursoService {
       return true;
     } catch (_) {
       await _descartarSonda();
+      return false;
+    }
+  }
+
+  /// Confere que o banco online responde usando a conexão JÁ ABERTA.
+  ///
+  /// No modo remoto essa conexão é o próprio banco online, então um `SELECT 1`
+  /// nela é a conferência mais direta e mais barata que existe — não abre
+  /// socket novo nem refaz handshake, ao contrário de `_remotoAlcancavel`.
+  Future<bool> _clienteRespondendo() async {
+    final client = _client;
+    if (client == null) return false;
+    try {
+      final stmt = await client.prepare('SELECT 1');
+      await stmt.query().timeout(_timeoutConexao);
+      return true;
+    } catch (_) {
       return false;
     }
   }
@@ -786,6 +843,12 @@ class TursoService {
       if (_modoLocal) {
         final erroDoEnvio = await _sincronizarReplica();
         if (erroDoEnvio != null) return erroDoEnvio;
+      } else {
+        // Modo remoto: não existe replica para empurrar nem puxar, então este
+        // ramo NUNCA tocava a rede — só recarregava caches e devolvia sucesso.
+        // Era o "Sincronizado ✓" instantâneo e vazio, com ou sem internet.
+        // O que dá para conferir aqui é o que importa: o banco online responde?
+        if (!await _clienteRespondendo()) return const SincronizacaoNaoConfirmada();
       }
       // O sync pode ter trazido paletes cadastrados em outro dispositivo.
       await PaleteRegistry().carregar();
@@ -808,26 +871,32 @@ class TursoService {
   /// Era ele que fazia o botão Sincronizar responder "Sincronizado ✓" em
   /// menos de um segundo, sem rede, sem ter enviado nada.
   ///
-  /// São duas conferências, nesta ordem, e a mais barata primeiro:
-  /// 1. o `-info` avançou? Custa a leitura de um arquivo de poucos bytes e,
-  ///    quando avançou, encerra o assunto — só o servidor move aquele número.
-  /// 2. senão, o remoto responde? Um `SELECT 1` desempata "já estava em dia"
-  ///    de "a rede caiu calada". Frame parado NÃO é prova de falha (nem todo
-  ///    sync tem o que mover), por isso a decisão fica com o round-trip e não
-  ///    com o contador de pendências.
+  /// A conferência sai do `-info` (ver `avaliarSync`), que custa a leitura de
+  /// um arquivo de poucos bytes — nenhuma ida extra à rede no caso comum.
+  /// Frame parado com gravação esperando é prova de que o push não saiu; frame
+  /// parado sem nada esperando é só "não havia o que mover". O round-trip no
+  /// remoto fica reservado ao caso em que o `-info` não pôde ser lido.
   Future<Object?> _sincronizarReplica() async {
     final antes = await _estadoAtualDaReplica();
     await _client!.sync().timeout(_timeoutSync);
     final depois = await _estadoAtualDaReplica();
 
-    final confirmado =
-        avaliarSync(antes: antes, depois: depois) ==
-            ResultadoDoSync.confirmado ||
-        await _remotoAlcancavel();
-    if (!confirmado) {
-      // NÃO zera as pendências: as gravações continuam no aparelho esperando
-      // o próximo Sincronizar, e é isso que a mensagem vai dizer.
-      return SincronizacaoNaoConfirmada(_gravacoesPendentes);
+    switch (avaliarSync(
+      antes: antes,
+      depois: depois,
+      gravacoesPendentes: _gravacoesPendentes,
+    )) {
+      case ResultadoDoSync.confirmado:
+      case ResultadoDoSync.semNovidade:
+        break;
+      case ResultadoDoSync.naoConfirmado:
+        // NÃO zera as pendências: as gravações continuam no aparelho esperando
+        // o próximo Sincronizar, e é isso que a mensagem vai dizer.
+        return SincronizacaoNaoConfirmada(_gravacoesPendentes);
+      case ResultadoDoSync.indeterminado:
+        if (!await _remotoAlcancavel()) {
+          return SincronizacaoNaoConfirmada(_gravacoesPendentes);
+        }
     }
     _enviadasNoUltimoSync = _gravacoesPendentes;
     await _zerarGravacoesPendentes();

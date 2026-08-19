@@ -181,12 +181,13 @@ void main() {
     const parado = EstadoDaReplica(geracao: 1, frame: 40);
 
     test('frame que andou é sincronização confirmada', () {
-      // Só o servidor move esse número: aqui o app pode dizer "sincronizado"
-      // sem gastar mais nenhuma ida à rede.
+      // Só o servidor move esse número: o app pode dizer "sincronizado" sem
+      // gastar mais nenhuma ida à rede.
       expect(
         avaliarSync(
           antes: parado,
           depois: const EstadoDaReplica(geracao: 1, frame: 41),
+          gravacoesPendentes: 3,
         ),
         ResultadoDoSync.confirmado,
       );
@@ -197,18 +198,28 @@ void main() {
         avaliarSync(
           antes: parado,
           depois: const EstadoDaReplica(geracao: 2, frame: 1),
+          gravacoesPendentes: 0,
         ),
         ResultadoDoSync.confirmado,
       );
     });
 
-    test('frame parado não é prova de nada — precisa confirmar', () {
-      // É o caso do relato: o botão responde na hora e diz "sincronizado".
-      // Frame parado tanto pode ser "já estava em dia" quanto o sync que
-      // voltou calado sem rede, então quem chama tem de perguntar ao servidor.
+    test('frame parado COM gravação esperando é envio que não saiu', () {
+      // É o caso do relato. E dá para afirmar sem perguntar ao servidor: no
+      // libsql, um push aceito termina em write_metadata() DEPOIS de mover o
+      // durable_frame_num — push que dá certo sempre mexe no -info.
       expect(
-        avaliarSync(antes: parado, depois: parado),
-        ResultadoDoSync.naoVerificado,
+        avaliarSync(
+            antes: parado, depois: parado, gravacoesPendentes: 1),
+        ResultadoDoSync.naoConfirmado,
+      );
+    });
+
+    test('frame parado SEM nada esperando é só "não havia o que mover"', () {
+      expect(
+        avaliarSync(
+            antes: parado, depois: parado, gravacoesPendentes: 0),
+        ResultadoDoSync.semNovidade,
       );
     });
 
@@ -217,16 +228,21 @@ void main() {
         avaliarSync(
           antes: parado,
           depois: const EstadoDaReplica(geracao: 1, frame: 39),
+          gravacoesPendentes: 0,
         ),
-        ResultadoDoSync.naoVerificado,
+        ResultadoDoSync.semNovidade,
       );
     });
 
-    test('sem -info legível, confirma pelo servidor', () {
-      expect(avaliarSync(antes: null, depois: parado),
-          ResultadoDoSync.naoVerificado);
-      expect(avaliarSync(antes: parado, depois: null),
-          ResultadoDoSync.naoVerificado);
+    test('sem -info legível não se afirma nada', () {
+      expect(
+        avaliarSync(antes: null, depois: parado, gravacoesPendentes: 5),
+        ResultadoDoSync.indeterminado,
+      );
+      expect(
+        avaliarSync(antes: parado, depois: null, gravacoesPendentes: 0),
+        ResultadoDoSync.indeterminado,
+      );
     });
   });
 
@@ -253,9 +269,20 @@ void main() {
     });
 
     test('sucesso mostra quantas gravações subiram', () {
-      expect(resumoDoSync(0), 'Sincronizado com o banco online ✓');
-      expect(resumoDoSync(1), contains('1 gravação enviada'));
-      expect(resumoDoSync(7), contains('7 gravações enviadas'));
+      expect(resumoDoSync(modoLocal: true, enviadas: 0),
+          'Sincronizado com o banco online ✓');
+      expect(resumoDoSync(modoLocal: true, enviadas: 1),
+          contains('1 gravação enviada'));
+      expect(resumoDoSync(modoLocal: true, enviadas: 7),
+          contains('7 gravações enviadas'));
+    });
+
+    test('sem cache local não promete envio que nunca houve', () {
+      // No modo remoto cada gravação já foi direto ao servidor: não existe
+      // fila para esvaziar, e dizer "sincronizado" seria inventar um envio.
+      final msg = resumoDoSync(modoLocal: false, enviadas: 0);
+      expect(msg, isNot(contains('Sincronizado')));
+      expect(msg, contains('nada em fila'));
     });
   });
 }

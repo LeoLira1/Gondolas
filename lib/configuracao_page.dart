@@ -23,6 +23,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   String? _statusTeste;
   bool    _testeOk     = false;
   bool    _cacheLocal  = true;
+  bool    _reconectando = false;
   bool    _sincronizando = false;
   bool    _limpandoCache = false;
 
@@ -242,6 +243,24 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     // páginas recarregam ao voltar desta tela.
   }
 
+  /// Tenta reabrir o cache local sem precisar fechar e reabrir o app.
+  Future<void> _tentarCacheLocal() async {
+    setState(() => _reconectando = true);
+    await TursoService().reconectar();
+    if (!mounted) return;
+    final deuCerto = TursoService().modoLocal;
+    setState(() => _reconectando = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(deuCerto
+          ? 'Cache local aberto ✓ — gravações voltam a ser instantâneas'
+          : 'Ainda não deu — o app segue no banco online. '
+              'Procure um lugar com sinal melhor e tente de novo.'),
+      backgroundColor:
+          deuCerto ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+      duration: Duration(seconds: deuCerto ? 3 : 6),
+    ));
+  }
+
   Future<void> _sincronizarAgora() async {
     setState(() => _sincronizando = true);
     final ok = await TursoService().sincronizar();
@@ -253,7 +272,9 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              resumoDoSync(TursoService().enviadasNoUltimoSync))
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -500,6 +521,63 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                           color: Color(0xFF8a9aa8), fontSize: 11, height: 1.4),
                     ),
                   ),
+                  // O app está em modo remoto com o cache local LIGADO: até
+                  // aqui, esta tela mostrava a preferência e escondia o que
+                  // valia de verdade. Quem está nesse estado grava tudo pela
+                  // rede (e vê "não deu para gravar" com sinal ruim) sem ter
+                  // como saber por quê.
+                  if (_cacheLocal && TursoService().caiuParaRemoto)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2a1e10),
+                          borderRadius: BorderRadius.circular(6),
+                          border:
+                              Border.all(color: const Color(0xFF6b4a1e)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '⚠ O cache local não pôde ser aberto',
+                              style: TextStyle(
+                                  color: Color(0xFFe0a33e),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'O app está gravando direto no banco online, '
+                              'então cada lançamento depende da internet e o '
+                              'Sincronizar não tem o que enviar. Costuma ser '
+                              'sinal fraco na primeira abertura, enquanto a '
+                              'base é baixada.',
+                              style: TextStyle(
+                                  color: Color(0xFFc8b79a),
+                                  fontSize: 11,
+                                  height: 1.4),
+                            ),
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed:
+                                  _reconectando ? null : _tentarCacheLocal,
+                              icon: const Icon(Icons.refresh, size: 16),
+                              label: Text(_reconectando
+                                  ? 'Tentando…'
+                                  : 'Tentar de novo'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFe0a33e),
+                                side: const BorderSide(
+                                    color: Color(0xFF6b4a1e)),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   if (_cacheLocal)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
