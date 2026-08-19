@@ -909,29 +909,54 @@ class TursoService {
   /// um arquivo de poucos bytes — nenhuma ida extra à rede no caso comum.
   /// Frame parado com gravação esperando é prova de que o push não saiu; frame
   /// parado sem nada esperando é só "não havia o que mover". O round-trip no
-  /// remoto fica reservado ao caso em que o `-info` não pôde ser lido.
+  /// remoto fica para quando o `-info` não pôde ser lido — e para o push que
+  /// não saiu, onde ele decide entre reclamar da internet e tentar de novo.
   Future<Object?> _sincronizarReplica() async {
     final antes = await _estadoAtualDaReplica();
     await _client!.sync().timeout(_timeoutSync);
-    final depois = await _estadoAtualDaReplica();
-
-    switch (avaliarSync(
+    var depois = await _estadoAtualDaReplica();
+    var resultado = avaliarSync(
       antes: antes,
       depois: depois,
       gravacoesPendentes: _gravacoesPendentes,
-    )) {
-      case ResultadoDoSync.confirmado:
-      case ResultadoDoSync.semNovidade:
-        break;
-      case ResultadoDoSync.naoConfirmado:
-        // NÃO zera as pendências: as gravações continuam no aparelho esperando
-        // o próximo Sincronizar, e é isso que a mensagem vai dizer.
-        return SincronizacaoNaoConfirmada(_gravacoesPendentes);
-      case ResultadoDoSync.indeterminado:
-        if (!await _remotoAlcancavel()) {
-          return SincronizacaoNaoConfirmada(_gravacoesPendentes);
-        }
+    );
+
+    // Push que não saiu ainda não é veredito: o motivo mais comum é a
+    // requisição ter se perdido no caminho, e era isso que deixava o usuário
+    // preso — cada toque em Sincronizar repetia a mesma tentativa única e a
+    // mesma acusação de "verifique a internet", inclusive com a internet boa.
+    //
+    // A sonda vem ANTES da segunda tentativa de propósito: sem rede, um
+    // segundo sync() só gastaria o timeout inteiro para falhar igual, e quem
+    // está sem sinal é justamente quem menos pode esperar. Ela também é o que
+    // a mensagem precisa saber: banco no ar muda o conselho de "verifique a
+    // internet" para "tente de novo".
+    if (resultado == ResultadoDoSync.naoConfirmado) {
+      final bancoNoAr = await _remotoAlcancavel();
+      if (bancoNoAr) {
+        await _client!.sync().timeout(_timeoutSync);
+        depois = await _estadoAtualDaReplica();
+        resultado = avaliarSync(
+          antes: antes,
+          depois: depois,
+          gravacoesPendentes: _gravacoesPendentes,
+        );
+      }
+      if (resultado == ResultadoDoSync.naoConfirmado) {
+        // NÃO zera as pendências: as gravações continuam no aparelho
+        // esperando o próximo Sincronizar, e é isso que a mensagem vai dizer.
+        return SincronizacaoNaoConfirmada(_gravacoesPendentes, bancoNoAr);
+      }
     }
+
+    // Sobra `indeterminado`: o `-info` não pôde ser lido de um dos lados e não
+    // há o que afirmar pelo arquivo — só o servidor responde. `confirmado` e
+    // `semNovidade` seguem direto: nos dois o sync falou com o banco.
+    if (resultado == ResultadoDoSync.indeterminado &&
+        !await _remotoAlcancavel()) {
+      return SincronizacaoNaoConfirmada(_gravacoesPendentes);
+    }
+
     _enviadasNoUltimoSync = _gravacoesPendentes;
     await _zerarGravacoesPendentes();
     return null;
