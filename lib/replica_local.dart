@@ -75,37 +75,55 @@ EstadoDaReplica? estadoDaReplica(String conteudoInfo) {
 
 /// O que se pode afirmar sobre um `client.sync()` que voltou SEM exceção.
 ///
-/// Existe porque "sem exceção" não quer dizer "sincronizou": o `sync()` do
-/// libsql engole falha de rede e devolve sucesso quando a requisição HTTP não
-/// completa (o mesmo defeito que `BaseLocalNaoBaixada` trata na carga inicial).
-/// É esse retorno mudo que fazia o app piscar "Sincronizado ✓" em menos de um
-/// segundo sem ter falado com o servidor.
+/// As regras abaixo saem da leitura do `sync.rs` do libsql 0.9.30 (a versão
+/// que o `libsql_dart` embute), conferida contra um servidor libsql rodando de
+/// verdade. Dois fatos do `sync_offline` sustentam tudo:
+///
+/// * ele só empurra quando `wal_frame_count > durable_frame_num` — ou seja, o
+///   próprio libsql sabe se há gravação local esperando;
+/// * um push aceito termina em `write_metadata()`, DEPOIS de mover o
+///   `durable_frame_num`. Push que dá certo sempre mexe no `-info`.
+///
+/// Daí a regra que interessa: `-info` parado COM gravação local esperando é
+/// prova de que o envio não saiu. Sem gravação esperando, `-info` parado é só
+/// "não havia o que mover".
 enum ResultadoDoSync {
-  /// O arquivo local avançou (frame ou geração). Só o servidor faz isso
-  /// acontecer, então aqui não há o que confirmar — e é o caminho de graça:
-  /// nenhuma ida à rede além do próprio sync.
+  /// O `-info` avançou (frame ou geração). Só o servidor move aquele número.
   confirmado,
 
-  /// Nada avançou. Pode ser "já estava tudo em dia" ou o sync que voltou
-  /// calado sem falar com o servidor — o `-info` sozinho NÃO separa os dois,
-  /// e chutar "deu certo" aqui é justamente o bug. Quem chama desempata com
-  /// um round-trip curto no remoto.
-  naoVerificado,
+  /// Havia gravação local esperando e o `-info` não andou: o push não saiu.
+  /// É a mentira que o usuário enxerga como "sincronizou rápido e não mudou
+  /// nada" — e aqui dá para afirmar sem gastar mais nenhuma ida à rede.
+  naoConfirmado,
+
+  /// Nada avançou, e também não havia nada para enviar. Estado normal de quem
+  /// já está em dia: o libsql levanta exceção quando o HTTP falha (o dispatch
+  /// vira `SyncError::HttpDispatch`), então chegar aqui sem erro significa que
+  /// a conversa aconteceu e não tinha novidade.
+  semNovidade,
+
+  /// Não deu para ler o `-info` de um dos lados (arquivo ausente, formato novo
+  /// do libsql). Nada a afirmar — quem chama confirma com o servidor.
+  indeterminado,
 }
 
 /// Classifica um `sync()` comparando o `-info` de antes e o de depois.
 ///
-/// Só afirma o lado positivo: frame (ou geração) que andou é prova de que o
-/// servidor respondeu. O contrário não é prova de nada — daí `naoVerificado`
-/// em vez de "falhou". Sem os dois lados da comparação (arquivo ausente,
-/// formato novo do libsql) cai no mesmo caso: confere com o servidor.
+/// [gravacoesPendentes] é quantas escritas locais foram confirmadas no arquivo
+/// desde o último sync bem-sucedido. É ele que separa `naoConfirmado` de
+/// `semNovidade` — as duas situações em que o arquivo não se mexe, e que pedem
+/// respostas opostas ao usuário.
 ResultadoDoSync avaliarSync({
   required EstadoDaReplica? antes,
   required EstadoDaReplica? depois,
-}) =>
-    antes != null && depois != null && depois.avancouSobre(antes)
-        ? ResultadoDoSync.confirmado
-        : ResultadoDoSync.naoVerificado;
+  required int gravacoesPendentes,
+}) {
+  if (antes == null || depois == null) return ResultadoDoSync.indeterminado;
+  if (depois.avancouSobre(antes)) return ResultadoDoSync.confirmado;
+  return gravacoesPendentes > 0
+      ? ResultadoDoSync.naoConfirmado
+      : ResultadoDoSync.semNovidade;
+}
 
 /// O `sync()` voltou sem erro, mas nada saiu do aparelho.
 ///
@@ -180,7 +198,12 @@ class BaseLocalNaoBaixada implements Exception {
 /// app dizia quando NÃO sincronizava nada, então deixou de ser uma informação
 /// em que dá para confiar. Com a contagem, quem acabou de lançar cinco paletes
 /// vê os cinco subirem — ou vê "0" e sabe que ainda não subiram.
-String resumoDoSync(int enviadas) {
+///
+/// Sem [modoLocal] não há replica nenhuma: cada gravação já foi direto ao
+/// servidor e não existe fila para esvaziar. Dizer "sincronizado" ali seria
+/// prometer um envio que nunca houve, então o texto muda.
+String resumoDoSync({required bool modoLocal, required int enviadas}) {
+  if (!modoLocal) return 'Banco online respondendo ✓ — nada em fila';
   if (enviadas <= 0) return 'Sincronizado com o banco online ✓';
   return enviadas == 1
       ? 'Sincronizado ✓ — 1 gravação enviada'
