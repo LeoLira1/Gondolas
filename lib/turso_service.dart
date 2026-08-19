@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart'
@@ -43,6 +44,12 @@ class TursoService {
   // os arquivos da replica (ver _apagarArquivosDaReplica), então nunca fica
   // valendo para um arquivo novo.
   static const String keyBaseLocalOk = 'turso_base_local_ok';
+  // Quantas gravações locais já foram confirmadas no arquivo da replica e
+  // ainda não subiram para o Turso. Persistida porque o app pode ser fechado
+  // entre a gravação e o Sincronizar — e é ela que distingue "não havia
+  // novidade" de "o envio não saiu" quando o sync volta calado (ver
+  // avaliarSync em replica_local.dart).
+  static const String keyGravacoesPendentes = 'turso_gravacoes_pendentes';
 
   static const Map<String, String> categoriaCores = {
     'Lubrificantes': '#2e7d4f',
@@ -57,6 +64,9 @@ class TursoService {
 
   LibsqlClient? _client;
   bool _connected = false;
+  // Conexão direta ao remoto usada só para saber se há rede (ver
+  // _remotoAlcancavel). Nunca serve leitura nem escrita do app.
+  LibsqlClient? _sonda;
 
   // Cache local (embedded replica com offline writes): o banco vive num
   // arquivo do dispositivo — leituras e gravações são instantâneas e
@@ -73,6 +83,8 @@ class TursoService {
   DateTime? _ultimaSincronizacao;
   String?   _ultimoErroSync;
   String?   _ultimoAvisoSync;
+  int       _gravacoesPendentes = 0;
+  int       _enviadasNoUltimoSync = 0;
 
   // Credenciais/modo da conexão ativa. Enquanto não mudarem, init()
   // reaproveita a conexão (e o esquema já criado) em vez de reconectar e
@@ -91,6 +103,20 @@ class TursoService {
   List<Produto>? _produtosCache;
   DateTime?      _produtosCacheEm;
   static const Duration _produtosCacheTtl = Duration(minutes: 30);
+  // Leitura do catálogo em andamento, para que chamadas simultâneas dividam a
+  // mesma consulta em vez de disparar uma cada (ver fetchProdutos).
+  Future<List<Produto>>? _catalogoEmAndamento;
+  // True depois que o catálogo veio do BANCO nesta sessão. É o que impede a
+  // cópia em disco de ser servida no lugar de dados recém-sincronizados —
+  // ver _lerCatalogo.
+  bool _catalogoLidoDoBanco = false;
+  // URL configurada em ⚙️, guardada mesmo quando a conexão falha. Carimba o
+  // catálogo em disco: sem ela, o fallback offline (onde _urlAtiva é null por
+  // não ter conectado) nunca reconheceria a própria cópia.
+  String? _urlConfigurada;
+  // Formato do arquivo do catálogo em disco. Sobe se as colunas mudarem: uma
+  // cópia de formato antigo é ignorada em vez de mal interpretada.
+  static const int _versaoCatalogoEmDisco = 1;
 
   // Cache dos layouts por estrutura. Ver layout_cache.dart para o porquê de
   // morar aqui dentro. Invalidado pelos mesmos pontos que zeram _produtosCache,
@@ -127,6 +153,59 @@ class TursoService {
   /// Null quando o sync foi o de sempre.
   String? get ultimoAvisoSync => _ultimoAvisoSync;
 
+  /// Gravações feitas no aparelho que ainda não foram aceitas pelo banco
+  /// online. Zero significa "o que está aqui já está lá".
+  int get gravacoesPendentes => _gravacoesPendentes;
+
+  /// Quantas gravações locais o servidor aceitou na última sincronização
+  /// bem-sucedida. É o número que o snackbar mostra — ver `resumoDoSync`.
+  int get enviadasNoUltimoSync => _enviadasNoUltimoSync;
+
+  /// Registra que uma escrita local acabou de ser confirmada no arquivo da
+  /// replica — ou seja, que existe frame novo esperando o próximo push.
+  ///
+  /// Chamada por TODO ponto de escrita DEPOIS do commit, nunca antes: contar
+  /// uma gravação que falhou deixaria o contador preso em > 0 e o app diria
+  /// que há coisa esperando envio quando não há.
+  ///
+  /// No modo remoto não há nada pendente por definição (a escrita já foi ao
+  /// servidor), então a chamada é ignorada.
+  ///
+  /// Síncrona de propósito, e é por isso que ela não pode lançar: os pontos de
+  /// escrita a chamam logo depois do `commit()`, DENTRO do `try` que faz
+  /// `rollback()` em qualquer exceção. Um erro escapando daqui levaria uma
+  /// transação já commitada a um rollback, e a tela diria "não deu para gravar"
+  /// um lançamento que está no banco. Incrementar em memória não falha; a
+  /// gravação no disco vai solta e engole a própria falha.
+  void marcarGravacaoLocal() {
+    if (!_modoLocal) return;
+    _gravacoesPendentes++;
+    unawaited(_persistirGravacoesPendentes());
+  }
+
+  Future<void> _persistirGravacoesPendentes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(keyGravacoesPendentes, _gravacoesPendentes);
+    } catch (_) {
+      // Perder a persistência do contador não pode derrubar a gravação que
+      // acabou de dar certo: o valor em memória segue valendo nesta sessão.
+    }
+  }
+
+  /// Zera o contador de pendências (em memória e no disco). Chamado quando o
+  /// envio foi confirmado pelo servidor e quando as gravações locais deixam de
+  /// existir — replica reconstruída ou cache limpo.
+  Future<void> _zerarGravacoesPendentes() async {
+    _gravacoesPendentes = 0;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(keyGravacoesPendentes);
+    } catch (_) {
+      // Ver marcarGravacaoLocal.
+    }
+  }
+
   // Acessor para serviços satélite (ex: EstoqueLocalizadoService) reaproveitarem
   // esta mesma conexão, em vez de abrir uma segunda.
   LibsqlClient? get client => _client;
@@ -154,6 +233,12 @@ class TursoService {
     final ultimaSyncIso = prefs.getString(keyUltimaSync);
     _ultimaSincronizacao =
         ultimaSyncIso != null ? DateTime.tryParse(ultimaSyncIso) : null;
+    // As pendências sobrevivem ao fechamento do app: o arquivo da replica
+    // continua com os frames que não subiram.
+    _gravacoesPendentes = prefs.getInt(keyGravacoesPendentes) ?? 0;
+    // Antes do early-return de reaproveitamento: o carimbo do catálogo em
+    // disco não pode depender de a conexão ter dado certo.
+    _urlConfigurada = url;
 
     if (_connected &&
         _client != null &&
@@ -178,6 +263,9 @@ class TursoService {
       // segurar o init novo.
       unawaited(clienteAntigo.dispose().catchError((_) {}));
     }
+    // A sonda foi aberta com as credenciais velhas — reusá-la depois de uma
+    // troca de token responderia "sem rede" para sempre.
+    await _descartarSonda();
 
     if (url.isEmpty || token.isEmpty) return;
 
@@ -351,38 +439,57 @@ class TursoService {
     return _bancoLocalVazio(client);
   }
 
-  /// Frame confirmado da replica local, ou null se o `-info` não existe / não
-  /// dá para ler.
-  Future<int?> _frameDuravelAtual() async {
+  /// Geração + frame confirmados da replica local, ou null se o `-info` não
+  /// existe / não dá para ler.
+  Future<EstadoDaReplica?> _estadoAtualDaReplica() async {
     try {
       final info = File('${await _caminhoCacheLocal()}-info');
       if (!await info.exists()) return null;
-      return frameDuravelDaReplica(await info.readAsString());
+      return estadoDaReplica(await info.readAsString());
     } catch (_) {
       return null;
     }
   }
 
+  /// Frame confirmado da replica local, ou null se o `-info` não existe / não
+  /// dá para ler.
+  Future<int?> _frameDuravelAtual() async =>
+      (await _estadoAtualDaReplica())?.frame;
+
   Future<bool> _replicaNoFrameZero() async => (await _frameDuravelAtual()) == 0;
 
   /// Round-trip curto no banco online, só para saber se há rede. Usado para
   /// desempatar o sync que "deu certo" sem falar com o servidor.
+  ///
+  /// A conexão de sondagem fica guardada em `_sonda` entre as chamadas: agora
+  /// que todo Sincronizar sem novidade passa por aqui, refazer o handshake
+  /// (DNS + TLS) a cada toque custaria mais que a própria consulta. Some no
+  /// `_init` quando as credenciais mudam e a cada falha — reconectar é o
+  /// caminho certo quando a anterior morreu.
   Future<bool> _remotoAlcancavel() async {
     final url   = _urlAtiva;
     final token = _tokenAtivo;
     if (url == null || token == null) return false;
-    LibsqlClient? remoto;
     try {
-      remoto = LibsqlClient.remote(url, authToken: token);
-      await remoto.connect().timeout(_timeoutConexao);
+      var remoto = _sonda;
+      if (remoto == null) {
+        remoto = LibsqlClient.remote(url, authToken: token);
+        await remoto.connect().timeout(_timeoutConexao);
+        _sonda = remoto;
+      }
       await remoto.query('SELECT 1').timeout(_timeoutConexao);
       return true;
     } catch (_) {
+      await _descartarSonda();
       return false;
-    } finally {
-      final aberto = remoto;
-      if (aberto != null) unawaited(aberto.dispose().catchError((_) {}));
     }
+  }
+
+  /// Solta a conexão de sondagem, se houver.
+  Future<void> _descartarSonda() async {
+    final aberta = _sonda;
+    _sonda = null;
+    if (aberta != null) unawaited(aberta.dispose().catchError((_) {}));
   }
 
   /// Apaga o arquivo da replica local e TODOS os sidecars que o libsql mantém
@@ -403,9 +510,14 @@ class TursoService {
           if (item.uri.pathSegments.last.startsWith(nome)) await item.delete();
         }
       }
-      // A marca de base estabelecida vale para o arquivo que acabou de sumir.
+      // A marca de base estabelecida vale para o arquivo que acabou de sumir —
+      // e, com ele, foram-se os frames locais que ainda não tinham subido.
+      // Manter o contador aqui faria todo Sincronizar seguinte acusar "envio
+      // não confirmado" por gravações que não existem mais.
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(keyBaseLocalOk);
+      _gravacoesPendentes = 0;
+      await prefs.remove(keyGravacoesPendentes);
       return true;
     } catch (_) {
       return false;
@@ -627,8 +739,12 @@ class TursoService {
           : 'configure URL e token do banco em ⚙️';
       return false;
     }
-    _sincronizando   = true;
-    _ultimoAvisoSync = null;
+    _sincronizando        = true;
+    _ultimoAvisoSync      = null;
+    // Zerado no começo: o número mostrado no fim tem de ser o DESTA rodada.
+    // Sem isso, um sync remoto (que não empurra nada) herdaria a contagem do
+    // sync local anterior e diria "3 gravações enviadas" sem ter enviado uma.
+    _enviadasNoUltimoSync = 0;
     try {
       final erro = await _tentarSincronizar();
       if (erro == null) {
@@ -667,7 +783,10 @@ class TursoService {
         await _estabelecerBaseLocal(_client!, _timeoutSync);
         return null;
       }
-      if (_modoLocal) await _client!.sync().timeout(_timeoutSync);
+      if (_modoLocal) {
+        final erroDoEnvio = await _sincronizarReplica();
+        if (erroDoEnvio != null) return erroDoEnvio;
+      }
       // O sync pode ter trazido paletes cadastrados em outro dispositivo.
       await PaleteRegistry().carregar();
       // Antes do dataRevision — ver a nota em _estabelecerBaseLocal.
@@ -678,6 +797,41 @@ class TursoService {
     } catch (e) {
       return e;
     }
+  }
+
+  /// Roda o `client.sync()` e CONFERE que ele de fato falou com o servidor.
+  /// Devolve null quando o envio foi confirmado, ou o erro a reportar.
+  ///
+  /// A conferência existe porque o `sync()` do libsql devolve sucesso quando a
+  /// requisição HTTP não completa — o mesmo defeito que `_estabelecerBaseLocal`
+  /// já tratava na carga inicial, mas que no sync de rotina ninguém checava.
+  /// Era ele que fazia o botão Sincronizar responder "Sincronizado ✓" em
+  /// menos de um segundo, sem rede, sem ter enviado nada.
+  ///
+  /// São duas conferências, nesta ordem, e a mais barata primeiro:
+  /// 1. o `-info` avançou? Custa a leitura de um arquivo de poucos bytes e,
+  ///    quando avançou, encerra o assunto — só o servidor move aquele número.
+  /// 2. senão, o remoto responde? Um `SELECT 1` desempata "já estava em dia"
+  ///    de "a rede caiu calada". Frame parado NÃO é prova de falha (nem todo
+  ///    sync tem o que mover), por isso a decisão fica com o round-trip e não
+  ///    com o contador de pendências.
+  Future<Object?> _sincronizarReplica() async {
+    final antes = await _estadoAtualDaReplica();
+    await _client!.sync().timeout(_timeoutSync);
+    final depois = await _estadoAtualDaReplica();
+
+    final confirmado =
+        avaliarSync(antes: antes, depois: depois) ==
+            ResultadoDoSync.confirmado ||
+        await _remotoAlcancavel();
+    if (!confirmado) {
+      // NÃO zera as pendências: as gravações continuam no aparelho esperando
+      // o próximo Sincronizar, e é isso que a mensagem vai dizer.
+      return SincronizacaoNaoConfirmada(_gravacoesPendentes);
+    }
+    _enviadasNoUltimoSync = _gravacoesPendentes;
+    await _zerarGravacoesPendentes();
+    return null;
   }
 
   /// Apaga a replica local divergente e refaz o arquivo a partir do Turso.
@@ -847,8 +1001,72 @@ class TursoService {
     // Antes do _garantirConexao: um cache quente não tem por que esperar o
     // init() terminar.
     if (!forceRefresh && _catalogoEmCacheValido) return _produtosCache!;
-    if (!await _garantirConexao()) return _produtosCache ?? [];
-    if (!forceRefresh && _catalogoEmCacheValido) return _produtosCache!;
+
+    // Uma leitura de cada vez. Na abertura do app o prewarm, o mapa e o
+    // carrossel pedem o catálogo quase juntos, todos com o cache frio: sem
+    // esta costura saíam três SELECTs de até 5000 linhas em paralelo pela
+    // mesma rede, e o usuário esperava o mais lento dos três.
+    final emAndamento = _catalogoEmAndamento;
+    if (emAndamento != null && !forceRefresh) return emAndamento;
+
+    final leitura = _lerCatalogo(forceRefresh: forceRefresh);
+    _catalogoEmAndamento = leitura;
+    try {
+      return await leitura;
+    } finally {
+      // Só limpa se ainda for a leitura desta chamada: um forceRefresh
+      // concorrente pode ter posto outra no lugar.
+      if (identical(_catalogoEmAndamento, leitura)) _catalogoEmAndamento = null;
+    }
+  }
+
+  /// Decide DE ONDE o catálogo vem: da cópia em disco (instantânea) ou do
+  /// banco. Ver `_lerCatalogoDoDisco` para o porquê da cópia existir.
+  Future<List<Produto>> _lerCatalogo({required bool forceRefresh}) async {
+    if (!await _garantirConexao()) {
+      // Sem conexão configurada ou sem rede na primeira abertura: a cópia em
+      // disco é a diferença entre uma busca de produto que funciona e uma
+      // lista vazia sem explicação.
+      return _produtosCache ?? await _lerCatalogoDoDisco() ?? const [];
+    }
+
+    // Bootstrap pelo disco: vale UMA vez por sessão, e só enquanto o banco
+    // ainda não foi lido. Depois de um sincronizar() (que zera o cache de
+    // propósito, porque os dados mudaram) a cópia em disco está velha por
+    // definição — ali a consulta ao banco é obrigatória.
+    if (!forceRefresh && !_catalogoLidoDoBanco && _produtosCache == null) {
+      final doDisco = await _lerCatalogoDoDisco();
+      if (doDisco != null && doDisco.isNotEmpty) {
+        _produtosCache   = doDisco;
+        _produtosCacheEm = DateTime.now();
+        // Devolve agora e confere com o banco atrás: quem abriu o app já pode
+        // buscar produto enquanto as 5000 linhas viajam.
+        unawaited(_revalidarCatalogo());
+        return doDisco;
+      }
+    }
+    return _consultarCatalogo();
+  }
+
+  /// Relê o catálogo do banco depois de ter servido a cópia em disco, e só
+  /// avisa as telas se ele mudou de verdade — `dataRevision` recarrega todas
+  /// as cenas, e fazer isso a cada abertura do app anularia o ganho.
+  Future<void> _revalidarCatalogo() async {
+    try {
+      final anterior = _produtosCache;
+      final atual    = await _consultarCatalogo();
+      if (anterior != null && !catalogosIguais(anterior, atual)) {
+        dataRevision.value++;
+      }
+    } catch (_) {
+      // Revalidação é best-effort: falhou, fica valendo a cópia em disco até
+      // o próximo Sincronizar.
+    }
+  }
+
+  /// Lê o catálogo do banco (a consulta de verdade) e atualiza os dois caches.
+  Future<List<Produto>> _consultarCatalogo() async {
+    if (!await _garantirConexao()) return _produtosCache ?? const [];
 
     final cache = _produtosCache;
     try {
@@ -881,11 +1099,87 @@ class TursoService {
         }).toList()
           ..sort((a, b) => a.nome.compareTo(b.nome));
       });
-      _produtosCache   = produtos;
-      _produtosCacheEm = DateTime.now();
+      _produtosCache       = produtos;
+      _produtosCacheEm     = DateTime.now();
+      _catalogoLidoDoBanco = true;
+      // Só grava quando mudou: reescrever ~300 KB a cada leitura idêntica
+      // gastaria disco (e bateria) sem trocar um byte de conteúdo.
+      if (cache == null || !catalogosIguais(cache, produtos)) {
+        unawaited(_gravarCatalogoNoDisco(produtos));
+      }
       return produtos;
     } catch (_) {
-      return cache ?? [];
+      return cache ?? const [];
+    }
+  }
+
+  Future<String> _caminhoCatalogo() async {
+    final dir = await getApplicationSupportDirectory();
+    return '${dir.path}/camda_catalogo.json';
+  }
+
+  /// Catálogo salvo em disco na última leitura do banco, ou null se não há
+  /// cópia utilizável.
+  ///
+  /// Existe por causa da abertura fria: sem cache local (Web, preferência
+  /// desligada, primeira instalação) o catálogo é um SELECT de até 5000 linhas
+  /// que atravessa a rede antes de qualquer busca de produto funcionar — é o
+  /// "demora demais para carregar os produtos" de quem usa o app no galpão.
+  /// Com a cópia em disco, a segunda abertura em diante mostra a lista na hora
+  /// e confere com o banco em segundo plano.
+  ///
+  /// A cópia é carimbada com a URL do banco: trocar de banco em ⚙️ tem de
+  /// invalidar o catálogo, senão o app mostraria os produtos do banco anterior.
+  Future<List<Produto>?> _lerCatalogoDoDisco() async {
+    if (kIsWeb) return null; // sem filesystem
+    try {
+      final arquivo = File(await _caminhoCatalogo());
+      if (!await arquivo.exists()) return null;
+      final json = jsonDecode(await arquivo.readAsString());
+      if (json is! Map) return null;
+      if (json['versao'] != _versaoCatalogoEmDisco) return null;
+      if (json['url'] != (_urlConfigurada ?? '')) return null;
+      final itens = json['itens'];
+      if (itens is! List) return null;
+      return [
+        for (final dynamic item in itens)
+          if (item is List && item.length == 3)
+            Produto(
+              codigo:    item[0] as String? ?? '',
+              nome:      item[1] as String? ?? '',
+              categoria: item[2] as String? ?? '',
+              corHex:    categoriaCores[item[2] as String? ?? ''] ?? '#888888',
+            ),
+      ];
+    } catch (_) {
+      // Arquivo truncado ou de outra versão do app: melhor ignorar e consultar
+      // o banco do que servir lixo.
+      return null;
+    }
+  }
+
+  Future<void> _gravarCatalogoNoDisco(List<Produto> produtos) async {
+    if (kIsWeb) return;
+    try {
+      // Triplas posicionais em vez de objetos: repetir os nomes das três
+      // colunas em 5000 linhas quase dobra o tamanho do arquivo — e o que se
+      // quer aqui é justamente uma leitura curta na abertura.
+      final dados = jsonEncode({
+        'versao': _versaoCatalogoEmDisco,
+        'url':    _urlConfigurada ?? '',
+        'itens':  [
+          for (final p in produtos) [p.codigo, p.nome, p.categoria],
+        ],
+      });
+      // Grava num temporário e renomeia: o rename é atômico, então uma queda
+      // no meio da escrita não deixa meio catálogo no lugar do inteiro.
+      final caminho = await _caminhoCatalogo();
+      final temp    = File('$caminho.tmp');
+      await temp.writeAsString(dados, flush: true);
+      await temp.rename(caminho);
+    } catch (_) {
+      // Cache de disco é otimização: falhar aqui não pode atrapalhar quem já
+      // recebeu a lista.
     }
   }
 
@@ -996,6 +1290,7 @@ class TursoService {
       // Write-through: as linhas recém-gravadas SÃO o novo estado persistido,
       // então dá para atualizar o cache sem reler.
       _cacheGondola.gravar(gondolaNum, itens);
+      marcarGravacaoLocal();
       return true;
     } catch (_) {
       // DELETE + INSERT não é atômico aqui: o DELETE pode ter passado e o
@@ -1170,6 +1465,7 @@ class TursoService {
         }
         await stmtIns.query(positional: params);
       }
+      marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;

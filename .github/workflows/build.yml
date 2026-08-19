@@ -18,6 +18,7 @@ on:
       - "claude/gondola-1-counting-mode-qfm26n"
       - "claude/auto-sync-inventory-count-bx9jdg"
       - "claude/investigar-travamento-ambne8"
+      - "claude/product-sync-efficiency-x3udku"
   workflow_dispatch:
 
 jobs:

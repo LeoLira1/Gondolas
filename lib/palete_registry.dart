@@ -176,6 +176,7 @@ class PaleteRegistry {
         DateTime.now().toIso8601String(),
       ]);
       await carregar();
+      TursoService().marcarGravacaoLocal();
       return num;
     } catch (_) {
       return null;
@@ -209,6 +210,7 @@ class PaleteRegistry {
         p.num,
       ]);
       await carregar();
+      TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -234,6 +236,7 @@ class PaleteRegistry {
       );
       await stmt.query(positional: [num]);
       await carregar();
+      TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;

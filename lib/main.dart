@@ -21,6 +21,7 @@ import 'models.dart';
 import 'palete_registry.dart';
 import 'palete_scene.dart';
 import 'quantidade_dialog.dart';
+import 'replica_local.dart' show resumoDoSync;
 import 'turso_service.dart';
 
 void main() => runApp(const CamdaApp());
@@ -485,7 +486,7 @@ class _LojaPageState extends State<LojaPage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              'Sincronizado com o banco online ✓')
+              resumoDoSync(TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -2066,7 +2067,7 @@ class _GondolaPageState extends State<GondolaPage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              'Sincronizado com o banco online ✓')
+              resumoDoSync(TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -3646,7 +3647,7 @@ class _EstantePageState extends State<EstantePage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              'Sincronizado com o banco online ✓')
+              resumoDoSync(TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),

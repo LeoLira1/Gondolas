@@ -470,6 +470,7 @@ class EstoqueLocalizadoService {
         agora,
       ]);
       _invalidarCachesBadges();
+      TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -537,6 +538,7 @@ class EstoqueLocalizadoService {
         DateTime.now().toIso8601String(),
       ]);
       _invalidarCachesBadges();
+      TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -560,6 +562,7 @@ class EstoqueLocalizadoService {
       );
       await stmt.query(positional: [produtoCodigo, localTipo, localNum]);
       _invalidarCachesBadges();
+      TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -649,6 +652,7 @@ class EstoqueLocalizadoService {
       ]);
 
       _invalidarCachesBadges();
+      TursoService().marcarGravacaoLocal();
       return ResultadoContagem(
         total:       total,
         qtdSistema:  info.qtdSistema,

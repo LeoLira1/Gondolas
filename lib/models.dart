@@ -425,6 +425,29 @@ class Produto {
   Color get cor => corDeHex(corHex);
 }
 
+/// True quando duas leituras do catálogo trazem os mesmos produtos, na mesma
+/// ordem e com os mesmos campos.
+///
+/// Serve à revalidação em segundo plano do catálogo: a cópia em disco é
+/// devolvida na hora e o banco é lido logo atrás, mas avisar as telas
+/// (`dataRevision`) a cada abertura do app recarregaria todas as cenas sem
+/// motivo. Só há o que avisar quando o catálogo REALMENTE mudou.
+///
+/// A cor fica de fora porque é derivada da categoria (ver `categoriaCores`):
+/// comparar as duas seria comparar a mesma informação duas vezes.
+bool catalogosIguais(List<Produto> a, List<Produto> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i].codigo    != b[i].codigo ||
+        a[i].nome      != b[i].nome   ||
+        a[i].categoria != b[i].categoria) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Produtos com caixa num local (gôndola ou estante) para o dialog
 /// "Limpar produto". Mantém a ordem do catálogo para os cadastrados e
 /// acrescenta, ao final e ordenados por código, os que não estão no catálogo

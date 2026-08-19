@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'loja_scene.dart' show PreferenciasMapa;
 import 'baixa_por_contagem_service.dart';
 import 'palete_registry.dart';
+import 'replica_local.dart' show resumoDoSync;
 import 'turso_service.dart';
 
 class ConfiguracaoPage extends StatefulWidget {
@@ -252,7 +253,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
       // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
           ? (TursoService().ultimoAvisoSync ??
-              'Sincronizado com o banco online ✓')
+              resumoDoSync(TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -512,6 +513,23 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                 style: const TextStyle(
                                     color: Color(0xFF8a9aa8), fontSize: 11),
                               ),
+                              if (TursoService().gravacoesPendentes > 0) ...[
+                                const SizedBox(height: 4),
+                                // O que ainda não subiu, dito antes de o
+                                // usuário apertar Sincronizar: é a resposta
+                                // para "sincronizou mesmo?" sem ter de
+                                // adivinhar pelo tempo que o botão levou.
+                                Text(
+                                  TursoService().gravacoesPendentes == 1
+                                      ? '1 gravação esperando envio'
+                                      : '${TursoService().gravacoesPendentes} '
+                                          'gravações esperando envio',
+                                  style: const TextStyle(
+                                      color: Color(0xFFe0a33e),
+                                      fontSize: 11,
+                                      height: 1.3),
+                                ),
+                              ],
                               if (TursoService().ultimoErroSync != null) ...[
                                 const SizedBox(height: 4),
                                 Text(
