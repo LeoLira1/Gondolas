@@ -383,14 +383,19 @@ class TursoService {
   // app indefinidamente — estourou, cai no fallback (remoto) ou falha o botão
   // de sincronizar com aviso, mantendo os dados locais intactos.
   static const Duration _timeoutConexao   = Duration(seconds: 20);
-  // Baixar a base pela primeira vez é outra ordem de grandeza: são o banco
+  // Baixar a base pela primeira vez é outra ordem de grandeza: é o banco
   // INTEIRO vindo do Turso, não uma consulta. Medido em campo, 90s não bastou
   // nem em wi-fi — e estourar aqui não devolve um erro visível, devolve o
   // fallback para o modo remoto, que é o pior desfecho possível (grava pela
-  // rede, e o Sincronizar fica sem replica para empurrar). Esperar sai barato
-  // em comparação: sem rede o connect falha na hora, sem consumir o limite,
-  // e o mapa abre de qualquer jeito porque o init() roda solto.
-  static const Duration _timeoutBootstrap = Duration(minutes: 5);
+  // rede, e o Sincronizar fica sem replica para empurrar).
+  //
+  // Três minutos: o dobro do que a medição pediu, e igual ao teto do sync de
+  // rotina — não há motivo para a carga inicial poder esperar mais que ele.
+  //
+  // Vale APENAS enquanto a base não está estabelecida. Com a base pronta,
+  // reabrir usa _timeoutConexao (20s) e sincronizar usa _timeoutSync. Nenhum
+  // uso rotineiro do app espera por este limite.
+  static const Duration _timeoutBootstrap = Duration(minutes: 3);
   static const Duration _timeoutSync      = Duration(minutes: 3);
 
   Future<String> _caminhoCacheLocal() async {

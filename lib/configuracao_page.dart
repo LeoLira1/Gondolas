@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:libsql_dart/libsql_dart.dart';
@@ -243,22 +245,69 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     // páginas recarregam ao voltar desta tela.
   }
 
-  /// Tenta reabrir o cache local sem precisar fechar e reabrir o app.
-  Future<void> _tentarCacheLocal() async {
+  /// Dispara a conexão e devolve o controle NA HORA.
+  ///
+  /// A primeira conexão baixa o banco inteiro e pode levar minutos. Segurar a
+  /// tela nesse tempo faz o app parecer travado — e quem acha que travou fecha
+  /// a tela, interrompendo justamente o download que precisava terminar. Aqui
+  /// a conexão corre dentro do `TursoService`, que é singleton e sobrevive à
+  /// navegação: dá para sair de ⚙️, usar o app, e voltar depois. A tela só se
+  /// atualiza se ainda estiver montada quando terminar.
+  void _conectarEmSegundoPlano(String aoIniciar) {
     setState(() => _reconectando = true);
-    await TursoService().reconectar();
-    if (!mounted) return;
-    final deuCerto = TursoService().modoLocal;
-    setState(() => _reconectando = false);
+    _avisarConexao(aoIniciar, const Color(0xFF2e6b46), 5);
+    unawaited(TursoService().reconectar().then((_) {
+      if (!mounted) return;
+      setState(() => _reconectando = false);
+      final servico = TursoService();
+      final (texto, cor) = switch (servico) {
+        _ when !servico.isConnected => (
+            'Não deu para conectar — confira URL, token e a internet.',
+            const Color(0xFF8b1a1a),
+          ),
+        _ when servico.caiuParaRemoto => (
+            'O cache local não pôde ser aberto — veja o aviso logo abaixo.',
+            const Color(0xFF8b6a1a),
+          ),
+        _ when servico.modoLocal => (
+            'Cache local pronto ✓ — os dados já estão no aparelho.',
+            const Color(0xFF2e6b46),
+          ),
+        _ => (
+            'Conectado direto no banco online ✓',
+            const Color(0xFF2e6b46),
+          ),
+      };
+      _avisarConexao(texto, cor, servico.modoLocal ? 3 : 6);
+    }));
+  }
+
+  void _avisarConexao(String texto, Color cor, int segundos) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(deuCerto
-          ? 'Cache local aberto ✓ — gravações voltam a ser instantâneas'
-          : 'Ainda não deu — o app segue no banco online. '
-              'Procure um lugar com sinal melhor e tente de novo.'),
-      backgroundColor:
-          deuCerto ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: deuCerto ? 3 : 6),
+      content: Text(texto),
+      backgroundColor: cor,
+      duration: Duration(seconds: segundos),
     ));
+  }
+
+  /// Tenta reabrir o cache local sem precisar fechar e reabrir o app.
+  void _tentarCacheLocal() => _conectarEmSegundoPlano(
+      'Baixando a base em segundo plano — pode continuar usando o app.');
+
+  Future<void> _salvarConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(TursoService.keyDbUrl,   _urlCtrl.text.trim());
+    await prefs.setString(TursoService.keyDbToken, _tokenCtrl.text.trim());
+    if (!mounted) return;
+
+    // Conecta AGORA, e não "quando der". A primeira conexão da replica baixa
+    // o banco inteiro e é a ÚNICA que depende de rede boa; antes ela ficava
+    // para o próximo _garantirConexao(), ou seja, para o momento imprevisível
+    // em que o app fosse consultar algo — tipicamente já no galpão, com sinal
+    // fraco, que é como se cai no modo remoto sem perceber.
+    _conectarEmSegundoPlano(
+        'Salvo ✓ — conectando. A 1ª vez baixa a base e pode demorar; '
+        'pode continuar usando o app.');
   }
 
   Future<void> _sincronizarAgora() async {
@@ -343,50 +392,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         '${quando.year} ${dois(quando.hour)}:${dois(quando.minute)}';
   }
 
-  Future<void> _salvarConfig() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(TursoService.keyDbUrl,   _urlCtrl.text.trim());
-    await prefs.setString(TursoService.keyDbToken, _tokenCtrl.text.trim());
-    if (!mounted) return;
-
-    // Conecta AGORA, e não "quando der". A primeira conexão da replica baixa
-    // o banco inteiro e é a ÚNICA que depende de rede boa; antes ela ficava
-    // para o próximo _garantirConexao(), ou seja, para o momento imprevisível
-    // em que o app fosse consultar algo — tipicamente já no galpão, com sinal
-    // fraco, que é como se cai no modo remoto sem perceber. Aqui o usuário
-    // está parado na tela de ⚙️ e vê o resultado.
-    setState(() => _reconectando = true);
-    await TursoService().reconectar();
-    if (!mounted) return;
-    setState(() => _reconectando = false);
-
-    final servico = TursoService();
-    final (texto, cor) = switch (servico) {
-      _ when !servico.isConnected => (
-          'Configuração salva, mas não deu para conectar — confira URL, '
-              'token e a internet.',
-          const Color(0xFF8b1a1a),
-        ),
-      _ when servico.caiuParaRemoto => (
-          'Salvo, mas o cache local não pôde ser aberto — veja o aviso '
-              'logo abaixo.',
-          const Color(0xFF8b6a1a),
-        ),
-      _ when servico.modoLocal => (
-          'Salvo ✓ — cache local pronto, os dados já estão no aparelho.',
-          const Color(0xFF2e6b46),
-        ),
-      _ => (
-          'Salvo ✓ — conectado direto no banco online.',
-          const Color(0xFF2e6b46),
-        ),
-    };
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(texto),
-      backgroundColor: cor,
-      duration: Duration(seconds: servico.modoLocal ? 3 : 6),
-    ));
-  }
 
   Future<void> _testarConexao() async {
     setState(() {
