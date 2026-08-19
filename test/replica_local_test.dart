@@ -55,6 +55,41 @@ void main() {
       );
     });
 
+    // Segundo texto real do aparelho, meses depois: desta vez quem virou a
+    // geração foi o servidor (checkpoint no Turso) e o push local morreu com
+    // 400. Sem reconhecer isso, o Sincronizar repetia o mesmo erro para sempre
+    // e despejava o panic na tela de configuração.
+    const panicoGeracao =
+        'PanicException(called `Result::unwrap()` on an `Err` value: '
+        'Sync(PushFrame(400, "{\\"error\\": \\"Protocol error: Generation '
+        'ID mismatch: expected 5, got 4\\"}"))Backtrace [{ fn: '
+        '"_ZL15__pthread_startPv" }])';
+
+    test('reconhece a geração do servidor à frente da replica', () {
+      expect(erroDeReplicaDivergente(panicoGeracao), isTrue);
+    });
+
+    test('reconhece qualquer 400 no push de frames', () {
+      // Um 400 é o servidor recusando os frames locais: o conteúdo do JSON
+      // pode mudar com a versão do sqld, a saída é sempre reconstruir.
+      expect(
+        erroDeReplicaDivergente('Sync(PushFrame(400, "{}"))'),
+        isTrue,
+      );
+      // 5xx é o servidor com problema, não a replica: continua sendo tentar
+      // de novo, nunca apagar o cache do usuário.
+      expect(
+        erroDeReplicaDivergente('Sync(PushFrame(503, "unavailable"))'),
+        isFalse,
+      );
+    });
+
+    test('a geração divergente também explica o cache local ao usuário', () {
+      final msg = descreverErroSync(panicoGeracao);
+      expect(msg, contains('cache local'));
+      expect(msg, isNot(contains('PanicException')));
+    });
+
     test('não confunde falha de rede com divergência', () {
       expect(erroDeReplicaDivergente('SocketException: failed to connect'),
           isFalse);
