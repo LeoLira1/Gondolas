@@ -260,6 +260,29 @@ void main() {
           contains('não deu para falar com o banco online'));
     });
 
+    test('uma gravação sozinha é anunciada no singular', () {
+      // A frase aparece exatamente para quem lançou UM item e precisa acreditar
+      // que ele não sumiu: "1 gravação continua salvas" quebrava essa confiança
+      // na única linha que o usuário lê nessa hora.
+      final msg = descreverErroSync(const SincronizacaoNaoConfirmada(1));
+      expect(msg, contains('1 gravação continua salva no aparelho'));
+      expect(msg, isNot(contains('salvas')));
+      expect(descreverErroSync(const SincronizacaoNaoConfirmada(2)),
+          contains('2 gravações continuam salvas'));
+    });
+
+    test('banco no ar não vira acusação de internet', () {
+      // Com o servidor respondendo, mandar "verifique a internet" é errado — e
+      // é o conselho que deixava o usuário repetindo Sincronizar sem saída.
+      final msg = descreverErroSync(const SincronizacaoNaoConfirmada(1, true));
+      expect(msg, contains('o banco online respondeu'));
+      expect(msg, contains('1 gravação continua salva'));
+      expect(msg, isNot(contains('verifique a internet')));
+      // Sem resposta do banco, o conselho de rede continua valendo.
+      expect(descreverErroSync(const SincronizacaoNaoConfirmada(1)),
+          contains('verifique a internet'));
+    });
+
     test('não é confundido com replica divergente', () {
       // A checagem de texto de erroDeReplicaDivergente varre a mensagem
       // inteira: se ela casasse aqui, o app apagaria o cache local (e as

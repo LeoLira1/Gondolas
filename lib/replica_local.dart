@@ -135,12 +135,22 @@ class SincronizacaoNaoConfirmada implements Exception {
   /// Quantas gravações locais continuavam esperando o envio.
   final int pendentes;
 
-  const SincronizacaoNaoConfirmada([this.pendentes = 0]);
+  /// True quando o banco online respondeu a uma consulta logo depois do envio
+  /// que não saiu. Muda o conselho por inteiro: com o servidor no ar, mandar
+  /// "verifique a internet" é conselho errado — quem está travado assim
+  /// segue apertando Sincronizar e vendo a mesma acusação injusta.
+  final bool bancoRespondeu;
+
+  const SincronizacaoNaoConfirmada([
+    this.pendentes = 0,
+    this.bancoRespondeu = false,
+  ]);
 
   @override
   String toString() =>
       'SincronizacaoNaoConfirmada: o servidor não confirmou o envio '
-      '($pendentes pendente(s))';
+      '($pendentes pendente(s), '
+      'banco ${bancoRespondeu ? "respondeu" : "calado"})';
 }
 
 /// True quando o erro indica que a replica local não tem mais como conversar
@@ -222,17 +232,23 @@ String descreverErroSync(Object e) {
         'conecte à internet e sincronize de novo';
   }
   if (e is SincronizacaoNaoConfirmada) {
+    if (e.pendentes <= 0) {
+      return 'não deu para falar com o banco online — verifique a internet e '
+          'sincronize de novo';
+    }
     // O aparelho não perdeu nada — insistir nisso é o ponto da mensagem: o
     // usuário que vê "não sincronizou" logo depois de lançar precisa saber
     // que o lançamento continua guardado e vai subir na próxima tentativa.
+    // Daí a concordância importar: o "salvas" fixo dizia "1 gravação continua
+    // salvas no aparelho", na única linha em que ele precisa confiar.
     final quantas = e.pendentes == 1
-        ? '1 gravação continua'
-        : '${e.pendentes} gravações continuam';
-    return e.pendentes > 0
-        ? 'o envio não chegou ao banco online — $quantas salvas no aparelho; '
-            'verifique a internet e sincronize de novo'
-        : 'não deu para falar com o banco online — verifique a internet e '
-            'sincronize de novo';
+        ? '1 gravação continua salva'
+        : '${e.pendentes} gravações continuam salvas';
+    return e.bancoRespondeu
+        ? 'o banco online respondeu, mas o envio não saiu do aparelho — '
+            '$quantas aqui; toque em Sincronizar de novo'
+        : 'o envio não chegou ao banco online — $quantas no aparelho; '
+            'verifique a internet e sincronize de novo';
   }
   // Antes das buscas genéricas: o texto de uma PanicException traz o backtrace
   // inteiro e casaria com elas por acidente.
