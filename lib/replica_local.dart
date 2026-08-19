@@ -96,10 +96,18 @@ enum ResultadoDoSync {
   /// nada" — e aqui dá para afirmar sem gastar mais nenhuma ida à rede.
   naoConfirmado,
 
-  /// Nada avançou, e também não havia nada para enviar. Estado normal de quem
-  /// já está em dia: o libsql levanta exceção quando o HTTP falha (o dispatch
-  /// vira `SyncError::HttpDispatch`), então chegar aqui sem erro significa que
-  /// a conversa aconteceu e não tinha novidade.
+  /// Nada avançou, e também não havia nada para enviar.
+  ///
+  /// Parece o estado normal de quem já está em dia, e por isso o app tratava
+  /// isto como sucesso: a leitura do `sync.rs` dizia que um HTTP que não
+  /// completa vira `SyncError::HttpDispatch` e sobe como exceção. O aparelho
+  /// desmentiu — com Wi-Fi e dados DESLIGADOS o `sync()` voltou calado e sem
+  /// erro, e a tela anunciou "Sincronizado com o banco online ✓".
+  ///
+  /// Então este caso não prova conversa nenhuma: é "o arquivo não se mexeu",
+  /// que tanto pode ser "não havia novidade" quanto "não saiu daqui". Quem
+  /// chama confirma com o servidor antes de dizer que sincronizou (ver
+  /// `provaConversaComServidor`).
   semNovidade,
 
   /// Não deu para ler o `-info` de um dos lados (arquivo ausente, formato novo
@@ -124,6 +132,16 @@ ResultadoDoSync avaliarSync({
       ? ResultadoDoSync.naoConfirmado
       : ResultadoDoSync.semNovidade;
 }
+
+/// True quando o resultado, sozinho, já prova que o app falou com o servidor.
+///
+/// Só `confirmado` prova: o `durable_frame_num`/`generation` do `-info` quem
+/// move é o servidor, então vê-los andar é prova de conversa. Todos os outros
+/// resultados são leituras de um arquivo que não se mexeu — e um arquivo
+/// parado é igualzinho com a internet ligada e desligada. Antes de dizer
+/// "sincronizado", quem chama precisa perguntar ao banco se ele está lá.
+bool provaConversaComServidor(ResultadoDoSync resultado) =>
+    resultado == ResultadoDoSync.confirmado;
 
 /// O `sync()` voltou sem erro, mas nada saiu do aparelho.
 ///

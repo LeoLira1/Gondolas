@@ -246,6 +246,31 @@ void main() {
     });
   });
 
+  group('o que o resultado do sync prova', () {
+    test('só o frame que andou prova conversa com o servidor', () {
+      // Com Wi-Fi e dados desligados o sync() volta calado e sem erro, e o
+      // `-info` fica parado — igualzinho a "não havia novidade". Tratar
+      // semNovidade como sucesso foi o que fez a tela anunciar "Sincronizado
+      // com o banco online ✓" em modo avião.
+      expect(provaConversaComServidor(ResultadoDoSync.confirmado), isTrue);
+      expect(provaConversaComServidor(ResultadoDoSync.semNovidade), isFalse);
+      expect(provaConversaComServidor(ResultadoDoSync.naoConfirmado), isFalse);
+      expect(provaConversaComServidor(ResultadoDoSync.indeterminado), isFalse);
+    });
+
+    test('sync mudo sem pendência não é sucesso sozinho', () {
+      // O caso do modo avião: nada para enviar, nada se moveu.
+      const parado = EstadoDaReplica(geracao: 1, frame: 42);
+      final resultado = avaliarSync(
+        antes: parado,
+        depois: parado,
+        gravacoesPendentes: 0,
+      );
+      expect(resultado, ResultadoDoSync.semNovidade);
+      expect(provaConversaComServidor(resultado), isFalse);
+    });
+  });
+
   group('mensagens do sync', () {
     test('envio não confirmado diz que os dados continuam no aparelho', () {
       final msg = descreverErroSync(const SincronizacaoNaoConfirmada(3));

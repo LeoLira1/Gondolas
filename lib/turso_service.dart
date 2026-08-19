@@ -905,12 +905,12 @@ class TursoService {
   /// Era ele que fazia o botão Sincronizar responder "Sincronizado ✓" em
   /// menos de um segundo, sem rede, sem ter enviado nada.
   ///
-  /// A conferência sai do `-info` (ver `avaliarSync`), que custa a leitura de
-  /// um arquivo de poucos bytes — nenhuma ida extra à rede no caso comum.
-  /// Frame parado com gravação esperando é prova de que o push não saiu; frame
-  /// parado sem nada esperando é só "não havia o que mover". O round-trip no
-  /// remoto fica para quando o `-info` não pôde ser lido — e para o push que
-  /// não saiu, onde ele decide entre reclamar da internet e tentar de novo.
+  /// A conferência começa no `-info` (ver `avaliarSync`), que custa a leitura
+  /// de um arquivo de poucos bytes: frame que ANDOU é prova de conversa, e só
+  /// ele — o servidor é quem move aquele número. Frame parado não prova nada,
+  /// com ou sem gravação esperando, porque é o mesmo que se vê em modo avião.
+  /// Por isso todo sync que não moveu o arquivo termina numa consulta curta ao
+  /// banco online, na conexão de sondagem que fica quente entre os toques.
   Future<Object?> _sincronizarReplica() async {
     final antes = await _estadoAtualDaReplica();
     await _client!.sync().timeout(_timeoutSync);
@@ -949,11 +949,13 @@ class TursoService {
       }
     }
 
-    // Sobra `indeterminado`: o `-info` não pôde ser lido de um dos lados e não
-    // há o que afirmar pelo arquivo — só o servidor responde. `confirmado` e
-    // `semNovidade` seguem direto: nos dois o sync falou com o banco.
-    if (resultado == ResultadoDoSync.indeterminado &&
-        !await _remotoAlcancavel()) {
+    // Sobram `semNovidade` e `indeterminado`, e nenhum dos dois prova conversa
+    // com o servidor: os dois são o `-info` parado, que é exatamente o que se
+    // vê com a internet desligada. Era essa a brecha por onde saía o
+    // "Sincronizado com o banco online ✓" em modo avião. Uma consulta curta
+    // desempata — e ela vai na conexão de sondagem, que fica quente entre os
+    // toques (ver _remotoAlcancavel).
+    if (!provaConversaComServidor(resultado) && !await _remotoAlcancavel()) {
       return SincronizacaoNaoConfirmada(_gravacoesPendentes);
     }
 
