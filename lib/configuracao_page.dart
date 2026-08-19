@@ -498,8 +498,11 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               // inteiro e pode levar bem mais que um toque de botão sugere.
               onPressed: _reconectando ? null : _salvarConfig,
               icon: const Icon(Icons.save_outlined, size: 16),
+              // A primeira vez baixa o banco inteiro e pode levar minutos —
+              // sem dizer isso, o botão parado parece travado e o usuário sai
+              // da tela no meio, que é como o download não termina nunca.
               label: Text(_reconectando
-                  ? 'Salvando e conectando…'
+                  ? 'Conectando — a 1ª vez baixa a base…'
                   : 'Salvar configuração'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2e6b46),
@@ -612,7 +615,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                   _reconectando ? null : _tentarCacheLocal,
                               icon: const Icon(Icons.refresh, size: 16),
                               label: Text(_reconectando
-                                  ? 'Tentando…'
+                                  ? 'Baixando a base…'
                                   : 'Tentar de novo'),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: const Color(0xFFe0a33e),
