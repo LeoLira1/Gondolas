@@ -383,7 +383,19 @@ class TursoService {
   // app indefinidamente — estourou, cai no fallback (remoto) ou falha o botão
   // de sincronizar com aviso, mantendo os dados locais intactos.
   static const Duration _timeoutConexao   = Duration(seconds: 20);
-  static const Duration _timeoutBootstrap = Duration(seconds: 90);
+  // Baixar a base pela primeira vez é outra ordem de grandeza: é o banco
+  // INTEIRO vindo do Turso, não uma consulta. Medido em campo, 90s não bastou
+  // nem em wi-fi — e estourar aqui não devolve um erro visível, devolve o
+  // fallback para o modo remoto, que é o pior desfecho possível (grava pela
+  // rede, e o Sincronizar fica sem replica para empurrar).
+  //
+  // Três minutos: o dobro do que a medição pediu, e igual ao teto do sync de
+  // rotina — não há motivo para a carga inicial poder esperar mais que ele.
+  //
+  // Vale APENAS enquanto a base não está estabelecida. Com a base pronta,
+  // reabrir usa _timeoutConexao (20s) e sincronizar usa _timeoutSync. Nenhum
+  // uso rotineiro do app espera por este limite.
+  static const Duration _timeoutBootstrap = Duration(minutes: 3);
   static const Duration _timeoutSync      = Duration(minutes: 3);
 
   Future<String> _caminhoCacheLocal() async {
@@ -403,15 +415,22 @@ class TursoService {
       // devolver a conexão. Da segunda abertura em diante ele é local e
       // instantâneo, e a rede só volta a entrar no Sincronizar.
       //
-      // Por isso o limite é dobrado JUSTO nessa primeira vez: 20s de 4G fraco
-      // no galpão não baixam o banco, o connect estoura, e o `_init` cai
-      // calado para o modo remoto — onde toda gravação passa a depender da
-      // rede e o Sincronizar não tem replica para empurrar. Era o caminho mais
-      // provável para o app acabar em modo remoto com o cache local ligado.
-      // Esperar mais não custa tela: o `init()` roda solto na abertura (ver
-      // main.dart) e o mapa aparece de qualquer jeito.
-      final primeiraVez = !await File(path).exists();
-      limite = primeiraVez ? _timeoutBootstrap : _timeoutConexao;
+      // Por isso o limite é MUITO maior enquanto a base não está estabelecida:
+      // 20s não baixam o banco, o connect estoura, e o `_init` cai calado para
+      // o modo remoto — onde toda gravação passa a depender da rede e o
+      // Sincronizar não tem replica para empurrar. Era o caminho mais provável
+      // para o app acabar em modo remoto com o cache local ligado.
+      //
+      // A pergunta é "a base já está pronta?", NÃO "o arquivo existe?". Um
+      // download que estourou o tempo deixa arquivo no disco sem a base
+      // completa: pela existência do arquivo, a tentativa seguinte cairia nos
+      // 20s justamente quando ainda falta baixar o grosso. `keyBaseLocalOk` só
+      // é gravada quando `_estabelecerBaseLocal` termina, então é ela que
+      // responde de verdade.
+      final prefs = await SharedPreferences.getInstance();
+      final baseJaPronta =
+          (prefs.getBool(keyBaseLocalOk) ?? false) && await File(path).exists();
+      limite = baseJaPronta ? _timeoutConexao : _timeoutBootstrap;
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       await client.connect().timeout(limite);
       _motivoFalhaCacheLocal = null;
