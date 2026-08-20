@@ -202,10 +202,17 @@ const List<TabelaDoCarimbo> tabelasDoCarimbo = [
   TabelaDoCarimbo('estante_layout', "COALESCE(MAX(registrado_em),'')"),
   TabelaDoCarimbo('estoque_localizado', "COALESCE(MAX(atualizado_em),'')"),
   TabelaDoCarimbo('galpao_racks', "COALESCE(MAX(atualizado_em),'')"),
-  // Palete que sai da loja vira ativo = 0 sem mexer na contagem nem no
-  // criado_em; a soma dos ativos é o que denuncia isso.
-  TabelaDoCarimbo('paletes',
-      "COALESCE(MAX(criado_em),'') || '#' || COALESCE(SUM(ativo),0)"),
+  // Paletes mudam POR DENTRO: sai da loja (ativo = 0), é renomeado, é
+  // arrastado. Nada disso mexe na contagem nem no criado_em, e o carimbo
+  // precisa enxergar — é dele que sai a licença para zerar as pendências. Daí
+  // as somas: os inteiros vão direto e as coordenadas viram inteiro (×1000)
+  // para que o texto do número seja igual dos dois lados.
+  TabelaDoCarimbo(
+      'paletes',
+      "COALESCE(MAX(criado_em),'') || '#' || "
+      'COALESCE(SUM(ativo + colunas + fileiras + LENGTH(apelido)),0) '
+      "|| '#' || "
+      'COALESCE(CAST(SUM((pos_x + pos_z + rotacao) * 1000) AS INTEGER),0)'),
   TabelaDoCarimbo('contagens_log', 'COALESCE(MAX(id),0)',
       contarLinhas: false),
 ];
@@ -437,8 +444,8 @@ String descreverErroSync(Object e) {
         return 'o banco online tem dados que ainda não chegaram ao aparelho — '
             'sincronize de novo';
       case ConferenciaDoCarimbo.aparelhoAdiante:
-        return 'há gravações no aparelho que o banco online ainda não tem — '
-            'sincronize de novo';
+        return 'o envio não saiu do aparelho — o que foi lançado continua '
+            'salvo aqui; toque em Sincronizar de novo';
       case ConferenciaDoCarimbo.iguais:
       case ConferenciaDoCarimbo.indeterminada:
       case ConferenciaDoCarimbo.divergentes:
