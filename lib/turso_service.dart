@@ -541,22 +541,77 @@ class TursoService {
   /// `_init` quando as credenciais mudam e a cada falha — reconectar é o
   /// caminho certo quando a anterior morreu.
   Future<bool> _remotoAlcancavel() async {
-    final url   = _urlAtiva;
-    final token = _tokenAtivo;
-    if (url == null || token == null) return false;
     try {
-      var remoto = _sonda;
-      if (remoto == null) {
-        remoto = LibsqlClient.remote(url, authToken: token);
-        await remoto.connect().timeout(_timeoutConexao);
-        _sonda = remoto;
-      }
+      final remoto = await _sondaRemota();
+      if (remoto == null) return false;
       await remoto.query('SELECT 1').timeout(_timeoutConexao);
       return true;
     } catch (_) {
       await _descartarSonda();
       return false;
     }
+  }
+
+  /// A conexão de sondagem, aberta sob demanda e reaproveitada entre as
+  /// chamadas. Null quando não há credenciais ou o handshake não completa.
+  Future<LibsqlClient?> _sondaRemota() async {
+    final aberta = _sonda;
+    if (aberta != null) return aberta;
+    final url   = _urlAtiva;
+    final token = _tokenAtivo;
+    if (url == null || token == null) return null;
+    try {
+      final remoto = LibsqlClient.remote(url, authToken: token);
+      await remoto.connect().timeout(_timeoutConexao);
+      _sonda = remoto;
+      return remoto;
+    } catch (_) {
+      await _descartarSonda();
+      return null;
+    }
+  }
+
+  /// Roda a consulta do carimbo (ver `sqlDoCarimbo`) num cliente. Null quando
+  /// não deu para carimbar — rede, tabela ausente, formato inesperado.
+  Future<Map<String, AssinaturaTabela>?> _carimboDe(LibsqlClient? cliente) async {
+    if (cliente == null) return null;
+    try {
+      final stmt   = await cliente.prepare(sqlDoCarimbo());
+      final linhas = (await stmt.query().timeout(_timeoutConexao)) as List<dynamic>;
+      if (linhas.isEmpty) return null;
+      return carimboDaLinha(linhas.first as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Carimba os dois lados e compara. É a conferência que o `SELECT 1` não
+  /// fazia: servidor no ar prova rede, não prova que os dados vieram.
+  ///
+  /// [bancoRespondeu] sai do carimbo remoto quando ele volta, e de um
+  /// `SELECT 1` quando não volta — assim uma consulta que falha por MOTIVO DE
+  /// BANCO (tabela que não existe naquele remoto, coluna nova) não é
+  /// confundida com estar sem internet, que travaria todo Sincronizar.
+  Future<
+      ({
+        ConferenciaDoCarimbo resultado,
+        List<String> tabelas,
+        bool bancoRespondeu,
+      })> _conferirCarimbos() async {
+    final remoto = await _carimboDe(await _sondaRemota());
+    if (remoto == null) {
+      return (
+        resultado: ConferenciaDoCarimbo.indeterminada,
+        tabelas: const <String>[],
+        bancoRespondeu: await _remotoAlcancavel(),
+      );
+    }
+    final aparelho = await _carimboDe(_client);
+    return (
+      resultado: compararCarimbos(aparelho: aparelho, remoto: remoto),
+      tabelas: tabelasDivergentes(aparelho: aparelho, remoto: remoto),
+      bancoRespondeu: true,
+    );
   }
 
   /// Confere que o banco online responde usando a conexão JÁ ABERTA.
@@ -949,20 +1004,39 @@ class TursoService {
       }
     }
 
-    // Sobram `semNovidade` e `indeterminado`, e nenhum dos dois prova conversa
-    // com o servidor: os dois são o `-info` parado, que é exatamente o que se
-    // vê com a internet desligada. Era essa a brecha por onde saía o
-    // "Sincronizado com o banco online ✓" em modo avião. Uma consulta curta
-    // desempata — e ela vai na conexão de sondagem, que fica quente entre os
-    // toques (ver _remotoAlcancavel).
-    if (!provaConversaComServidor(resultado) && !await _remotoAlcancavel()) {
+    // Até aqui só se sabe o que o libsql moveu. O que o usuário quer saber é
+    // outra coisa — "o que está no banco está no meu aparelho?" —, e essa
+    // pergunta só o próprio banco responde: o carimbo roda a MESMA consulta
+    // nos dois lados e compara. Sem carimbo remoto e sem `SELECT 1`, não houve
+    // conversa nenhuma: é o modo avião.
+    var conferencia = await _conferirCarimbos();
+    if (!conferencia.bancoRespondeu) {
       return SincronizacaoNaoConfirmada(_gravacoesPendentes);
+    }
+    if (_carimboAcusaAtraso(conferencia.resultado)) {
+      // Um pull que veio pela metade costuma completar na tentativa seguinte,
+      // e um push preso sobe nela — a mesma segunda chance dada ao envio, pelo
+      // mesmo motivo. Só depois dela é que a diferença vira erro.
+      debugPrint('[turso] carimbo diferente em '
+          '${conferencia.tabelas.join(", ")} — tentando de novo');
+      await _client!.sync().timeout(_timeoutSync);
+      conferencia = await _conferirCarimbos();
+      if (_carimboAcusaAtraso(conferencia.resultado)) {
+        return DadosForaDeSincronia(conferencia.resultado, conferencia.tabelas);
+      }
     }
 
     _enviadasNoUltimoSync = _gravacoesPendentes;
     await _zerarGravacoesPendentes();
     return null;
   }
+
+  /// True quando a conferência do carimbo apontou atraso de um dos lados.
+  /// `indeterminada` fica de fora de propósito: não dá para acusar atraso sem
+  /// ter conseguido carimbar — e o banco já respondeu, que era a dúvida antiga.
+  bool _carimboAcusaAtraso(ConferenciaDoCarimbo conferencia) =>
+      conferencia != ConferenciaDoCarimbo.iguais &&
+      conferencia != ConferenciaDoCarimbo.indeterminada;
 
   /// Apaga a replica local divergente e refaz o arquivo a partir do Turso.
   /// É a única saída quando o servidor recusa os frames locais — sem isso o

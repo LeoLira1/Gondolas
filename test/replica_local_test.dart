@@ -247,27 +247,157 @@ void main() {
   });
 
   group('o que o resultado do sync prova', () {
-    test('só o frame que andou prova conversa com o servidor', () {
-      // Com Wi-Fi e dados desligados o sync() volta calado e sem erro, e o
-      // `-info` fica parado — igualzinho a "não havia novidade". Tratar
-      // semNovidade como sucesso foi o que fez a tela anunciar "Sincronizado
-      // com o banco online ✓" em modo avião.
-      expect(provaConversaComServidor(ResultadoDoSync.confirmado), isTrue);
-      expect(provaConversaComServidor(ResultadoDoSync.semNovidade), isFalse);
-      expect(provaConversaComServidor(ResultadoDoSync.naoConfirmado), isFalse);
-      expect(provaConversaComServidor(ResultadoDoSync.indeterminado), isFalse);
+    test('sync mudo sem pendência não prova nada sozinho', () {
+      // O caso do modo avião: nada para enviar, nada se moveu — e é
+      // exatamente o que se vê online, em dia. Por isso `semNovidade` não
+      // pode virar sucesso sem perguntar ao banco.
+      const parado = EstadoDaReplica(geracao: 1, frame: 42);
+      expect(
+        avaliarSync(antes: parado, depois: parado, gravacoesPendentes: 0),
+        ResultadoDoSync.semNovidade,
+      );
+    });
+  });
+
+  group('carimbo do banco', () {
+    Map<String, AssinaturaTabela> carimbo({
+      int gondola = 3,
+      String marcaGondola = '2026-08-20T19:00:00',
+      int localizado = 10,
+      String marcaLocalizado = '2026-08-20T19:30:00',
+    }) =>
+        {
+          'gondola_layout':
+              AssinaturaTabela(contagem: gondola, marca: marcaGondola),
+          'estante_layout':
+              const AssinaturaTabela(contagem: 5, marca: '2026-08-19T10:00:00'),
+          'estoque_localizado':
+              AssinaturaTabela(contagem: localizado, marca: marcaLocalizado),
+          'galpao_racks':
+              const AssinaturaTabela(contagem: 7, marca: '2026-08-18T08:00:00'),
+          'paletes':
+              const AssinaturaTabela(contagem: 15, marca: '2026-01-02#15'),
+          'contagens_log': const AssinaturaTabela(contagem: -1, marca: '900'),
+        };
+
+    test('a consulta cobre todas as tabelas do carimbo, numa linha só', () {
+      final sql = sqlDoCarimbo();
+      expect(sql.split('SELECT').length - 1, greaterThan(1));
+      for (final tabela in tabelasDoCarimbo) {
+        expect(sql, contains('${tabela.nome}_n'));
+        expect(sql, contains('${tabela.nome}_m'));
+      }
+      // O log que só cresce não é contado: COUNT(*) nele cresceria para sempre,
+      // e o maior id já denuncia linha nova de graça.
+      expect(sql, contains('-1 AS contagens_log_n'));
     });
 
-    test('sync mudo sem pendência não é sucesso sozinho', () {
-      // O caso do modo avião: nada para enviar, nada se moveu.
-      const parado = EstadoDaReplica(geracao: 1, frame: 42);
-      final resultado = avaliarSync(
-        antes: parado,
-        depois: parado,
-        gravacoesPendentes: 0,
+    test('lê a linha devolvida pelo banco', () {
+      final linha = <String, dynamic>{
+        for (final t in tabelasDoCarimbo) ...{
+          '${t.nome}_n': 4,
+          '${t.nome}_m': 'x',
+        }
+      };
+      final lido = carimboDaLinha(linha);
+      expect(lido, isNotNull);
+      expect(lido!['paletes'],
+          const AssinaturaTabela(contagem: 4, marca: 'x'));
+    });
+
+    test('coluna faltando invalida o carimbo inteiro', () {
+      // Meia leitura seria pior que nenhuma: compararia o que sobrou e diria
+      // "iguais".
+      expect(carimboDaLinha(const {'gondola_layout_n': 1}), isNull);
+      expect(carimboDaLinha(null), isNull);
+    });
+
+    test('carimbos iguais são a prova de que o sync trouxe tudo', () {
+      expect(compararCarimbos(aparelho: carimbo(), remoto: carimbo()),
+          ConferenciaDoCarimbo.iguais);
+    });
+
+    test('linha a mais no banco online é pull que não veio inteiro', () {
+      // O buraco que o SELECT 1 não via: servidor no ar, aparelho velho.
+      expect(
+        compararCarimbos(aparelho: carimbo(), remoto: carimbo(localizado: 12)),
+        ConferenciaDoCarimbo.remotoAdiante,
       );
-      expect(resultado, ResultadoDoSync.semNovidade);
-      expect(provaConversaComServidor(resultado), isFalse);
+    });
+
+    test('linha a mais no aparelho é push que não subiu', () {
+      expect(
+        compararCarimbos(aparelho: carimbo(localizado: 12), remoto: carimbo()),
+        ConferenciaDoCarimbo.aparelhoAdiante,
+      );
+    });
+
+    test('mesma contagem com marca diferente é alteração no lugar', () {
+      // Quantidade corrigida não muda o número de linhas — sem a marca, a
+      // conferência diria "iguais" com valores diferentes na tela.
+      expect(
+        compararCarimbos(
+          aparelho: carimbo(),
+          remoto: carimbo(marcaLocalizado: '2026-08-20T20:45:00'),
+        ),
+        ConferenciaDoCarimbo.divergentes,
+      );
+    });
+
+    test('cada lado com o que o outro não tem não escolhe culpado', () {
+      expect(
+        compararCarimbos(
+          aparelho: carimbo(gondola: 4),
+          remoto: carimbo(localizado: 12),
+        ),
+        ConferenciaDoCarimbo.divergentes,
+      );
+    });
+
+    test('sem carimbo de um dos lados não há o que afirmar', () {
+      expect(compararCarimbos(aparelho: null, remoto: carimbo()),
+          ConferenciaDoCarimbo.indeterminada);
+      expect(compararCarimbos(aparelho: carimbo(), remoto: null),
+          ConferenciaDoCarimbo.indeterminada);
+    });
+
+    test('aponta as tabelas que não bateram', () {
+      expect(
+        tabelasDivergentes(
+          aparelho: carimbo(),
+          remoto: carimbo(gondola: 9, localizado: 12),
+        ),
+        ['gondola_layout', 'estoque_localizado'],
+      );
+      expect(tabelasDivergentes(aparelho: carimbo(), remoto: carimbo()),
+          isEmpty);
+    });
+
+    test('atraso não é confundido com replica divergente', () {
+      // Se casasse, o app apagaria o cache local por um simples atraso.
+      expect(
+        erroDeReplicaDivergente(
+            const DadosForaDeSincronia(ConferenciaDoCarimbo.remotoAdiante)),
+        isFalse,
+      );
+    });
+
+    test('a mensagem diz quem está atrasado', () {
+      expect(
+        descreverErroSync(
+            const DadosForaDeSincronia(ConferenciaDoCarimbo.remotoAdiante)),
+        contains('ainda não chegaram ao aparelho'),
+      );
+      expect(
+        descreverErroSync(
+            const DadosForaDeSincronia(ConferenciaDoCarimbo.aparelhoAdiante)),
+        contains('o banco online ainda não tem'),
+      );
+      expect(
+        descreverErroSync(
+            const DadosForaDeSincronia(ConferenciaDoCarimbo.divergentes)),
+        contains('dados diferentes'),
+      );
     });
   });
 

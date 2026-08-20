@@ -106,8 +106,8 @@ enum ResultadoDoSync {
   ///
   /// Então este caso não prova conversa nenhuma: é "o arquivo não se mexeu",
   /// que tanto pode ser "não havia novidade" quanto "não saiu daqui". Quem
-  /// chama confirma com o servidor antes de dizer que sincronizou (ver
-  /// `provaConversaComServidor`).
+  /// chama confirma com o próprio banco antes de dizer que sincronizou (ver
+  /// `compararCarimbos`).
   semNovidade,
 
   /// Não deu para ler o `-info` de um dos lados (arquivo ausente, formato novo
@@ -133,15 +133,193 @@ ResultadoDoSync avaliarSync({
       : ResultadoDoSync.semNovidade;
 }
 
-/// True quando o resultado, sozinho, já prova que o app falou com o servidor.
+// ----------------------------------------------------------------------------
+// Carimbo do banco: a prova de que o aparelho e o Turso têm os MESMOS dados.
+// ----------------------------------------------------------------------------
+//
+// O `-info` só conta o que o libsql confirmou, e um `SELECT 1` só diz que o
+// servidor está no ar. Nenhum dos dois enxerga o pull que voltou pela metade:
+// o servidor responde, o arquivo local fica velho, e o app anuncia
+// "Sincronizado ✓" sem ter recebido as gravações dos outros aparelhos.
+//
+// O carimbo fecha esse buraco sem depender de nada interno do libsql: a MESMA
+// consulta roda nos dois lados e as respostas são comparadas. Depois de um
+// sync que deu certo elas têm de bater — se não batem, alguém está atrasado,
+// e dá até para dizer quem.
+
+/// Assinatura de uma tabela num instante.
 ///
-/// Só `confirmado` prova: o `durable_frame_num`/`generation` do `-info` quem
-/// move é o servidor, então vê-los andar é prova de conversa. Todos os outros
-/// resultados são leituras de um arquivo que não se mexeu — e um arquivo
-/// parado é igualzinho com a internet ligada e desligada. Antes de dizer
-/// "sincronizado", quem chama precisa perguntar ao banco se ele está lá.
-bool provaConversaComServidor(ResultadoDoSync resultado) =>
-    resultado == ResultadoDoSync.confirmado;
+/// [contagem] pega inserção e remoção; [marca] pega alteração no lugar (uma
+/// quantidade corrigida não mexe no número de linhas, mas mexe no
+/// `atualizado_em`). Contagem -1 marca tabela que não é contada — ver
+/// `TabelaDoCarimbo.contarLinhas`.
+class AssinaturaTabela {
+  final int contagem;
+  final String marca;
+
+  const AssinaturaTabela({required this.contagem, required this.marca});
+
+  @override
+  bool operator ==(Object outro) =>
+      outro is AssinaturaTabela &&
+      outro.contagem == contagem &&
+      outro.marca == marca;
+
+  @override
+  int get hashCode => Object.hash(contagem, marca);
+
+  @override
+  String toString() => 'AssinaturaTabela($contagem, $marca)';
+}
+
+/// Uma tabela do carimbo e como assiná-la.
+class TabelaDoCarimbo {
+  final String nome;
+
+  /// Expressão SQL escalar que resume "o que mudou por último" na tabela.
+  final String marca;
+
+  /// COUNT(*) pega remoção, mas custa varrer a tabela nos DOIS lados a cada
+  /// Sincronizar. Fica desligado no log que só cresce, onde o maior id já
+  /// denuncia qualquer linha nova e sai de graça (é o rowid).
+  final bool contarLinhas;
+
+  const TabelaDoCarimbo(this.nome, this.marca, {this.contarLinhas = true});
+}
+
+/// As tabelas que entram no carimbo.
+///
+/// Só as que ESTE app cria (ver `_criarEsquema`): elas existem dos dois lados
+/// depois da carga inicial, então uma consulta que falha é problema de rede,
+/// não de esquema.
+///
+/// O `estoque_mestre` fica de fora de propósito: é do app irmão e pode não
+/// existir em todo banco. Uma tabela ausente derruba o carimbo INTEIRO, e
+/// perder a conferência toda para cobrir o catálogo é troca ruim. Fica o
+/// buraco anotado: catálogo desatualizado não é detectado aqui.
+const List<TabelaDoCarimbo> tabelasDoCarimbo = [
+  TabelaDoCarimbo('gondola_layout', "COALESCE(MAX(registrado_em),'')"),
+  TabelaDoCarimbo('estante_layout', "COALESCE(MAX(registrado_em),'')"),
+  TabelaDoCarimbo('estoque_localizado', "COALESCE(MAX(atualizado_em),'')"),
+  TabelaDoCarimbo('galpao_racks', "COALESCE(MAX(atualizado_em),'')"),
+  // Palete que sai da loja vira ativo = 0 sem mexer na contagem nem no
+  // criado_em; a soma dos ativos é o que denuncia isso.
+  TabelaDoCarimbo('paletes',
+      "COALESCE(MAX(criado_em),'') || '#' || COALESCE(SUM(ativo),0)"),
+  TabelaDoCarimbo('contagens_log', 'COALESCE(MAX(id),0)',
+      contarLinhas: false),
+];
+
+/// A consulta do carimbo: uma linha só, uma ida à rede, subconsultas que o
+/// SQLite resolve pelo índice (MAX de rowid é O(1); MAX de texto e COUNT
+/// varrem tabelas pequenas).
+String sqlDoCarimbo() {
+  final campos = <String>[];
+  for (final tabela in tabelasDoCarimbo) {
+    campos.add(tabela.contarLinhas
+        ? '(SELECT COUNT(*) FROM ${tabela.nome}) AS ${tabela.nome}_n'
+        : '-1 AS ${tabela.nome}_n');
+    campos.add(
+        '(SELECT ${tabela.marca} FROM ${tabela.nome}) AS ${tabela.nome}_m');
+  }
+  return 'SELECT ${campos.join(', ')}';
+}
+
+/// Lê a linha devolvida por `sqlDoCarimbo()`. Null quando falta coluna — ou
+/// seja, quando a resposta não é a que esta versão do app sabe interpretar.
+Map<String, AssinaturaTabela>? carimboDaLinha(Map<String, dynamic>? linha) {
+  if (linha == null) return null;
+  final carimbo = <String, AssinaturaTabela>{};
+  for (final tabela in tabelasDoCarimbo) {
+    final contagem = linha['${tabela.nome}_n'];
+    final marca    = linha['${tabela.nome}_m'];
+    if (contagem == null || marca == null) return null;
+    carimbo[tabela.nome] = AssinaturaTabela(
+      contagem: contagem is int ? contagem : int.tryParse('$contagem') ?? -1,
+      marca:    '$marca',
+    );
+  }
+  return carimbo;
+}
+
+/// O que a comparação dos dois carimbos permite afirmar.
+enum ConferenciaDoCarimbo {
+  /// Mesmos dados dos dois lados. É a única prova de sincronismo que existe
+  /// sem espiar as tripas do libsql.
+  iguais,
+
+  /// O banco online tem linhas que não chegaram ao aparelho: o pull não veio
+  /// inteiro. Era este o caso que passava batido como "Sincronizado ✓".
+  remotoAdiante,
+
+  /// O aparelho tem linhas que o banco online não tem: o push não subiu.
+  aparelhoAdiante,
+
+  /// Diferem sem uma direção clara (alteração no lugar, ou os dois lados com
+  /// coisa que o outro não tem).
+  divergentes,
+
+  /// Não deu para carimbar um dos lados. Nada a afirmar.
+  indeterminada,
+}
+
+/// Compara os dois carimbos.
+ConferenciaDoCarimbo compararCarimbos({
+  required Map<String, AssinaturaTabela>? aparelho,
+  required Map<String, AssinaturaTabela>? remoto,
+}) {
+  if (aparelho == null || remoto == null) {
+    return ConferenciaDoCarimbo.indeterminada;
+  }
+  var remotoTemMais   = false;
+  var aparelhoTemMais = false;
+  var marcasDiferem   = false;
+  for (final tabela in tabelasDoCarimbo) {
+    final aqui = aparelho[tabela.nome];
+    final la   = remoto[tabela.nome];
+    if (aqui == null || la == null) return ConferenciaDoCarimbo.indeterminada;
+    if (aqui == la) continue;
+    if (aqui.contagem == la.contagem) {
+      marcasDiferem = true;
+    } else if (la.contagem > aqui.contagem) {
+      remotoTemMais = true;
+    } else {
+      aparelhoTemMais = true;
+    }
+  }
+  if (!remotoTemMais && !aparelhoTemMais && !marcasDiferem) {
+    return ConferenciaDoCarimbo.iguais;
+  }
+  if (remotoTemMais && !aparelhoTemMais) return ConferenciaDoCarimbo.remotoAdiante;
+  if (aparelhoTemMais && !remotoTemMais) return ConferenciaDoCarimbo.aparelhoAdiante;
+  return ConferenciaDoCarimbo.divergentes;
+}
+
+/// Nomes das tabelas cujas assinaturas não bateram — o que vai no log e no
+/// texto do erro técnico, para não caçar diferença no escuro.
+List<String> tabelasDivergentes({
+  required Map<String, AssinaturaTabela>? aparelho,
+  required Map<String, AssinaturaTabela>? remoto,
+}) {
+  if (aparelho == null || remoto == null) return const [];
+  return [
+    for (final tabela in tabelasDoCarimbo)
+      if (aparelho[tabela.nome] != remoto[tabela.nome]) tabela.nome,
+  ];
+}
+
+/// O sync voltou, o banco respondeu, e mesmo assim os dois lados têm dados
+/// diferentes. Não é perda: é atraso — de um lado ou do outro.
+class DadosForaDeSincronia implements Exception {
+  final ConferenciaDoCarimbo conferencia;
+  final List<String> tabelas;
+
+  const DadosForaDeSincronia(this.conferencia, [this.tabelas = const []]);
+
+  @override
+  String toString() =>
+      'DadosForaDeSincronia: ${conferencia.name} (${tabelas.join(", ")})';
+}
 
 /// O `sync()` voltou sem erro, mas nada saiu do aparelho.
 ///
@@ -248,6 +426,25 @@ String descreverErroSync(Object e) {
   if (e is BaseLocalNaoBaixada) {
     return 'sem conexão para baixar a base do cache local — '
         'conecte à internet e sincronize de novo';
+  }
+  if (e is DadosForaDeSincronia) {
+    // Nada se perdeu — os dois lados estão inteiros, um só está atrasado. A
+    // mensagem diz QUEM está atrasado porque a consequência muda: dados que
+    // não chegaram significam mapa velho na tela; dados que não subiram
+    // significam lançamento ainda preso no aparelho.
+    switch (e.conferencia) {
+      case ConferenciaDoCarimbo.remotoAdiante:
+        return 'o banco online tem dados que ainda não chegaram ao aparelho — '
+            'sincronize de novo';
+      case ConferenciaDoCarimbo.aparelhoAdiante:
+        return 'há gravações no aparelho que o banco online ainda não tem — '
+            'sincronize de novo';
+      case ConferenciaDoCarimbo.iguais:
+      case ConferenciaDoCarimbo.indeterminada:
+      case ConferenciaDoCarimbo.divergentes:
+        return 'o aparelho e o banco online estão com dados diferentes — '
+            'sincronize de novo';
+    }
   }
   if (e is SincronizacaoNaoConfirmada) {
     if (e.pendentes <= 0) {
