@@ -952,81 +952,79 @@ class TursoService {
   }
 
   /// Roda o `client.sync()` e CONFERE que ele de fato falou com o servidor.
-  /// Devolve null quando o envio foi confirmado, ou o erro a reportar.
+  /// Devolve null quando o sync foi confirmado, ou o erro a reportar.
   ///
   /// A conferência existe porque o `sync()` do libsql devolve sucesso quando a
-  /// requisição HTTP não completa — o mesmo defeito que `_estabelecerBaseLocal`
-  /// já tratava na carga inicial, mas que no sync de rotina ninguém checava.
-  /// Era ele que fazia o botão Sincronizar responder "Sincronizado ✓" em
-  /// menos de um segundo, sem rede, sem ter enviado nada.
+  /// requisição HTTP não completa — era ele que fazia o botão Sincronizar
+  /// responder "Sincronizado ✓" em segundos, sem rede, sem ter enviado nada.
   ///
-  /// A conferência começa no `-info` (ver `avaliarSync`), que custa a leitura
-  /// de um arquivo de poucos bytes: frame que ANDOU é prova de conversa, e só
-  /// ele — o servidor é quem move aquele número. Frame parado não prova nada,
-  /// com ou sem gravação esperando, porque é o mesmo que se vê em modo avião.
-  /// Por isso todo sync que não moveu o arquivo termina numa consulta curta ao
-  /// banco online, na conexão de sondagem que fica quente entre os toques.
+  /// Quem julga é o CARIMBO (ver `compararCarimbos`): a mesma consulta nos
+  /// dois lados, comparada. Ele responde a pergunta que interessa — "o que
+  /// está no banco está aqui, e o que está aqui está lá?" — e responde sobre
+  /// os dados, não sobre contadores.
+  ///
+  /// O `-info` ficou de reserva, para quando não dá para carimbar. Ele conta o
+  /// que o libsql moveu, e isso ENGANA nos dois sentidos: um pull também move
+  /// o frame (parece push aceito) e uma gravação que não mudou byte nenhum não
+  /// move nada, deixando o contador de pendências preso em 1 para sempre —
+  /// que era o app acusando "o envio não saiu" a cada toque, sem ter o que
+  /// enviar. Carimbos iguais desfazem essa acusação: se o banco tem tudo o que
+  /// o aparelho tem, não há envio preso, e o contador estava velho.
   Future<Object?> _sincronizarReplica() async {
     final antes = await _estadoAtualDaReplica();
     await _client!.sync().timeout(_timeoutSync);
-    var depois = await _estadoAtualDaReplica();
-    var resultado = avaliarSync(
+    final peloFrame = avaliarSync(
       antes: antes,
-      depois: depois,
+      depois: await _estadoAtualDaReplica(),
       gravacoesPendentes: _gravacoesPendentes,
     );
 
-    // Push que não saiu ainda não é veredito: o motivo mais comum é a
-    // requisição ter se perdido no caminho, e era isso que deixava o usuário
-    // preso — cada toque em Sincronizar repetia a mesma tentativa única e a
-    // mesma acusação de "verifique a internet", inclusive com a internet boa.
-    //
-    // A sonda vem ANTES da segunda tentativa de propósito: sem rede, um
-    // segundo sync() só gastaria o timeout inteiro para falhar igual, e quem
-    // está sem sinal é justamente quem menos pode esperar. Ela também é o que
-    // a mensagem precisa saber: banco no ar muda o conselho de "verifique a
-    // internet" para "tente de novo".
-    if (resultado == ResultadoDoSync.naoConfirmado) {
-      final bancoNoAr = await _remotoAlcancavel();
-      if (bancoNoAr) {
-        await _client!.sync().timeout(_timeoutSync);
-        depois = await _estadoAtualDaReplica();
-        resultado = avaliarSync(
-          antes: antes,
-          depois: depois,
-          gravacoesPendentes: _gravacoesPendentes,
-        );
-      }
-      if (resultado == ResultadoDoSync.naoConfirmado) {
-        // NÃO zera as pendências: as gravações continuam no aparelho
-        // esperando o próximo Sincronizar, e é isso que a mensagem vai dizer.
-        return SincronizacaoNaoConfirmada(_gravacoesPendentes, bancoNoAr);
-      }
-    }
-
-    // Até aqui só se sabe o que o libsql moveu. O que o usuário quer saber é
-    // outra coisa — "o que está no banco está no meu aparelho?" —, e essa
-    // pergunta só o próprio banco responde: o carimbo roda a MESMA consulta
-    // nos dois lados e compara. Sem carimbo remoto e sem `SELECT 1`, não houve
-    // conversa nenhuma: é o modo avião.
+    // Sem carimbo remoto e sem `SELECT 1` não houve conversa nenhuma: é o modo
+    // avião, em que o sync volta calado e sem erro.
     var conferencia = await _conferirCarimbos();
     if (!conferencia.bancoRespondeu) {
       return SincronizacaoNaoConfirmada(_gravacoesPendentes);
     }
+
     if (_carimboAcusaAtraso(conferencia.resultado)) {
       // Um pull que veio pela metade costuma completar na tentativa seguinte,
-      // e um push preso sobe nela — a mesma segunda chance dada ao envio, pelo
-      // mesmo motivo. Só depois dela é que a diferença vira erro.
+      // e um push preso sobe nela. Só depois disso a diferença vira erro.
       debugPrint('[turso] carimbo diferente em '
-          '${conferencia.tabelas.join(", ")} — tentando de novo');
+          '${conferencia.tabelas.join(", ")} '
+          '(${conferencia.resultado.name}) — tentando de novo');
       await _client!.sync().timeout(_timeoutSync);
       conferencia = await _conferirCarimbos();
       if (_carimboAcusaAtraso(conferencia.resultado)) {
         return DadosForaDeSincronia(conferencia.resultado, conferencia.tabelas);
       }
+    } else if (conferencia.resultado == ConferenciaDoCarimbo.indeterminada) {
+      // Reserva: sem carimbo, resta o `-info`. Frame parado com gravação
+      // esperando é o sinal (fraco) de que o push não saiu.
+      if (peloFrame == ResultadoDoSync.naoConfirmado) {
+        await _client!.sync().timeout(_timeoutSync);
+        final segundaLeitura = avaliarSync(
+          antes: antes,
+          depois: await _estadoAtualDaReplica(),
+          gravacoesPendentes: _gravacoesPendentes,
+        );
+        if (segundaLeitura == ResultadoDoSync.naoConfirmado) {
+          return SincronizacaoNaoConfirmada(_gravacoesPendentes, true);
+        }
+      }
+    } else if (_gravacoesPendentes > 0) {
+      // Carimbos iguais: está tudo lá. Se ainda havia pendência contada, ela
+      // era de uma gravação que não mudou nada (DELETE de zero linha, UPDATE
+      // sem efeito) — some no _zerarGravacoesPendentes logo abaixo.
+      debugPrint('[turso] carimbos iguais com $_gravacoesPendentes '
+          'pendente(s) contada(s): contador velho, zerando');
     }
 
-    _enviadasNoUltimoSync = _gravacoesPendentes;
+    // O número do snackbar só vale se frames REALMENTE subiram. Contador velho
+    // (pendência de gravação que não mudou nada) diria "1 enviada" sem ter
+    // enviado — de novo o app se gabando de trabalho que não fez. Na dúvida,
+    // fica no "Sincronizado ✓" sem número.
+    _enviadasNoUltimoSync =
+        peloFrame == ResultadoDoSync.confirmado ? _gravacoesPendentes : 0;
     await _zerarGravacoesPendentes();
     return null;
   }

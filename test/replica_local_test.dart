@@ -391,7 +391,7 @@ void main() {
       expect(
         descreverErroSync(
             const DadosForaDeSincronia(ConferenciaDoCarimbo.aparelhoAdiante)),
-        contains('o banco online ainda não tem'),
+        contains('continua salvo aqui'),
       );
       expect(
         descreverErroSync(
