@@ -382,21 +382,55 @@ class EstanteScene extends StatefulWidget {
 
 class _EstanteSceneState extends State<EstanteScene>
     with SceneGestureGuard<EstanteScene> {
-  Camera _camera = const Camera(
-    rotY:   0.5,
-    rotX:   0.25,
-    dist:   9.0,
-    target: Vec3(0, 2.1, 0),
-  );
+  static Camera _cameraInicial() => const Camera(
+        rotY:   0.5,
+        rotX:   0.25,
+        dist:   _distInicial,
+        target: Vec3(0, EstanteGeometry.alturaTotal / 2, 0),
+      );
+
+  Camera _camera = _cameraInicial();
   final _painterKey = GlobalKey();
 
   Camera? _cameraAtGestureStart;
+
+  // Zoom com a mesma folga da Estante 8 (Edr300Scene): o mínimo de 0.8 é o que
+  // deixa colar numa caixa só — antes o piso era 4.0 e as caixas de uma célula
+  // ficavam indistinguíveis. O teto continua em 18 (e não nos 12 da EDR-300)
+  // porque a estante de madeira tem 6 m de largura: a 12 ela já não cabe
+  // inteira numa tela de celular em pé.
+  static const double _distMin     = 0.8;
+  static const double _distMax     = 18.0;
+  static const double _distInicial = 9.0;
+
+  // Pan: o alvo não escapa de uma caixa em volta da estante, pra não ser
+  // possível arrastar até perder o modelo de vista.
+  static const double _panMargem = 0.7;
+
+  @override
+  void didUpdateWidget(EstanteScene old) {
+    super.didUpdateWidget(old);
+    // O carrossel reaproveita este State ao trocar de estante (1→2→5→…):
+    // todas têm a mesma armação, mas o pan feito na anterior deixaria a
+    // seguinte fora de quadro. Recentraliza o alvo preservando ângulo e zoom.
+    if (old.estanteAtual != widget.estanteAtual) {
+      _camera = Camera(
+        rotY:   _camera.rotY,
+        rotX:   _camera.rotX,
+        dist:   _camera.dist,
+        target: Vec3(0, EstanteGeometry.alturaTotal / 2, 0),
+      );
+    }
+  }
 
   void _onScaleStart(ScaleStartDetails d) {
     beginGesture(d);
     _cameraAtGestureStart = _camera;
   }
 
+  // Mesmo esquema de câmera da Estante 8 (Edr300Scene), da Estante Parede e do
+  // mapa da loja: um dedo arrasta (pan — o ponto tocado acompanha o dedo),
+  // dois dedos orbitam e dão zoom com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
     final origin = gestureOrigin;
     final c0     = _cameraAtGestureStart;
@@ -410,11 +444,44 @@ class _EstanteSceneState extends State<EstanteScene>
 
     final delta = d.focalPoint - origin;
 
+    if (d.pointerCount >= 2) {
+      // Dois dedos: orbita (arrastar) + zoom (pinça).
+      setState(() {
+        _camera = Camera(
+          rotY:   c0.rotY - delta.dx * 0.008,
+          rotX:   (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
+          dist:   (c0.dist / d.scale).clamp(_distMin, _distMax),
+          target: _camera.target,
+        );
+      });
+      return;
+    }
+
+    // Um dedo: pan no plano da tela — converte pixels em metros pela altura do
+    // viewport e pelo FOV do painter (45°, então meia-abertura de 22,5°), e
+    // desloca o alvo ao longo dos eixos "direita" e "cima" da própria câmera.
+    final rb  = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    final hPx = rb?.size.height ?? 600.0;
+    final worldPerPx = 2 * c0.dist * math.tan(22.5 * math.pi / 180) / hPx;
+    final dxW = delta.dx * worldPerPx;
+    final dyW = delta.dy * worldPerPx;
+
+    final sinY = math.sin(c0.rotY), cosY = math.cos(c0.rotY);
+    final sinX = math.sin(c0.rotX), cosX = math.cos(c0.rotX);
+    // right = (cosY, 0, -sinY); up = (-sinY·sinX, cosX, -cosY·sinX)
+    final limXZ = EstanteGeometry.larguraTotal / 2 + _panMargem;
+    final limY  = EstanteGeometry.alturaTotal + _panMargem;
+
     setState(() {
-      _camera = c0.copyWith(
-        rotY: c0.rotY - delta.dx * 0.008,
-        rotX: (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
-        dist: (c0.dist / d.scale).clamp(4.0, 18.0),
+      _camera = Camera(
+        rotY:   c0.rotY,
+        rotX:   c0.rotX,
+        dist:   c0.dist,
+        target: Vec3(
+          (c0.target.x - cosY * dxW - sinY * sinX * dyW).clamp(-limXZ, limXZ),
+          (c0.target.y + cosX * dyW).clamp(-_panMargem, limY),
+          (c0.target.z + sinY * dxW - cosY * sinX * dyW).clamp(-limXZ, limXZ),
+        ),
       );
     });
   }
