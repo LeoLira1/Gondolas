@@ -19,6 +19,7 @@ on:
       - "claude/auto-sync-inventory-count-bx9jdg"
       - "claude/investigar-travamento-ambne8"
       - "claude/product-sync-efficiency-x3udku"
+      - "claude/estantes-madeira-edr300-5a604x"
   workflow_dispatch:
 
 jobs:
