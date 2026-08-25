@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'baixa_por_contagem.dart';
 import 'baixa_por_contagem_service.dart';
 import 'baixa_por_contagem_ui.dart';
+import 'barracao_page.dart';
 import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_parede_scene.dart';
@@ -672,6 +673,13 @@ class _LojaPageState extends State<LojaPage> {
                           ),
                         ),
                         const SizedBox(width: 10),
+                        _BarracaoButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const BarracaoPage()),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
                         _ModoConferenciaToggle(
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
@@ -915,6 +923,36 @@ class _GalpaoButton extends StatelessWidget {
           border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
         ),
         child: const Icon(Icons.warehouse_outlined,
+            color: Color(0xFF8a877f), size: 20),
+      ),
+    );
+  }
+}
+
+// ── _BarracaoButton ──────────────────────────────────────────────────────────
+
+/// Porta de entrada do mapa do barracão. Fica ao lado da do galpão, e pelo
+/// mesmo motivo: o barracão é um terceiro prédio, não uma peça a mais do
+/// salão. O ícone é o de caixas empilhadas, e não o de galpão — os dois botões
+/// são vizinhos, e dois desenhos iguais lado a lado não dizem qual é qual.
+class _BarracaoButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _BarracaoButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color:        const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: const Icon(Icons.inventory_2_outlined,
             color: Color(0xFF8a877f), size: 20),
       ),
     );

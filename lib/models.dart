@@ -355,6 +355,21 @@ const Color corConferenciaCiano = Color(0xFF22d3ee);
 /// estante de mesmo número.
 const String localTipoGalpao = 'galpao';
 
+/// Valor de `local_tipo` dos endereços do BARRACÃO em estoque_localizado.
+///
+/// Quarto tipo da tabela compartilhada, ao lado de 'gondola', 'estante' e
+/// 'galpao', pelo mesmo motivo que o galpão entrou nela: sem o espelho, o que
+/// está endereçado no barracão ficaria fora do inventário cíclico e do Modo
+/// Conferência dos apps irmãos.
+///
+/// `local_num` é o **id** da linha em `barracao_enderecos`, não o número do
+/// rótulo: o rótulo é texto ('BAR-07') e a coluna é inteira. face_ou_coluna e
+/// andar_ou_nivel ficam em 0 — o palete do barracão não tem face, coluna nem
+/// nível, ele É o endereço. Como no galpão, os ids se sobrepõem aos números de
+/// estante e de posição do galpão: qualquer agrupamento de estoque_localizado
+/// tem de levar o local_tipo na chave, nunca só o local_num.
+const String localTipoBarracao = 'barracao';
+
 /// Chave que identifica unicamente um endereço físico + produto, usada para
 /// casar linhas de estoque_localizado com o conjunto de endereços
 /// desatualizados (Fase 2 — aviso de endereço desatualizado).

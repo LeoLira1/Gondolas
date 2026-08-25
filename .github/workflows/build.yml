@@ -20,6 +20,7 @@ on:
       - "claude/investigar-travamento-ambne8"
       - "claude/product-sync-efficiency-x3udku"
       - "claude/estantes-madeira-edr300-5a604x"
+      - "claude/barracao-camda-3d-scene-cd1b73"
   workflow_dispatch:
 
 jobs:

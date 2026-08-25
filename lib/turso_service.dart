@@ -817,6 +817,30 @@ class TursoService {
       )
     ''');
 
+    // Endereços do BARRACÃO: uma linha por palete no chão (ver
+    // barracao_config.dart). Uma tabela só, e não o par estrutura + ocupação
+    // do galpão, porque aqui o palete É o endereço e leva um produto só — não
+    // há pilha para renumerar nem vaga sem palete para guardar.
+    //
+    // Quantos paletes existem é DADO, não código: a tabela é semeada UMA vez
+    // a partir do layout padrão (BarracaoService.garantirSeed) e daí em diante
+    // manda no que o app desenha. `rotulo` é UNIQUE porque é o endereço
+    // etiquetado no palete — dois 'BAR-07' no mesmo barracão não são endereço,
+    // são ambiguidade. pos_x/pos_z estão em CENTÍMETROS, a unidade da planta
+    // do barracão (a loja e o galpão usam metros).
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS barracao_enderecos (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        rotulo         TEXT    NOT NULL UNIQUE,
+        pos_x          REAL    NOT NULL,
+        pos_z          REAL    NOT NULL,
+        produto_codigo TEXT    NOT NULL DEFAULT '',
+        produto_nome   TEXT    NOT NULL DEFAULT '',
+        quantidade     REAL    NOT NULL DEFAULT 0,
+        atualizado_em  TEXT    NOT NULL
+      )
+    ''');
+
     // Índices das buscas mais quentes (só tabelas do próprio app): evitam full
     // scan em fetchLayout / fetchLayoutEstante / buscarProdutoEstante e na
     // busca global. IF NOT EXISTS torna idempotente; estoque_localizado já tem
@@ -855,6 +879,12 @@ class TursoService {
     await client.execute(
       'CREATE INDEX IF NOT EXISTS idx_galpao_racks_produto '
       'ON galpao_racks (produto_codigo)',
+    );
+    // Mesmo predicado, do outro prédio: "onde está este produto no barracão".
+    // O índice implícito do UNIQUE(rotulo) não serve — a coluna dele é outra.
+    await client.execute(
+      'CREATE INDEX IF NOT EXISTS idx_barracao_enderecos_produto '
+      'ON barracao_enderecos (produto_codigo)',
     );
   }
 
