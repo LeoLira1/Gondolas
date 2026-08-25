@@ -1232,6 +1232,14 @@ class _FaixaDestaqueProduto extends StatelessWidget {
 ///
 /// Vazio: busca de produto (qualquer parte do nome, código, dois termos
 /// soltos), últimos lançados como atalho, quantidade e Lançar.
+///
+/// O painel também serve o BARRACÃO (ver barracao_page.dart), que é o outro
+/// lugar do app onde se atribui um produto a um endereço e se corrige a
+/// quantidade dele. O que muda entre os dois prédios é só COMO o endereço se
+/// chama — no galpão '52 · N3', no barracão 'BAR-07' —, e é por isso que os
+/// três rótulos abaixo ([rotuloEndereco], [subtitulo], [textoVagaLivre]) são
+/// parâmetros com o texto do galpão como padrão: o fluxo é um só, e um painel
+/// paralelo no barracão seria a mesma tela mantida em dois lugares.
 class PainelEnderecoGalpao extends StatefulWidget {
   final ToqueGalpao                toque;
   final Map<int, List<RackGalpao>> pilhas;
@@ -1271,6 +1279,18 @@ class PainelEnderecoGalpao extends StatefulWidget {
   /// (testes, uso offline) mostra só o que já veio em [saldos].
   final Future<SaldoProduto?> Function(String codigo)? onConsultarSaldo;
 
+  /// Como o endereço se chama nesta tela. Null usa o do galpão,
+  /// '<posição> · N<nível>'.
+  final String? rotuloEndereco;
+
+  /// Linha cinza ao lado do endereço. Null usa a do galpão,
+  /// 'Rua n · k de 4 na pilha'.
+  final String? subtitulo;
+
+  /// Frase verde do endereço livre. Null usa a do galpão, que fala de entrar
+  /// no topo da pilha — coisa que só existe lá.
+  final String? textoVagaLivre;
+
   const PainelEnderecoGalpao({
     super.key,
     required this.toque,
@@ -1287,6 +1307,9 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.onAlternarDestaque,
     this.saldos             = const {},
     this.onConsultarSaldo,
+    this.rotuloEndereco,
+    this.subtitulo,
+    this.textoVagaLivre,
   });
 
   @override
@@ -1296,6 +1319,14 @@ class PainelEnderecoGalpao extends StatefulWidget {
 class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   final _buscaCtrl = TextEditingController();
   final _qtdCtrl   = TextEditingController();
+
+  /// Nome do endereço aberto: o que a tela dona do painel passou, ou o do
+  /// galpão. Fica num getter só para os cinco lugares que escrevem o endereço
+  /// (cabeçalho, botão Lançar, título do teclado e os dois avisos do 0) não
+  /// poderem divergir entre si.
+  String get _rotulo =>
+      widget.rotuloEndereco ??
+      '${widget.toque.posicao} · N${widget.toque.ordem}';
 
   List<Produto> _resultados  = const [];
   Produto?      _produtoSel;
@@ -1405,7 +1436,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final nova  = await showDialog<double>(
       context: context,
       builder: (_) => _DialogAjustarQuantidade(
-        toque:        t,
+        rotulo:       _rotulo,
         rack:         rack,
         saldo:        _saldo,
         podeEsvaziar: widget.onEsvaziar != null,
@@ -1443,9 +1474,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Endereço: número global + nível derivado da ordem na pilha.
+              // Endereço: no galpão, número global + nível derivado da ordem
+              // na pilha; no barracão, o rótulo etiquetado no palete.
               Text(
-                '${t.posicao} · N${t.ordem}',
+                _rotulo,
                 style: const TextStyle(
                   color:      corCamda,
                   fontSize:   22,
@@ -1457,10 +1489,11 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                 child: Padding(
                   padding: const EdgeInsets.only(top: 5),
                   child: Text(
-                    rua == null
-                        ? ''
-                        : 'Rua ${rua.numero} · ${pilha.length} de '
-                          '${GalpaoConfig.niveisMax} na pilha',
+                    widget.subtitulo ??
+                        (rua == null
+                            ? ''
+                            : 'Rua ${rua.numero} · ${pilha.length} de '
+                              '${GalpaoConfig.niveisMax} na pilha'),
                     style: const TextStyle(
                         color: Color(0xFF8a9aa8), fontSize: 12),
                   ),
@@ -1772,8 +1805,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Vaga livre — carga nova entra como N${t.ordem}, no topo '
-                'da pilha.',
+                widget.textoVagaLivre ??
+                    'Vaga livre — carga nova entra como N${t.ordem}, no topo '
+                    'da pilha.',
                 style:
                     const TextStyle(color: Color(0xFF6fcf97), fontSize: 12),
               ),
@@ -1974,7 +2008,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                 backgroundColor: const Color(0xFF2e6b46),
                 padding: const EdgeInsets.symmetric(vertical: 11),
               ),
-              child: Text('Lançar em ${t.posicao} · N${t.ordem}'),
+              child: Text('Lançar em $_rotulo'),
             ),
           ),
         ],
@@ -2030,7 +2064,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 /// número que zera a diferença: é quase sempre ele que se quer digitar — o
 /// caso de "sistema 57, endereçado 14,3, e este é o único palete do produto".
 class _DialogAjustarQuantidade extends StatefulWidget {
-  final ToqueGalpao   toque;
+  /// Nome do endereço, já montado pelo painel (ver
+  /// [PainelEnderecoGalpao.rotuloEndereco]) — o dialog não sabe de que prédio
+  /// veio o rack, só como o endereço se chama.
+  final String        rotulo;
   final RackGalpao    rack;
   final SaldoProduto? saldo;
 
@@ -2043,7 +2080,7 @@ class _DialogAjustarQuantidade extends StatefulWidget {
   final bool temAcima;
 
   const _DialogAjustarQuantidade({
-    required this.toque,
+    required this.rotulo,
     required this.rack,
     required this.saldo,
     this.podeEsvaziar = false,
@@ -2105,7 +2142,7 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
 
   @override
   Widget build(BuildContext context) {
-    final t         = widget.toque;
+    final rotulo    = widget.rotulo;
     final sugestao  = _sugestao;
     final digitada  = _digitada;
 
@@ -2114,7 +2151,7 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
 
     return AlertDialog(
       backgroundColor: const Color(0xFF141a22),
-      title: Text('Quantidade em ${t.posicao} · N${t.ordem}',
+      title: Text('Quantidade em $rotulo',
           style: const TextStyle(color: Colors.white, fontSize: 16)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2181,11 +2218,10 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
                   Expanded(
                     child: Text(
                       widget.temAcima
-                          ? '0 tira o palete de ${t.posicao} · N${t.ordem}. '
-                            'Os racks de cima descem um nível e a ordem é '
-                            'renumerada.'
-                          : '0 tira o palete de ${t.posicao} · N${t.ordem} — '
-                            'o endereço fica livre.',
+                          ? '0 tira o palete de $rotulo. Os racks de cima '
+                            'descem um nível e a ordem é renumerada.'
+                          : '0 tira o palete de $rotulo — o endereço fica '
+                            'livre.',
                       style: const TextStyle(
                           color: corSaindo,
                           fontSize: 11,

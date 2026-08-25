@@ -12,6 +12,7 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 - Sincronização de quantidades com os apps `inventariocamda` e `camda-estoque` via `estoque_localizado`
 - **Baixa automática da venda pela contagem** — o que foi vendido sai sozinho dos racks e prateleiras
 - Mapa 3D do galpão de racks (botão na barra do mapa da loja)
+- Mapa 3D do barracão de paletes (botão ao lado do galpão, na mesma barra)
 
 ## Galpão de racks
 
@@ -118,6 +119,61 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   do galpão usa TODOS os pendentes, sem o filtro de categorias de depósito da
   loja — herbicida, adubo e óleo têm endereço justamente aqui. O banner da
   loja ganhou o atalho `N no galpão`, que abre o galpão já em conferência.
+
+## Barracão
+
+Terceiro prédio, ao lado da loja e do galpão, com o botão de caixas na mesma
+barra do mapa da loja. Aqui não há rack nem pilha: a unidade de armazenagem é
+o **palete de madeira apoiado no chão, com um bag de 1000 kg em cima**, e cada
+palete é UM endereço, com UM produto.
+
+- **Obra**: retângulo de 3500 × 1000 cm, pé-direito 600, paredes de 20. As
+  aberturas ficam todas na parede de 35 m em `Z = 0` — porta (600–800, vão de
+  200 × 300), portão (1300–1800, 500 × 450) e porta (2300–2500, 200 × 300) —,
+  cada uma com verga até o pé-direito. As outras três paredes são cheias. A
+  planta inteira está em `lib/barracao_config.dart`, a única fonte da
+  geometria; os panos cheios da frente são DERIVADOS das aberturas, então
+  mexer numa abertura não deixa um pano velho para trás.
+- **Unidade: centímetros.** A planta, as colunas `pos_x`/`pos_z` no Turso e as
+  coordenadas do mundo 3D da cena do barracão são todas em cm — a loja e o
+  galpão são em metros. Não colide porque o renderizador é adimensional e cada
+  cena monta a câmera a partir do seu próprio envelope; o que não pode é
+  misturar as duas unidades dentro do barracão.
+- **Layout**: fileiras paralelas à parede do fundo, começando encostadas nela e
+  avançando para a frente. Passo de 135 cm em X (palete de 120 + 15 de folga) e
+  120 cm em Z (100 + 20). A última fileira para onde ainda sobram 400 cm de
+  corredor de manobra da empilhadeira — o que hoje dá 4 fileiras de 25 paletes,
+  com 500 cm livres na frente. **Esses números não estão fixados no código**:
+  são o que o layout padrão calcula, e o layout padrão só serve de semente.
+- **Endereços em `barracao_enderecos`** (id, rótulo, `pos_x`, `pos_z`, produto
+  e quantidade), com o rótulo `UNIQUE`. A numeração é contínua no barracão
+  inteiro, sem reiniciar por fileira: `BAR-01`, `BAR-02`, … `BAR-100`. A
+  tabela é semeada UMA vez, quando está vazia — ao contrário de
+  `galpao_posicoes`, que é reescrita do código a cada abertura. A diferença é
+  deliberada: no galpão a planta é fixa e o código manda; aqui paletes entram e
+  saem do chão, e reescrever apagaria justamente o cadastro que a tabela existe
+  para guardar. **O app desenha o que vier do banco**, não o que o config
+  calcula.
+- **Espelho em `estoque_localizado`** com `local_tipo = 'barracao'` e
+  `local_num` = id da linha, pelo mesmo motivo do galpão: sem ele, o que está
+  endereçado no barracão ficaria fora do inventário cíclico e do Modo
+  Conferência dos apps irmãos. `face_ou_coluna` e `andar_ou_nivel` ficam em 0 —
+  o palete não tem face, coluna nem nível, ele É o endereço.
+- **Câmera padrão isométrica, de frente para a parede das aberturas**, com os
+  35 m enquadrados (o enquadramento é calculado a partir do envelope, como no
+  galpão). A elevação de 0,92 rad é alta o bastante para a vista passar por
+  cima da parede de 6 m e alcançar a fileira da frente — a sombra geométrica da
+  parede cobre ~458 cm para dentro, e a fileira da frente começa a 520. O giro
+  do usuário não desce abaixo de 0,55 rad pelo mesmo motivo: mais baixo que
+  isso, a parede cobre o salão inteiro.
+- **O toque num palete abre o painel do galpão**, não um fluxo paralelo:
+  `PainelEnderecoGalpao` é literalmente o mesmo widget, com os rótulos do
+  barracão (`BAR-07` no lugar de `52 · N3`). Busca de produto por qualquer
+  parte do nome, código ou dois termos soltos (`buscarProdutosGalpao`),
+  últimos lançados como atalho, e o mesmo teclado de quantidade — inclusive o
+  0, que aqui libera o palete em vez de derrubar uma pilha. A costura é a dupla
+  `ToqueGalpao`/`RackGalpao`: cada endereço do barracão vira uma posição de um
+  nível só.
 
 ## Baixa automática da venda pela contagem
 
