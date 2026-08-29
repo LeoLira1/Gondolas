@@ -21,6 +21,7 @@ on:
       - "claude/product-sync-efficiency-x3udku"
       - "claude/estantes-madeira-edr300-5a604x"
       - "claude/barracao-camda-3d-scene-cd1b73"
+      - "claude/new-session-okic0g"
   workflow_dispatch:
 
 jobs:
