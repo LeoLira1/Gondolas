@@ -42,6 +42,38 @@ void main() {
       expect(erroDeReplicaDivergente(panicoDoAparelho), isTrue);
     });
 
+    // Terceiro texto real do aparelho (CAMDA, agosto/2026): a MESMA divergência
+    // de frame, só que pelo outro desfecho do libsql — o servidor respondeu
+    // "ok" com um frame muito à frente do enviado. Sem reconhecer, o app
+    // despejava o panic na tela e o Sincronizar ficava preso nele para sempre:
+    // com frame local à frente do confirmado, o libsql escolhe empurrar e nem
+    // chega a puxar.
+    const panicoFrameAlto =
+        'PanicException(called `Result::unwrap()` on an `Err` value: '
+        'Sync(InvalidPushFrameNoHigh(1, 230))Backtrace [{ fn: '
+        '"_ZL15__pthread_startPv" }])';
+
+    test('reconhece o frame do servidor à frente do que foi empurrado', () {
+      expect(erroDeReplicaDivergente(panicoFrameAlto), isTrue);
+    });
+
+    test('o frame alto também explica o cache local ao usuário', () {
+      final msg = descreverErroSync(panicoFrameAlto);
+      expect(msg, contains('cache local'));
+      expect(msg, isNot(contains('PanicException')));
+      expect(msg, isNot(contains('token')));
+    });
+
+    test('o frame BAIXO não apaga o cache: o libsql reenvia sozinho', () {
+      // InvalidPushFrameNoLow é o caso em que o libsql corrige o ponto de
+      // partida e tenta de novo dentro do próprio sync_offline. Tratar como
+      // divergência apagaria as gravações pendentes do usuário sem precisar.
+      expect(
+        erroDeReplicaDivergente('Sync(InvalidPushFrameNoLow(231, 230))'),
+        isFalse,
+      );
+    });
+
     test('reconhece o arquivo local inconsistente e a geração à frente', () {
       expect(
         erroDeReplicaDivergente(

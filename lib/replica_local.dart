@@ -19,8 +19,10 @@ import 'dart:convert';
 /// dados, mas do ponto de vista do protocolo de sync a replica ainda não
 /// confirmou frame nenhum e precisa puxar (pull) os frames da geração antes de
 /// poder empurrar (push) qualquer coisa. Escrever no banco local nesse estado
-/// é o que produz o `InvalidPushFrameConflict(1, N)`: o cliente tenta empurrar
-/// a partir do frame 1 e o servidor responde que já está no frame N.
+/// é o que produz o `InvalidPushFrameConflict(1, N)` — ou o
+/// `InvalidPushFrameNoHigh(1, N)`, que é o MESMO estado visto pelo outro
+/// caminho do libsql: o cliente tenta empurrar a partir do frame 1 e o
+/// servidor responde que já está no frame N.
 ///
 /// Devolve null quando o JSON não é o esperado (versão nova do libsql, arquivo
 /// truncado) — quem chama decide o fallback em vez de adivinhar aqui.
@@ -357,12 +359,21 @@ class SincronizacaoNaoConfirmada implements Exception {
 }
 
 /// True quando o erro indica que a replica local não tem mais como conversar
-/// com o servidor — nem sincronizando, nem reabrindo. São quatro situações, e
+/// com o servidor — nem sincronizando, nem reabrindo. São cinco situações, e
 /// todas têm a mesma (única) saída: apagar o arquivo local e rebaixar tudo.
 ///
 /// * `InvalidPushFrameConflict(a, b)` — o servidor recusou os frames locais.
 ///   Como o cliente sempre empurra a partir do mesmo ponto, o erro se repete
 ///   para sempre: uma vez divergida, a replica nunca mais sincroniza sozinha.
+/// * `InvalidPushFrameNoHigh(a, b)` — o outro desfecho da MESMA divergência,
+///   e o que apareceu no aparelho: o servidor aceitou a requisição mas
+///   respondeu com um frame (b) muito à frente do que foi enviado (a), então o
+///   libsql derruba o push. Preso do mesmo jeito, e pior: enquanto houver
+///   frame local à frente do `durable_frame_num`, o `sync_offline` escolhe
+///   empurrar e NUNCA chega a puxar — não sobe nem desce nada. O libsql só
+///   tenta de novo sozinho no caso oposto (`InvalidPushFrameNoLow`, em que ele
+///   corrige o ponto de partida e reenvia), e por isso o Low fica de fora
+///   daqui: aquele se resolve sem apagar o cache do usuário.
 /// * `InvalidLocalState` — `.db` sem o `-info` ao lado (ou o contrário). O
 ///   libsql se recusa a abrir a replica nesse estado.
 /// * `InvalidLocalGeneration` — a geração local ficou à frente da do servidor
@@ -384,6 +395,7 @@ class SincronizacaoNaoConfirmada implements Exception {
 bool erroDeReplicaDivergente(Object erro) {
   final texto = erro.toString();
   return texto.contains('InvalidPushFrameConflict') ||
+      texto.contains('InvalidPushFrameNoHigh') ||
       texto.contains('InvalidLocalState') ||
       texto.contains('InvalidLocalGeneration') ||
       texto.contains('Generation ID mismatch') ||
