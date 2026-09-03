@@ -1,6 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
 
+String normalizarIdentidadeBanco(String url) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null || uri.host.isEmpty) return url.trim().toLowerCase();
+  final port = uri.hasPort ? ':${uri.port}' : '';
+  var path = uri.path.replaceAll(RegExp(r'/+$'), '');
+  if (path.isEmpty) path = '/';
+  return '${uri.scheme.toLowerCase()}://${uri.host.toLowerCase()}$port$path';
+}
+
+/// Identificador estável para nomes de arquivo/chaves; o token não participa.
+String idBanco(String url) {
+  var hash = 0xcbf29ce484222325;
+  for (final byte in utf8.encode(normalizarIdentidadeBanco(url))) {
+    hash ^= byte;
+    hash = (hash * 0x100000001b3) & 0x7fffffffffffffff;
+  }
+  return hash.toRadixString(16).padLeft(16, '0');
+}
+
 /// Regras puras sobre a replica local do Turso (o "cache local"): como ler o
 /// arquivo de metadados do sync, como reconhecer uma replica que divergiu do
 /// servidor e como explicar uma falha de sincronização para o usuário.
@@ -191,19 +210,22 @@ class TabelaDoCarimbo {
 
 /// As tabelas que entram no carimbo.
 ///
-/// Só as que ESTE app cria (ver `_criarEsquema`): elas existem dos dois lados
-/// depois da carga inicial, então uma consulta que falha é problema de rede,
-/// não de esquema.
-///
-/// O `estoque_mestre` fica de fora de propósito: é do app irmão e pode não
-/// existir em todo banco. Uma tabela ausente derruba o carimbo INTEIRO, e
-/// perder a conferência toda para cobrir o catálogo é troca ruim. Fica o
-/// buraco anotado: catálogo desatualizado não é detectado aqui.
+/// Inclui tanto as tabelas próprias quanto as tabelas externas que este app
+/// altera (`inventario_cicli` e `estoque_mestre`). Se uma delas estiver
+/// ausente, o carimbo inteiro fica indeterminado e a confirmação falha fechada.
 const List<TabelaDoCarimbo> tabelasDoCarimbo = [
   TabelaDoCarimbo('gondola_layout', "COALESCE(MAX(registrado_em),'')"),
   TabelaDoCarimbo('estante_layout', "COALESCE(MAX(registrado_em),'')"),
   TabelaDoCarimbo('estoque_localizado', "COALESCE(MAX(atualizado_em),'')"),
   TabelaDoCarimbo('galpao_racks', "COALESCE(MAX(atualizado_em),'')"),
+  TabelaDoCarimbo('galpao_posicoes',
+      "COALESCE(GROUP_CONCAT(numero || ':' || rua || ':' || eixo || ':' || pos_x || ':' || pos_z, '|'),'')"),
+  TabelaDoCarimbo('barracao_enderecos',
+      "COALESCE(GROUP_CONCAT(id || ':' || rotulo || ':' || pos_x || ':' || pos_z || ':' || produto_codigo || ':' || produto_nome || ':' || quantidade || ':' || atualizado_em, '|'),'')"),
+  TabelaDoCarimbo('inventario_cicli',
+      "COALESCE(GROUP_CONCAT(data_contagem || ':' || produto_id || ':' || COALESCE(qtd_contada,'') || ':' || COALESCE(divergencia,'') || ':' || COALESCE(contado_em,''), '|'),'')"),
+  TabelaDoCarimbo('estoque_mestre',
+      "COALESCE(GROUP_CONCAT(codigo || ':' || COALESCE(status_ciclo,'') || ':' || COALESCE(qtd_contada_ciclo,'') || ':' || COALESCE(qtd_sistema_na_contagem,'') || ':' || COALESCE(contado_ciclo_em,''), '|'),'')"),
   // Paletes mudam POR DENTRO: sai da loja (ativo = 0), é renomeado, é
   // arrastado. Nada disso mexe na contagem nem no criado_em, e o carimbo
   // precisa enxergar — é dele que sai a licença para zerar as pendências. Daí
@@ -384,10 +406,9 @@ class SincronizacaoNaoConfirmada implements Exception {
 ///   frames carimbados com a geração velha. O servidor devolve HTTP 400 e a
 ///   replica repete o mesmo push a cada Sincronizar, para sempre.
 ///
-/// Qualquer `PushFrame(400, …)` entra na regra, e não só o texto da geração:
-/// 400 é o servidor dizendo que os frames locais estão errados, e repetir o
-/// envio idêntico nunca muda a resposta. Erro de rede e token vêm com outro
-/// formato (socket, 401/403), então não caem aqui por engano.
+/// Um `PushFrame(400, …)` genérico deliberadamente NÃO entra na regra. Só o
+/// texto conhecido de geração incompatível é classificado; um 400 novo não é
+/// autorização suficiente para apagar dados locais.
 ///
 /// A comparação é por texto porque o `libsql_dart` faz `unwrap()` no lado Rust:
 /// o que chega no Dart é uma `PanicException` com a mensagem do erro dentro,
@@ -398,8 +419,7 @@ bool erroDeReplicaDivergente(Object erro) {
       texto.contains('InvalidPushFrameNoHigh') ||
       texto.contains('InvalidLocalState') ||
       texto.contains('InvalidLocalGeneration') ||
-      texto.contains('Generation ID mismatch') ||
-      texto.contains('PushFrame(400');
+      texto.contains('Generation ID mismatch');
 }
 
 /// A base do remoto não pôde ser baixada porque o servidor não respondeu.
