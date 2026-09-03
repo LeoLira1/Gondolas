@@ -295,8 +295,24 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
       'Baixando a base em segundo plano — pode continuar usando o app.');
 
   Future<void> _salvarConfig() async {
+    final url = _urlCtrl.text.trim();
+    // A pergunta vem ANTES da gravação: quem grava as credenciais novas
+    // primeiro apaga o único endereço por onde as gravações pendentes ainda
+    // poderiam subir. Descobrir a pendência depois não adianta mais.
+    final impedimento =
+        await TursoService().impedimentoParaTrocarBanco(url);
+    if (!mounted) return;
+    if (impedimento != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(impedimento),
+        backgroundColor: const Color(0xFF8b1a1a),
+        duration: const Duration(seconds: 8),
+      ));
+      return;
+    }
+
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(TursoService.keyDbUrl,   _urlCtrl.text.trim());
+    await prefs.setString(TursoService.keyDbUrl,   url);
     await prefs.setString(TursoService.keyDbToken, _tokenCtrl.text.trim());
     if (!mounted) return;
 
@@ -345,8 +361,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         ),
         content: const Text(
           'Apaga o arquivo de dados salvo neste dispositivo e baixa tudo de '
-          'novo do banco online. O Sincronizar já refaz o cache sozinho quando '
-          'ele diverge do banco — use este botão só se o problema insistir.\n\n'
+          'novo do banco online.\n\n'
+          'É esta a saída quando o Sincronizar avisa que a réplica divergiu: '
+          'ele não refaz o cache sozinho, justamente para não descartar '
+          'gravação nenhuma sem você mandar.\n\n'
           'Gravações feitas offline e ainda não sincronizadas serão perdidas.',
           style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13, height: 1.4),
         ),
