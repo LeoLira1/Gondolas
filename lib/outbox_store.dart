@@ -33,6 +33,7 @@ class OutboxStore {
         chave                 TEXT NOT NULL,
         estado_anterior       TEXT,
         estado_final          TEXT,
+        extras_insercao       TEXT,
         criado_em             TEXT NOT NULL,
         dispositivo           TEXT NOT NULL,
         estado                TEXT NOT NULL,
@@ -72,10 +73,10 @@ class OutboxStore {
     if (client == null) return;
     await client.execute(
       'INSERT OR REPLACE INTO mutacoes (uuid, operacao, tabela, chave, '
-      'estado_anterior, estado_final, criado_em, dispositivo, estado, '
-      'produto_codigo, produto_nome, posicao, ordem, quantidade_anterior, '
-      'quantidade_pretendida) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'estado_anterior, estado_final, extras_insercao, criado_em, dispositivo, '
+      'estado, produto_codigo, produto_nome, posicao, ordem, '
+      'quantidade_anterior, quantidade_pretendida) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       positional: [
         m.uuid,
         m.operacao,
@@ -83,6 +84,7 @@ class OutboxStore {
         jsonEncode(m.alvo.chave),
         m.estadoAnterior == null ? null : jsonEncode(m.estadoAnterior),
         m.estadoFinal == null ? null : jsonEncode(m.estadoFinal),
+        jsonEncode(m.extrasParaInsercao),
         m.criadoEm.toIso8601String(),
         m.dispositivo,
         m.estado.name,
@@ -160,6 +162,7 @@ class OutboxStore {
       ),
       estadoAnterior: estado(l['estado_anterior']),
       estadoFinal:    estado(l['estado_final']),
+      extrasParaInsercao: estado(l['extras_insercao']) ?? const {},
       criadoEm: DateTime.tryParse(l['criado_em'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
       dispositivo: l['dispositivo'] as String? ?? '',

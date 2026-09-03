@@ -70,6 +70,14 @@ absoluto, o endereço não é.**
 substituem o layout INTEIRO de uma unidade (DELETE + INSERT), e a reaplicação
 deste primeiro desenho aplica linha a linha.
 
+`barracao.atribuir`, `barracao.esvaziar` e `estoqueLocalizado.concluirContagem`
+entram por um terceiro: o efeito delas não cabe numa linha. As duas do barracão
+também reescrevem o espelho em `estoque_localizado`; a contagem também mexe no
+ciclo em `estoque_mestre`. Reaplicá-las com o motor genérico deixaria o endereço
+certo e o saldo velho — e, com o UUID confirmado, o desencontro ficaria
+invisível. Enquanto a reaplicação não souber refazer o efeito inteiro numa
+transação, elas vão para conferência.
+
 Todas ficam gravadas com o estado de antes e o pretendido, e aparecem em ⚙️ →
 *gravações para conferir* com produto, posição, ordem original, quantidade
 anterior, resultado pretendido, horário e dispositivo. A tela não oferece
@@ -92,10 +100,19 @@ Isso pede, em conjunto:
 
 Enquanto isso não existe, conferência manual é o desfecho ruim mas honesto.
 
-## Limite que permanece
+## Limites que permanecem
 
 Entre gravar a intenção na outbox e o commit local existe uma janela. Um
 encerramento abrupto exatamente ali deixa um registro de algo que talvez não
 tenha acontecido — e a escolha aqui é deliberada: o registro sobra e o UUID
 não é encontrado no remoto, então a mutação vai para conferência. Sobrar um
 item para conferir é recuperável; faltar um não é.
+
+Duas coisas ainda não são cobertas por teste automatizado: o SQL de ida e volta
+do `OutboxStore` (precisa da lib nativa do libsql) e a reaplicação de ponta a
+ponta. A lógica que decide o DESTINO de cada mutação está toda em
+`lib/outbox.dart`, que é pura e testada.
+
+E a reaplicação automática não reescreve `contagens_log`: uma linha reaplicada
+volta ao valor certo, mas sem a linha de auditoria correspondente. O saldo fica
+correto; o histórico daquela gravação, não.

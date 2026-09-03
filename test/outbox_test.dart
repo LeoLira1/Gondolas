@@ -176,13 +176,22 @@ void main() {
       expect(operacaoExigeRevisaoManual('layout.salvarEstante'), isTrue);
     });
 
-    test('as de chave estável são reaplicáveis', () {
+    test('as de efeito composto também', () {
+      // Estas mexem em MAIS de uma tabela: barracão reescreve o espelho em
+      // estoque_localizado, concluirContagem mexe no ciclo em estoque_mestre.
+      // A reaplicação genérica acerta uma linha — deixaria o endereço certo e
+      // o saldo velho, com o UUID confirmado escondendo o desencontro.
+      expect(operacaoExigeRevisaoManual('barracao.atribuir'), isTrue);
+      expect(operacaoExigeRevisaoManual('barracao.esvaziar'), isTrue);
+      expect(
+          operacaoExigeRevisaoManual('estoqueLocalizado.concluirContagem'),
+          isTrue);
+    });
+
+    test('as de uma linha só e chave estável são reaplicáveis', () {
       for (final op in [
         'estoqueLocalizado.upsertQuantidade',
         'estoqueLocalizado.deleteEndereco',
-        'estoqueLocalizado.concluirContagem',
-        'barracao.atribuir',
-        'barracao.esvaziar',
         'palete.criar',
         'palete.atualizar',
         'palete.desativar',
@@ -222,6 +231,34 @@ void main() {
         mutacao(anterior: {'quantidade': 5}, estadoFinal: null)
             .colunasComparadas,
         {'quantidade'},
+      );
+    });
+  });
+
+  group('extras de inserção', () {
+    test('não entram na comparação de estado', () {
+      final m = MutacaoOutbox(
+        uuid: 'u',
+        operacao: 'estoqueLocalizado.upsertQuantidade',
+        alvo: const AlvoMutacao(
+            tabela: 'estoque_localizado', chave: {'produto_codigo': 'X'}),
+        estadoAnterior: null,
+        estadoFinal: const {'quantidade': 90},
+        extrasParaInsercao: const {'atualizado_em': '2026-09-03T10:00:00'},
+        criadoEm: DateTime(2026, 9, 3),
+        dispositivo: 'teste',
+      );
+
+      // Se `atualizado_em` entrasse na conta, toda reaplicação daria conflito.
+      expect(m.colunasComparadas, {'quantidade'});
+      expect(
+        decidirReaplicacao(
+          remoto:      null,
+          anterior:    m.estadoAnterior,
+          estadoFinal: m.estadoFinal,
+          colunas:     m.colunasComparadas,
+        ),
+        DecisaoReaplicacao.aplicarFinal,
       );
     });
   });

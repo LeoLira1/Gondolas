@@ -268,14 +268,31 @@ class TursoService {
     }
   }
 
+  /// Identificador deste aparelho, resolvido uma vez por sessão.
+  ///
+  /// NUNCA lança, e isso é requisito, não zelo: quem chama é o `abrirMutacao`,
+  /// que roda DENTRO da transação da gravação. Uma exceção aqui — preferências
+  /// indisponíveis, `Platform` inexistente na Web — derrubaria por rollback um
+  /// lançamento que estava perfeitamente bom. Sem identidade, a mutação ainda
+  /// vale; ela só chega à conferência sem dizer de qual aparelho veio.
   Future<String> _dispositivoAtual() async {
     final emMemoria = _dispositivo;
     if (emMemoria != null) return emMemoria;
-    final prefs = await SharedPreferences.getInstance();
-    var id = prefs.getString(keyDispositivo);
-    if (id == null) {
-      id = '${Platform.operatingSystem}-${gerarUuidV4().substring(0, 8)}';
-      await prefs.setString(keyDispositivo, id);
+    // `Platform` vem do dart:io e não existe na Web, onde o app roda em modo
+    // remoto — e é justamente ali que toda gravação passaria por aqui.
+    final plataforma = kIsWeb ? 'web' : Platform.operatingSystem;
+    var id = '$plataforma-${gerarUuidV4().substring(0, 8)}';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final guardado = prefs.getString(keyDispositivo);
+      if (guardado != null) {
+        id = guardado;
+      } else {
+        await prefs.setString(keyDispositivo, id);
+      }
+    } catch (_) {
+      // Fica o sorteado desta sessão. Um nome de aparelho instável é menos
+      // grave do que uma gravação recusada.
     }
     _dispositivo = id;
     return id;
@@ -299,6 +316,9 @@ class TursoService {
     required Map<String, Object?> chave,
     required Map<String, Object?>? estadoAnterior,
     required Map<String, Object?>? estadoFinal,
+    /// Colunas NOT NULL necessárias para RECRIAR a linha, que não entram na
+    /// comparação de estado (`atualizado_em`, `criado_em`).
+    Map<String, Object?> extrasParaInsercao = const {},
     String? produtoCodigo,
     String? produtoNome,
     int?    posicao,
@@ -312,6 +332,7 @@ class TursoService {
       alvo:      AlvoMutacao(tabela: tabela, chave: chave),
       estadoAnterior: estadoAnterior,
       estadoFinal:    estadoFinal,
+      extrasParaInsercao: extrasParaInsercao,
       criadoEm:    DateTime.now(),
       dispositivo: await _dispositivoAtual(),
       produtoCodigo:        produtoCodigo,
@@ -321,7 +342,11 @@ class TursoService {
       quantidadeAnterior:   quantidadeAnterior,
       quantidadePretendida: quantidadePretendida,
     );
-    if (!_outbox.aberta) await _abrirOutbox();
+    // Sempre, não só quando fechada: se a URL do banco mudou nesta sessão, o
+    // caminho mudou junto e a store precisa rotacionar. Uma outbox presa no
+    // banco anterior gravaria as mutações novas no arquivo errado — e julgaria
+    // as antigas contra o servidor errado.
+    await _abrirOutbox();
     try {
       await _outbox.registrar(mutacao);
     } catch (_) {
@@ -354,7 +379,7 @@ class TursoService {
 
   /// Quantas mutações o servidor ainda não confirmou, segundo a outbox.
   Future<int> mutacoesNaoConfirmadas() async {
-    if (!_outbox.aberta) await _abrirOutbox();
+    await _abrirOutbox();
     try {
       return await _outbox.quantidadeNaoConfirmada();
     } catch (_) {
@@ -365,7 +390,7 @@ class TursoService {
   /// O que precisa de uma pessoa: conflito com o remoto, ou operação que a
   /// reconstrução não sabe reaplicar sozinha.
   Future<List<MutacaoOutbox>> mutacoesParaRevisao() async {
-    if (!_outbox.aberta) await _abrirOutbox();
+    await _abrirOutbox();
     try {
       return await _outbox.paraRevisao();
     } catch (_) {
@@ -383,7 +408,7 @@ class TursoService {
   /// Devolve quantas passaram a contar como confirmadas. Uma falha de rede não
   /// confirma nem desconfirma nada: os registros ficam onde estavam.
   Future<int> confirmarMutacoesNoRemoto() async {
-    if (!_outbox.aberta) await _abrirOutbox();
+    await _abrirOutbox();
     final List<MutacaoOutbox> abertas;
     try {
       abertas = await _outbox.naoConfirmadas();
@@ -437,7 +462,7 @@ class TursoService {
   /// Nenhum registro é apagado em nenhum dos caminhos.
   Future<int> reaplicarOutbox() async {
     if (!await _garantirConexao()) return 0;
-    if (!_outbox.aberta) await _abrirOutbox();
+    await _abrirOutbox();
     final List<MutacaoOutbox> abertas;
     try {
       abertas = await _outbox.naoConfirmadas();
@@ -518,14 +543,21 @@ class TursoService {
         );
         if (alterou == 0) {
           // A linha não existia (o estado anterior era "ausente"): recria com
-          // a chave mais o estado final.
-          final todas = [...m.alvo.chave.keys, ...colunas];
+          // a chave, o estado final e os extras. Os extras são as colunas
+          // NOT NULL que não entram na comparação — `atualizado_em`,
+          // `criado_em`. Sem elas o SQLite recusa o INSERT, e uma gravação
+          // perfeitamente reaplicável terminaria como conflito.
+          final extras = m.extrasParaInsercao.keys
+              .where((c) => !m.alvo.chave.containsKey(c) && !colunas.contains(c))
+              .toList();
+          final todas = [...m.alvo.chave.keys, ...colunas, ...extras];
           await tx.execute(
             'INSERT INTO ${m.alvo.tabela} (${todas.join(', ')}) '
             'VALUES (${List.filled(todas.length, '?').join(', ')})',
             positional: [
               ...m.alvo.chave.values,
               ...colunas.map((c) => m.estadoFinal![c]),
+              ...extras.map((c) => m.extrasParaInsercao[c]),
             ],
           );
         }
@@ -734,6 +766,10 @@ class TursoService {
     } else if (_coordenador.recuperacaoTravada) {
       _coordenador.concluirRecuperacao();
     }
+
+    // Fora de qualquer transação: quando a primeira gravação chegar, o id já
+    // está em memória e o abrirMutacao não precisa tocar em disco.
+    unawaited(_dispositivoAtual());
 
     final ultimaSyncIso = prefs.getString(_chavePorBanco(keyUltimaSync));
     _ultimaSincronizacao =

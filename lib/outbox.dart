@@ -69,6 +69,13 @@ class MutacaoOutbox {
   /// "a linha deixa de existir" (um DELETE).
   final Map<String, Object?>? estadoFinal;
 
+  /// Colunas que a linha PRECISA ter para ser recriada, mas que não entram na
+  /// comparação: `atualizado_em`, `criado_em` e afins, que são NOT NULL no
+  /// esquema e mudam a cada gravação. Sem elas, reaplicar uma linha que o
+  /// remoto não tem mais falharia no INSERT — e uma gravação perfeitamente
+  /// reaplicável viraria conflito.
+  final Map<String, Object?> extrasParaInsercao;
+
   final DateTime criadoEm;
   final String dispositivo;
   final EstadoMutacao estado;
@@ -91,6 +98,7 @@ class MutacaoOutbox {
     required this.estadoFinal,
     required this.criadoEm,
     required this.dispositivo,
+    this.extrasParaInsercao = const {},
     this.estado = EstadoMutacao.pendente,
     this.produtoCodigo,
     this.produtoNome,
@@ -108,6 +116,7 @@ class MutacaoOutbox {
         estadoFinal: estadoFinal,
         criadoEm: criadoEm,
         dispositivo: dispositivo,
+        extrasParaInsercao: extrasParaInsercao,
         estado: estado ?? this.estado,
         produtoCodigo: produtoCodigo,
         produtoNome: produtoNome,
@@ -144,12 +153,22 @@ class MutacaoOutbox {
 /// de tabela inteira por cima de uma base reconstruída apagaria o desenho que
 /// outra pessoa fez no meio do caminho. O layout de antes e o de depois ficam
 /// gravados, então a revisão mostra exatamente o que refazer.
+/// E há um terceiro motivo, o mais sutil: operações cujo efeito NÃO cabe numa
+/// linha. `barracao.atribuir` e `barracao.esvaziar` também reescrevem o espelho
+/// em `estoque_localizado`; `concluirContagem` também mexe no ciclo em
+/// `estoque_mestre`. A reaplicação genérica sabe acertar uma linha, então
+/// reaplicá-las deixaria o endereço certo e o saldo velho — e, pior, com o
+/// UUID confirmado, o desencontro ficaria invisível. Enquanto a reaplicação não
+/// souber refazer o efeito inteiro numa transação, elas vão para conferência.
 const Set<String> operacoesDeRevisaoManual = {
   'galpao.lancar',
   'galpao.esvaziar',
   'galpao.ajustarQuantidade',
   'layout.salvarGondola',
   'layout.salvarEstante',
+  'barracao.atribuir',
+  'barracao.esvaziar',
+  'estoqueLocalizado.concluirContagem',
 };
 
 bool operacaoExigeRevisaoManual(String operacao) =>

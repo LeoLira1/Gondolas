@@ -518,6 +518,9 @@ class EstoqueLocalizadoService {
         estadoAnterior:
             rowsAnterior.isEmpty ? null : {'quantidade': qtdAnterior},
         estadoFinal: {'quantidade': quantidade},
+        // NOT NULL no esquema e fora da comparação: sem ele, recriar um
+        // endereço que o remoto não tem mais falharia no INSERT.
+        extrasParaInsercao: {'atualizado_em': agora},
         produtoCodigo: produtoCodigo,
         posicao:       localNum,
         quantidadeAnterior:   qtdAnterior?.toDouble(),

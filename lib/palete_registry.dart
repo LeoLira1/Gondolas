@@ -203,6 +203,13 @@ class PaleteRegistry {
             'rotacao': rotacao,
             'ativo':   1,
           },
+          // Colunas NOT NULL que não entram na comparação. Sem elas, recriar
+          // o palete no remoto morreria no INSERT.
+          extrasParaInsercao: {
+            'colunas':   colunasPalete,
+            'fileiras':  fileirasPalete,
+            'criado_em': DateTime.now().toIso8601String(),
+          },
           posicao: num,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
@@ -280,6 +287,11 @@ class PaleteRegistry {
             'pos_z':   p.posZ,
             'rotacao': p.rotacao,
             'ativo':   p.ativo ? 1 : 0,
+          },
+          extrasParaInsercao: {
+            'colunas':   p.colunas,
+            'fileiras':  p.fileiras,
+            'criado_em': DateTime.now().toIso8601String(),
           },
           posicao: p.num,
         );
