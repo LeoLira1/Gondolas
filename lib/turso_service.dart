@@ -13,6 +13,7 @@ import 'layout_cache.dart';
 import 'models.dart';
 import 'palete_registry.dart';
 import 'replica_local.dart';
+import 'replica_coordinator.dart';
 
 /// Cronometra uma etapa de banco e imprime o tempo no log, só em debug.
 ///
@@ -85,6 +86,11 @@ class TursoService {
   String?   _ultimoAvisoSync;
   int       _gravacoesPendentes = 0;
   int       _enviadasNoUltimoSync = 0;
+  final CoordenadorReplica _coordenador = CoordenadorReplica();
+  String? _identidadeAtiva;
+
+  String _chavePorBanco(String base) =>
+      _identidadeAtiva == null ? base : '${base}_${_identidadeAtiva!}';
 
   // Credenciais/modo da conexão ativa. Enquanto não mudarem, init()
   // reaproveita a conexão (e o esquema já criado) em vez de reconectar e
@@ -159,6 +165,19 @@ class TursoService {
 
   bool get sincronizando => _sincronizando;
 
+  EstadoReplica get estadoReplica => _coordenador.estado;
+
+  /// Porta única de toda mutação. A reserva síncrona impede corrida com sync.
+  Future<T> garantirReplicaProntaParaEscrita<T>(
+      Future<T> Function() acao) async {
+    try {
+      return await _coordenador.executarEscrita(acao);
+    } on ReplicaNaoProntaParaEscrita catch (e) {
+      _ultimoErroSync = e.toString();
+      rethrow;
+    }
+  }
+
   DateTime? get ultimaSincronizacao => _ultimaSincronizacao;
 
   /// Descrição curta (para o usuário) do motivo da última falha de
@@ -189,22 +208,22 @@ class TursoService {
   /// No modo remoto não há nada pendente por definição (a escrita já foi ao
   /// servidor), então a chamada é ignorada.
   ///
-  /// Síncrona de propósito, e é por isso que ela não pode lançar: os pontos de
-  /// escrita a chamam logo depois do `commit()`, DENTRO do `try` que faz
-  /// `rollback()` em qualquer exceção. Um erro escapando daqui levaria uma
-  /// transação já commitada a um rollback, e a tela diria "não deu para gravar"
-  /// um lançamento que está no banco. Incrementar em memória não falha; a
-  /// gravação no disco vai solta e engole a própria falha.
-  void marcarGravacaoLocal() {
+  /// A persistência é aguardada antes de liberar o mutex. Assim um sync que
+  /// venha logo depois não pode remover a chave e ser ultrapassado por uma
+  /// gravação assíncrona antiga do contador.
+  Future<void> marcarGravacaoLocal() async {
     if (!_modoLocal) return;
     _gravacoesPendentes++;
-    unawaited(_persistirGravacoesPendentes());
+    await _persistirGravacoesPendentes();
   }
 
   Future<void> _persistirGravacoesPendentes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(keyGravacoesPendentes, _gravacoesPendentes);
+      final id = _identidadeAtiva;
+      await prefs.setInt(id == null
+          ? keyGravacoesPendentes
+          : '${keyGravacoesPendentes}_$id', _gravacoesPendentes);
     } catch (_) {
       // Perder a persistência do contador não pode derrubar a gravação que
       // acabou de dar certo: o valor em memória segue valendo nesta sessão.
@@ -218,7 +237,10 @@ class TursoService {
     _gravacoesPendentes = 0;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(keyGravacoesPendentes);
+      final id = _identidadeAtiva;
+      await prefs.remove(id == null
+          ? keyGravacoesPendentes
+          : '${keyGravacoesPendentes}_$id');
     } catch (_) {
       // Ver marcarGravacaoLocal.
     }
@@ -255,6 +277,7 @@ class TursoService {
   }
 
   Future<void> _init() async {
+    _coordenador.definirEstado(EstadoReplica.conectando);
     // Consumido já: uma reconexão forçada vale para ESTA passada, senão toda
     // abertura de página passaria a reconectar.
     final forcado    = _forcarReconexao;
@@ -263,13 +286,47 @@ class TursoService {
     final url        = prefs.getString(keyDbUrl)   ?? '';
     final token      = prefs.getString(keyDbToken) ?? '';
     final cacheLocal = !kIsWeb && (prefs.getBool(keyCacheLocal) ?? true);
+    final identidade = idBanco(url);
+    final anterior = prefs.getString('turso_identidade_ativa');
+    if (anterior != null && anterior != identidade) {
+      final pendentesAntigas =
+          prefs.getInt('${keyGravacoesPendentes}_$anterior') ??
+              prefs.getInt(keyGravacoesPendentes) ?? 0;
+      if (pendentesAntigas > 0) {
+        _ultimoErroSync = 'há gravações pendentes no banco anterior; '
+            'sincronize ou exporte antes de trocar a URL';
+        _coordenador.definirEstado(EstadoReplica.recuperacaoNecessaria);
+        return;
+      }
+    }
+    _identidadeAtiva = identidade;
+    await prefs.setString('turso_identidade_ativa', identidade);
+    if (anterior == null) {
+      final baseLegada = prefs.getBool(keyBaseLocalOk);
+      final syncLegada = prefs.getString(keyUltimaSync);
+      final pendentesLegadas = prefs.getInt(keyGravacoesPendentes);
+      if (baseLegada != null) {
+        await prefs.setBool(_chavePorBanco(keyBaseLocalOk), baseLegada);
+        await prefs.remove(keyBaseLocalOk);
+      }
+      if (syncLegada != null) {
+        await prefs.setString(_chavePorBanco(keyUltimaSync), syncLegada);
+        await prefs.remove(keyUltimaSync);
+      }
+      if (pendentesLegadas != null) {
+        await prefs.setInt(
+            _chavePorBanco(keyGravacoesPendentes), pendentesLegadas);
+        await prefs.remove(keyGravacoesPendentes);
+      }
+    }
 
-    final ultimaSyncIso = prefs.getString(keyUltimaSync);
+    final ultimaSyncIso = prefs.getString(_chavePorBanco(keyUltimaSync));
     _ultimaSincronizacao =
         ultimaSyncIso != null ? DateTime.tryParse(ultimaSyncIso) : null;
     // As pendências sobrevivem ao fechamento do app: o arquivo da replica
     // continua com os frames que não subiram.
-    _gravacoesPendentes = prefs.getInt(keyGravacoesPendentes) ?? 0;
+    _gravacoesPendentes =
+        prefs.getInt('${keyGravacoesPendentes}_$identidade') ?? 0;
     // Antes do early-return de reaproveitamento: o carimbo do catálogo em
     // disco não pode depender de a conexão ter dado certo.
     _urlConfigurada = url;
@@ -280,6 +337,8 @@ class TursoService {
         url == _urlAtiva &&
         token == _tokenAtivo &&
         cacheLocal == _cacheLocalAtivo) {
+      _coordenador.definirEstado(
+          _basePendente ? EstadoReplica.basePendente : EstadoReplica.pronta);
       return;
     }
 
@@ -302,7 +361,10 @@ class TursoService {
     // troca de token responderia "sem rede" para sempre.
     await _descartarSonda();
 
-    if (url.isEmpty || token.isEmpty) return;
+    if (url.isEmpty || token.isEmpty) {
+      _coordenador.definirEstado(EstadoReplica.desconectada);
+      return;
+    }
 
     LibsqlClient? client;
     var conectouLocal = false;
@@ -314,7 +376,10 @@ class TursoService {
     // Sem cache local (Web, preferência desligada ou falha ao abrir o
     // arquivo): conexão direta ao remoto, como antes.
     client ??= await _conectarRemoto(url, token);
-    if (client == null) return;
+    if (client == null) {
+      _coordenador.definirEstado(EstadoReplica.erro);
+      return;
+    }
 
     try {
       if (conectouLocal) {
@@ -341,6 +406,9 @@ class TursoService {
         _tokenAtivo      = token;
         _cacheLocalAtivo = cacheLocal;
         _basePendente    = precisaBase;
+        _coordenador.definirEstado(precisaBase
+            ? EstadoReplica.basePendente
+            : EstadoReplica.pronta);
         if (precisaBase) {
           try {
             await _estabelecerBaseLocal(client, _timeoutBootstrap);
@@ -363,6 +431,7 @@ class TursoService {
         _connected       = true;
         _modoLocal       = false;
         _basePendente    = false;
+        _coordenador.definirEstado(EstadoReplica.pronta);
         _urlAtiva        = url;
         _tokenAtivo      = token;
         _cacheLocalAtivo = cacheLocal;
@@ -376,6 +445,7 @@ class TursoService {
     } catch (_) {
       _connected = false;
       _client    = null;
+      _coordenador.definirEstado(EstadoReplica.erro);
     }
   }
 
@@ -400,7 +470,19 @@ class TursoService {
 
   Future<String> _caminhoCacheLocal() async {
     final dir = await getApplicationSupportDirectory();
-    return '${dir.path}/camda_gondolas_cache.db';
+    final id = _identidadeAtiva;
+    if (id == null) return '${dir.path}/camda_gondolas_cache.db';
+    final novo = File('${dir.path}/camda_gondolas_cache_$id.db');
+    final antigo = File('${dir.path}/camda_gondolas_cache.db');
+    // Migração única e não destrutiva para instalações existentes.
+    if (!await novo.exists() && await antigo.exists()) {
+      await antigo.rename(novo.path);
+      for (final sufixo in ['-info', '-wal', '-shm', '-journal']) {
+        final lateral = File('${antigo.path}$sufixo');
+        if (await lateral.exists()) await lateral.rename('${novo.path}$sufixo');
+      }
+    }
+    return novo.path;
   }
 
   Future<LibsqlClient?> _conectarComCacheLocal(String url, String token,
@@ -429,7 +511,8 @@ class TursoService {
       // responde de verdade.
       final prefs = await SharedPreferences.getInstance();
       final baseJaPronta =
-          (prefs.getBool(keyBaseLocalOk) ?? false) && await File(path).exists();
+          (prefs.getBool(_chavePorBanco(keyBaseLocalOk)) ?? false) &&
+              await File(path).exists();
       limite = baseJaPronta ? _timeoutConexao : _timeoutBootstrap;
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       await client.connect().timeout(limite);
@@ -452,6 +535,7 @@ class TursoService {
       // modo remoto e deixar o cache local quebrado para sempre. Falha de rede
       // não entra aqui: aí o arquivo está bom e o fallback remoto é o certo.
       if (podeReconstruir &&
+          _gravacoesPendentes == 0 &&
           erroDeReplicaDivergente(e) &&
           await _apagarArquivosDaReplica()) {
         return _conectarComCacheLocal(url, token, podeReconstruir: false);
@@ -482,8 +566,9 @@ class TursoService {
     await _migrarPaletesCadastroDinamico(client);
     await migrarGalpaoParaUnidades(client);
     _basePendente = false;
+    _coordenador.definirEstado(EstadoReplica.pronta);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(keyBaseLocalOk, true);
+    await prefs.setBool(_chavePorBanco(keyBaseLocalOk), true);
     await PaleteRegistry().carregar();
     // Antes do dataRevision: os listeners disparam de forma síncrona no
     // `value++` e chamam _carregarLayout na hora — limpar depois os serviria
@@ -506,7 +591,7 @@ class TursoService {
     // abertura do app repetiria o sync — e, sem internet, esperaria os
     // timeouts antes de mostrar o mapa.
     final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(keyBaseLocalOk) ?? false) return false;
+    if (prefs.getBool(_chavePorBanco(keyBaseLocalOk)) ?? false) return false;
 
     final frame = await _frameDuravelAtual();
     if (frame != null) return frame == 0;
@@ -661,7 +746,7 @@ class TursoService {
       // Manter o contador aqui faria todo Sincronizar seguinte acusar "envio
       // não confirmado" por gravações que não existem mais.
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(keyBaseLocalOk);
+      await prefs.remove(_chavePorBanco(keyBaseLocalOk));
       _gravacoesPendentes = 0;
       await prefs.remove(keyGravacoesPendentes);
       return true;
@@ -892,7 +977,7 @@ class TursoService {
     _ultimaSincronizacao = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-        keyUltimaSync, _ultimaSincronizacao!.toIso8601String());
+        _chavePorBanco(keyUltimaSync), _ultimaSincronizacao!.toIso8601String());
   }
 
   /// Sincroniza o cache local com o banco online: envia as gravações feitas
@@ -902,10 +987,18 @@ class TursoService {
   /// No modo remoto (sem cache local) não há o que empurrar: só renova o
   /// cache do catálogo em memória.
   Future<bool> sincronizar() async {
-    if (_sincronizando) {
+    if (_coordenador.syncReservado) {
       _ultimoErroSync = 'já existe uma sincronização em andamento';
       return false;
     }
+    final operacao = _coordenador.executarSincronizacao(_sincronizarExclusiva);
+    return operacao.timeout(_timeoutSync, onTimeout: () {
+      _ultimoErroSync = 'a sincronização continua em segundo plano; aguarde antes de tentar novamente';
+      return false;
+    });
+  }
+
+  Future<bool> _sincronizarExclusiva() async {
     if (!await _garantirConexao()) {
       final prefs = await SharedPreferences.getInstance();
       final configurado = (prefs.getString(keyDbUrl) ?? '').isNotEmpty &&
@@ -927,19 +1020,12 @@ class TursoService {
         _ultimoErroSync = null;
         return true;
       }
-      // Replica divergente: os frames locais nunca mais serão aceitos pelo
-      // servidor, então tentar de novo do mesmo jeito daria o mesmo erro para
-      // sempre. Reconstrói o arquivo local a partir do remoto uma vez, aqui
-      // mesmo — o usuário pediu para sincronizar e não tem como resolver isso
-      // sozinho. As gravações locais que ainda não subiram se perdem (elas já
-      // estavam perdidas: era esse o motivo do conflito), por isso o aviso.
-      if (_modoLocal &&
-          erroDeReplicaDivergente(erro) &&
-          await _reconstruirReplicaLocal()) {
-        _ultimoErroSync  = null;
-        _ultimoAvisoSync = 'Cache local reconstruído do banco online — '
-            'gravações locais não sincronizadas foram perdidas';
-        return true;
+      // Divergência nunca autoriza destruição silenciosa. Sem uma outbox com
+      // ACK remoto, nem mesmo sabemos quais frames seriam perdidos.
+      if (_modoLocal && erroDeReplicaDivergente(erro)) {
+        _coordenador.definirEstado(EstadoReplica.recuperacaoNecessaria);
+        _ultimoErroSync = 'a réplica divergiu; os dados locais foram preservados e precisam de recuperação';
+        return false;
       }
       _ultimoErroSync = descreverErroSync(erro);
       return false;
@@ -1002,7 +1088,7 @@ class TursoService {
   /// o aparelho tem, não há envio preso, e o contador estava velho.
   Future<Object?> _sincronizarReplica() async {
     final antes = await _estadoAtualDaReplica();
-    await _client!.sync().timeout(_timeoutSync);
+    await _client!.sync();
     final peloFrame = avaliarSync(
       antes: antes,
       depois: await _estadoAtualDaReplica(),
@@ -1022,25 +1108,14 @@ class TursoService {
       debugPrint('[turso] carimbo diferente em '
           '${conferencia.tabelas.join(", ")} '
           '(${conferencia.resultado.name}) — tentando de novo');
-      await _client!.sync().timeout(_timeoutSync);
+      await _client!.sync();
       conferencia = await _conferirCarimbos();
       if (_carimboAcusaAtraso(conferencia.resultado)) {
         return DadosForaDeSincronia(conferencia.resultado, conferencia.tabelas);
       }
     } else if (conferencia.resultado == ConferenciaDoCarimbo.indeterminada) {
-      // Reserva: sem carimbo, resta o `-info`. Frame parado com gravação
-      // esperando é o sinal (fraco) de que o push não saiu.
-      if (peloFrame == ResultadoDoSync.naoConfirmado) {
-        await _client!.sync().timeout(_timeoutSync);
-        final segundaLeitura = avaliarSync(
-          antes: antes,
-          depois: await _estadoAtualDaReplica(),
-          gravacoesPendentes: _gravacoesPendentes,
-        );
-        if (segundaLeitura == ResultadoDoSync.naoConfirmado) {
-          return SincronizacaoNaoConfirmada(_gravacoesPendentes, true);
-        }
-      }
+      // Fail-closed: avanço de frame não é reconhecimento das mutações.
+      return SincronizacaoNaoConfirmada(_gravacoesPendentes, true);
     } else if (_gravacoesPendentes > 0) {
       // Carimbos iguais: está tudo lá. Se ainda havia pendência contada, ela
       // era de uma gravação que não mudou nada (DELETE de zero linha, UPDATE
@@ -1483,12 +1558,22 @@ class TursoService {
       estanteNum == expositorNelloreNum && nivel == 0;
 
   Future<bool> salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
-    if (!await _garantirConexao()) return false;
     try {
-      final stmtDel = await _client!.prepare(
+      return await garantirReplicaProntaParaEscrita(
+          () => _salvarLayout(gondolaNum, itens));
+    } on ReplicaNaoProntaParaEscrita {
+      return false;
+    }
+  }
+
+  Future<bool> _salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
+    if (!await _garantirConexao()) return false;
+    final tx = await _client!.transaction();
+    try {
+      await tx.execute(
         'DELETE FROM gondola_layout WHERE gondola_num = ?',
+        positional: [gondolaNum],
       );
-      await stmtDel.query(positional: [gondolaNum]);
 
       // INSERT multi-linha: uma ida ao servidor por lote em vez de uma por
       // caixa. Além de rápido, encurta a janela em que uma queda de rede
@@ -1499,11 +1584,6 @@ class TursoService {
             ? i + _maxLinhasPorInsert
             : itens.length;
         final lote = itens.sublist(i, fim);
-        final stmtIns = await _client!.prepare(
-          'INSERT INTO gondola_layout '
-          '(gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex, registrado_em) '
-          'VALUES ${List.filled(lote.length, '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}',
-        );
         final params = <dynamic>[];
         for (final item in lote) {
           params.addAll([
@@ -1517,17 +1597,21 @@ class TursoService {
             agora,
           ]);
         }
-        await stmtIns.query(positional: params);
+        await tx.execute(
+          'INSERT INTO gondola_layout '
+          '(gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex, registrado_em) '
+          'VALUES ${List.filled(lote.length, '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}',
+          positional: params,
+        );
       }
+      await tx.commit();
       // Write-through: as linhas recém-gravadas SÃO o novo estado persistido,
       // então dá para atualizar o cache sem reler.
       _cacheGondola.gravar(gondolaNum, itens);
-      marcarGravacaoLocal();
+      await marcarGravacaoLocal();
       return true;
     } catch (_) {
-      // DELETE + INSERT não é atômico aqui: o DELETE pode ter passado e o
-      // INSERT não. O estado persistido é desconhecido — o cache tem de cair,
-      // não ser adivinhado.
+      await tx.rollback();
       _cacheGondola.invalidar(gondolaNum);
       return false;
     }
@@ -1664,12 +1748,23 @@ class TursoService {
 
   Future<bool> salvarLayoutEstante(
       int estanteNum, List<CaixaLayoutEstante> itens) async {
-    if (!await _garantirConexao()) return false;
     try {
-      final stmtDel = await _client!.prepare(
+      return await garantirReplicaProntaParaEscrita(
+          () => _salvarLayoutEstante(estanteNum, itens));
+    } on ReplicaNaoProntaParaEscrita {
+      return false;
+    }
+  }
+
+  Future<bool> _salvarLayoutEstante(
+      int estanteNum, List<CaixaLayoutEstante> itens) async {
+    if (!await _garantirConexao()) return false;
+    final tx = await _client!.transaction();
+    try {
+      await tx.execute(
         'DELETE FROM estante_layout WHERE estante_num = ?',
+        positional: [estanteNum],
       );
-      await stmtDel.query(positional: [estanteNum]);
 
       final agora = DateTime.now().toIso8601String();
       for (var i = 0; i < itens.length; i += _maxLinhasPorInsert) {
@@ -1677,11 +1772,6 @@ class TursoService {
             ? i + _maxLinhasPorInsert
             : itens.length;
         final lote = itens.sublist(i, fim);
-        final stmtIns = await _client!.prepare(
-          'INSERT INTO estante_layout '
-          '(estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex, registrado_em) '
-          'VALUES ${List.filled(lote.length, '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}',
-        );
         final params = <dynamic>[];
         for (final item in lote) {
           params.addAll([
@@ -1695,11 +1785,18 @@ class TursoService {
             agora,
           ]);
         }
-        await stmtIns.query(positional: params);
+        await tx.execute(
+          'INSERT INTO estante_layout '
+          '(estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex, registrado_em) '
+          'VALUES ${List.filled(lote.length, '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}',
+          positional: params,
+        );
       }
-      marcarGravacaoLocal();
+      await tx.commit();
+      await marcarGravacaoLocal();
       return true;
     } catch (_) {
+      await tx.rollback();
       return false;
     }
   }

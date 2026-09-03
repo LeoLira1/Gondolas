@@ -12,6 +12,7 @@ import 'galpao_saldo.dart';
 import 'galpao_scene.dart' show RackGalpao;
 import 'models.dart' show localTipoGalpao;
 import 'turso_service.dart';
+import 'replica_coordinator.dart';
 
 /// Persistência do galpão: as 129 posições das duas partes (estrutura) e os
 /// racks empilhados (ocupação).
@@ -45,6 +46,12 @@ class GalpaoService {
   /// planta é o código (as larguras de corredor ainda são estimativas e vão
   /// ser remedidas), a tabela é só o espelho que os apps irmãos leem.
   Future<bool> garantirSeed({bool forcar = false}) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _garantirSeed(forcar: forcar)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _garantirSeed({bool forcar = false}) async {
     if (_seedFeito && !forcar) return true;
     final client = await _conexao();
     if (client == null) return false;
@@ -70,7 +77,7 @@ class GalpaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
       } catch (e) {
         await tx.rollback();
         rethrow;
@@ -263,6 +270,18 @@ class GalpaoService {
     required String produtoNome,
     required double quantidade,
   }) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _lancar(posicao: posicao, produtoCodigo: produtoCodigo,
+              produtoNome: produtoNome, quantidade: quantidade)); }
+    on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<List<RackGalpao>?> _lancar({
+    required int    posicao,
+    required String produtoCodigo,
+    required String produtoNome,
+    required double quantidade,
+  }) async {
     final client = await _conexao();
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
@@ -295,7 +314,7 @@ class GalpaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
         await tx.rollback();
@@ -315,6 +334,18 @@ class GalpaoService {
   /// novo. O espelho de estoque_localizado é reescrito pela mesma rotina do
   /// lançamento, então o saldo do produto acompanha na mesma transação.
   Future<List<RackGalpao>?> ajustarQuantidade({
+    required int    posicao,
+    required int    ordem,
+    required double quantidade,
+    String? origem,
+  }) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _ajustarQuantidade(posicao: posicao, ordem: ordem, quantidade: quantidade,
+              origem: origem)); }
+    on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<List<RackGalpao>?> _ajustarQuantidade({
     required int    posicao,
     required int    ordem,
     required double quantidade,
@@ -353,7 +384,7 @@ class GalpaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
         await tx.rollback();
@@ -368,6 +399,16 @@ class GalpaoService {
   /// cada e a ordem é renumerada, tudo numa transação. Devolve a nova pilha,
   /// ou null se falhou.
   Future<List<RackGalpao>?> esvaziar({
+    required int posicao,
+    required int ordem,
+    String? origem,
+  }) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _esvaziar(posicao: posicao, ordem: ordem, origem: origem)); }
+    on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<List<RackGalpao>?> _esvaziar({
     required int posicao,
     required int ordem,
     String? origem,
@@ -418,7 +459,7 @@ class GalpaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
         await tx.rollback();

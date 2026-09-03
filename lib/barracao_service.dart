@@ -7,6 +7,7 @@ import 'package:libsql_dart/src/transaction.dart' show Transaction;
 import 'barracao_config.dart';
 import 'models.dart' show localTipoBarracao;
 import 'turso_service.dart';
+import 'replica_coordinator.dart';
 
 /// Um endereço do barracão, já com o que está nele.
 ///
@@ -101,6 +102,14 @@ class BarracaoService {
   /// chão), então reescrever apagaria justamente o cadastro que a tabela
   /// existe para guardar. A semente é só o ponto de partida de um banco novo.
   Future<bool> garantirSeed() async {
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(_garantirSeed);
+    } on ReplicaNaoProntaParaEscrita {
+      return false;
+    }
+  }
+
+  Future<bool> _garantirSeed() async {
     if (_seedFeito) return true;
     final client = await _conexao();
     if (client == null) return false;
@@ -131,7 +140,7 @@ class BarracaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
       } catch (e) {
         await tx.rollback();
         rethrow;
@@ -181,11 +190,18 @@ class BarracaoService {
   /// Atribuir e corrigir a quantidade são a MESMA gravação de propósito: no
   /// barracão não existe "empilhar por cima" — o palete tem um produto e um
   /// número, e mudar qualquer um dos dois é reescrever a linha.
-  Future<EnderecoBarracao?> atribuir({
-    required int    id,
-    required String produtoCodigo,
-    required String produtoNome,
-    required double quantidade,
+  Future<EnderecoBarracao?> atribuir({required int id, required String produtoCodigo,
+      required String produtoNome, required double quantidade}) async {
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(() =>
+          _atribuir(id: id, produtoCodigo: produtoCodigo,
+              produtoNome: produtoNome, quantidade: quantidade));
+    } on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<EnderecoBarracao?> _atribuir({
+    required int id, required String produtoCodigo,
+    required String produtoNome, required double quantidade,
   }) async {
     if (quantidade <= 0) return null; // zerar é esvaziar, que é outra coisa
     final client = await _conexao();
@@ -224,7 +240,7 @@ class BarracaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
 
         return EnderecoBarracao(
           id:            id,
@@ -251,6 +267,13 @@ class BarracaoService {
   /// linha recicaria o rótulo num endereço futuro (mesma lição do
   /// PaleteRegistry, ver palete_registry.dart).
   Future<EnderecoBarracao?> esvaziar({required int id, String? origem}) async {
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(
+          () => _esvaziar(id: id, origem: origem));
+    } on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<EnderecoBarracao?> _esvaziar({required int id, String? origem}) async {
     final client = await _conexao();
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
@@ -281,7 +304,7 @@ class BarracaoService {
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        TursoService().marcarGravacaoLocal();
+        await TursoService().marcarGravacaoLocal();
 
         return EnderecoBarracao(
           id:     id,

@@ -82,6 +82,12 @@ jobs:
         # pubspec.yaml) dentro do android/ recém-scaffoldado.
         run: dart run flutter_launcher_icons
 
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
       - name: Build APK release
         # TODO: configure um keystore fixo via secrets para evitar o erro
         # "App não foi instalado" ao atualizar (assinatura muda a cada build).

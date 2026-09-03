@@ -1,6 +1,7 @@
 import 'package:libsql_dart/libsql_dart.dart';
 import 'models.dart';
 import 'turso_service.dart';
+import 'replica_coordinator.dart';
 
 /// Uma linha de estoque_localizado: quantidade de um produto num endereço
 /// físico (gôndola, estante ou galpão).
@@ -412,33 +413,46 @@ class EstoqueLocalizadoService {
     required double quantidade,
     String origem = 'gondolas_app',
   }) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _upsertQuantidade(produtoCodigo: produtoCodigo, localTipo: localTipo, localNum: localNum, faceOuColuna: faceOuColuna, andarOuNivel: andarOuNivel, quantidade: quantidade, origem: origem)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _upsertQuantidade({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+    required int faceOuColuna,
+    required int andarOuNivel,
+    required double quantidade,
+    String origem = 'gondolas_app',
+  }) async {
     final client = await _conexao();
     if (client == null) return false;
+    final tx = await client.transaction();
     try {
-      final stmtAnterior = await client.prepare(
+      final rowsAnterior = await tx.query(
         'SELECT quantidade FROM estoque_localizado WHERE produto_codigo = ? AND '
         'local_tipo = ? AND local_num = ? AND face_ou_coluna = ? AND andar_ou_nivel = ? LIMIT 1',
-      );
-      final rowsAnterior = (await stmtAnterior.query(positional: [
+        positional: [
         produtoCodigo,
         localTipo,
         localNum,
         faceOuColuna,
         andarOuNivel,
-      ])) as List<dynamic>;
+      ]);
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
           : (rowsAnterior.first as Map<String, dynamic>)['quantidade'] as num?;
 
       final agora = DateTime.now().toIso8601String();
-      final stmtUpsert = await client.prepare(
+      await tx.execute(
         'INSERT INTO estoque_localizado '
         '(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '
         'VALUES (?, ?, ?, ?, ?, ?, ?) '
         'ON CONFLICT(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel) '
         'DO UPDATE SET quantidade = excluded.quantidade, atualizado_em = excluded.atualizado_em',
-      );
-      await stmtUpsert.query(positional: [
+        positional: [
         produtoCodigo,
         localTipo,
         localNum,
@@ -456,12 +470,11 @@ class EstoqueLocalizadoService {
         andarOuNivel:  andarOuNivel,
         quantidade:    quantidade,
       );
-      final stmtLog = await client.prepare(
+      await tx.execute(
         'INSERT INTO contagens_log '
         '(produto_codigo, endereco, qtd_anterior, qtd_nova, origem, registrado_em) '
         'VALUES (?, ?, ?, ?, ?, ?)',
-      );
-      await stmtLog.query(positional: [
+        positional: [
         produtoCodigo,
         endereco.enderecoCompacto,
         qtdAnterior,
@@ -469,10 +482,12 @@ class EstoqueLocalizadoService {
         origem,
         agora,
       ]);
+      await tx.commit();
       _invalidarCachesBadges();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
+      await tx.rollback();
       return false;
     }
   }
@@ -486,29 +501,40 @@ class EstoqueLocalizadoService {
     required int faceOuColuna,
     required int andarOuNivel,
   }) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _deleteEndereco(produtoCodigo: produtoCodigo, localTipo: localTipo, localNum: localNum, faceOuColuna: faceOuColuna, andarOuNivel: andarOuNivel)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _deleteEndereco({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+    required int faceOuColuna,
+    required int andarOuNivel,
+  }) async {
     final client = await _conexao();
     if (client == null) return false;
+    final tx = await client.transaction();
     try {
-      final stmtAnterior = await client.prepare(
+      final rowsAnterior = await tx.query(
         'SELECT quantidade FROM estoque_localizado WHERE produto_codigo = ? AND '
         'local_tipo = ? AND local_num = ? AND face_ou_coluna = ? AND andar_ou_nivel = ? LIMIT 1',
-      );
-      final rowsAnterior = (await stmtAnterior.query(positional: [
+        positional: [
         produtoCodigo,
         localTipo,
         localNum,
         faceOuColuna,
         andarOuNivel,
-      ])) as List<dynamic>;
+      ]);
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
           : (rowsAnterior.first as Map<String, dynamic>)['quantidade'] as num?;
 
-      final stmtDelete = await client.prepare(
+      await tx.execute(
         'DELETE FROM estoque_localizado WHERE produto_codigo = ? AND '
         'local_tipo = ? AND local_num = ? AND face_ou_coluna = ? AND andar_ou_nivel = ?',
-      );
-      await stmtDelete.query(positional: [
+        positional: [
         produtoCodigo,
         localTipo,
         localNum,
@@ -524,12 +550,11 @@ class EstoqueLocalizadoService {
         andarOuNivel:  andarOuNivel,
         quantidade:    0,
       );
-      final stmtLog = await client.prepare(
+      await tx.execute(
         'INSERT INTO contagens_log '
         '(produto_codigo, endereco, qtd_anterior, qtd_nova, origem, registrado_em) '
         'VALUES (?, ?, ?, ?, ?, ?)',
-      );
-      await stmtLog.query(positional: [
+        positional: [
         produtoCodigo,
         endereco.enderecoCompacto,
         qtdAnterior,
@@ -537,10 +562,12 @@ class EstoqueLocalizadoService {
         'gondolas_app_exclusao',
         DateTime.now().toIso8601String(),
       ]);
+      await tx.commit();
       _invalidarCachesBadges();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
+      await tx.rollback();
       return false;
     }
   }
@@ -549,6 +576,16 @@ class EstoqueLocalizadoService {
   /// Usado pela limpeza automática ao salvar um layout de onde o produto foi
   /// removido — quantidades > 0 são estoque contado e nunca somem sozinhas.
   Future<bool> deleteEnderecosZerados({
+    required String produtoCodigo,
+    required String localTipo,
+    required int localNum,
+  }) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _deleteEnderecosZerados(produtoCodigo: produtoCodigo, localTipo: localTipo, localNum: localNum)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _deleteEnderecosZerados({
     required String produtoCodigo,
     required String localTipo,
     required int localNum,
@@ -562,7 +599,7 @@ class EstoqueLocalizadoService {
       );
       await stmt.query(positional: [produtoCodigo, localTipo, localNum]);
       _invalidarCachesBadges();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -572,6 +609,12 @@ class EstoqueLocalizadoService {
   /// Grava os endereços informados e sincroniza o total com o inventário
   /// cíclico, no contrato exato usado pelo dashboard e pelo inventariocamda.
   Future<ResultadoContagem?> concluirContagem(String produtoCodigo) async {
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _concluirContagem(produtoCodigo)); }
+    on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<ResultadoContagem?> _concluirContagem(String produtoCodigo) async {
     final client = await _conexao();
     if (client == null) return null;
 
@@ -594,21 +637,20 @@ class EstoqueLocalizadoService {
         .map((e) => '${e.enderecoCompacto} (${_fmtQtd(e.quantidade)})')
         .join(' + ');
 
+    final tx = await client.transaction();
     try {
-      final stmtCheck = await client.prepare(
+      final existe = await tx.query(
         'SELECT 1 FROM inventario_cicli WHERE data_contagem = ? AND produto_id = ? LIMIT 1',
+        positional: [hoje, produtoCodigo],
       );
-      final existe = (await stmtCheck.query(positional: [hoje, produtoCodigo]))
-          as List<dynamic>;
 
       if (existe.isEmpty) {
-        final stmtIns = await client.prepare(
+        await tx.execute(
           'INSERT INTO inventario_cicli '
           '(data_contagem, produto_id, produto_nome, categoria_id, categoria_label, categoria_cor, '
           'qtd_sistema, qtd_contada, divergencia, contado_em, observacao) '
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        );
-        await stmtIns.query(positional: [
+          positional: [
           hoje,
           produtoCodigo,
           info.produtoNome,
@@ -622,12 +664,11 @@ class EstoqueLocalizadoService {
           observacao,
         ]);
       } else {
-        final stmtUpd = await client.prepare(
+        await tx.execute(
           'UPDATE inventario_cicli SET qtd_contada = ?, divergencia = ?, contado_em = ?, '
           'observacao = ?, produto_nome = ?, qtd_sistema = ? '
           'WHERE data_contagem = ? AND produto_id = ?',
-        );
-        await stmtUpd.query(positional: [
+          positional: [
           total,
           divergencia,
           agoraIso,
@@ -639,20 +680,20 @@ class EstoqueLocalizadoService {
         ]);
       }
 
-      final stmtMestre = await client.prepare(
+      await tx.execute(
         'UPDATE estoque_mestre SET status_ciclo = ?, qtd_contada_ciclo = ?, '
         'qtd_sistema_na_contagem = ?, contado_ciclo_em = ? WHERE codigo = ?',
-      );
-      await stmtMestre.query(positional: [
+        positional: [
         status,
         total.round(),
         info.qtdSistema.round(),
         agoraIso,
         produtoCodigo,
       ]);
+      await tx.commit();
 
       _invalidarCachesBadges();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return ResultadoContagem(
         total:       total,
         qtdSistema:  info.qtdSistema,
@@ -660,6 +701,7 @@ class EstoqueLocalizadoService {
         status:      status,
       );
     } catch (_) {
+      await tx.rollback();
       return null;
     }
   }

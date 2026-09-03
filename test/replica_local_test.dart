@@ -101,12 +101,10 @@ void main() {
       expect(erroDeReplicaDivergente(panicoGeracao), isTrue);
     });
 
-    test('reconhece qualquer 400 no push de frames', () {
-      // Um 400 é o servidor recusando os frames locais: o conteúdo do JSON
-      // pode mudar com a versão do sqld, a saída é sempre reconstruir.
+    test('400 desconhecido não autoriza reconstrução destrutiva', () {
       expect(
         erroDeReplicaDivergente('Sync(PushFrame(400, "{}"))'),
-        isTrue,
+        isFalse,
       );
       // 5xx é o servidor com problema, não a replica: continua sendo tentar
       // de novo, nunca apagar o cache do usuário.
@@ -307,6 +305,14 @@ void main() {
               AssinaturaTabela(contagem: localizado, marca: marcaLocalizado),
           'galpao_racks':
               const AssinaturaTabela(contagem: 7, marca: '2026-08-18T08:00:00'),
+          'galpao_posicoes':
+              const AssinaturaTabela(contagem: 129, marca: 'posicoes'),
+          'barracao_enderecos':
+              const AssinaturaTabela(contagem: 80, marca: 'barracao'),
+          'inventario_cicli':
+              const AssinaturaTabela(contagem: 2, marca: 'inventario'),
+          'estoque_mestre':
+              const AssinaturaTabela(contagem: 500, marca: 'mestre'),
           'paletes':
               const AssinaturaTabela(contagem: 15, marca: '2026-01-02#15'),
           'contagens_log': const AssinaturaTabela(contagem: -1, marca: '900'),
@@ -322,6 +328,11 @@ void main() {
       // O log que só cresce não é contado: COUNT(*) nele cresceria para sempre,
       // e o maior id já denuncia linha nova de graça.
       expect(sql, contains('-1 AS contagens_log_n'));
+    });
+
+    test('inclui posições de barracão e galpão na confirmação', () {
+      expect(tabelasDoCarimbo.map((t) => t.nome), containsAll(
+          ['barracao_enderecos', 'galpao_posicoes']));
     });
 
     test('lê a linha devolvida pelo banco', () {
@@ -430,6 +441,18 @@ void main() {
             const DadosForaDeSincronia(ConferenciaDoCarimbo.divergentes)),
         contains('dados diferentes'),
       );
+    });
+  });
+
+  group('identidade do banco', () {
+    test('token e diferenças cosméticas não alteram a identidade', () {
+      expect(idBanco('LIBSQL://Banco.Exemplo.com/base/?authToken=um'),
+          idBanco('libsql://banco.exemplo.com/base?authToken=dois'));
+    });
+
+    test('URLs de bancos diferentes ficam em namespaces diferentes', () {
+      expect(idBanco('libsql://a.exemplo.com'),
+          isNot(idBanco('libsql://b.exemplo.com')));
     });
   });
 

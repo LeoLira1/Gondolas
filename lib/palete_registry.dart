@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'models.dart';
 import 'turso_service.dart';
+import 'replica_coordinator.dart';
 
 /// Palete de madeira do piso, cadastrado em RUNTIME na tabela `paletes` —
 /// diferente das estantes e expositores, que são const em tempo de
@@ -133,11 +134,16 @@ class PaleteRegistry {
   /// não há posição a informar. Os parâmetros continuam aqui para o dia em que
   /// o palete ganhar geometria no mapa — aí é só passar os valores, sem mudar
   /// a assinatura nem a tabela.
-  Future<int?> criar({
-    String apelido = '',
-    double posX = 0,
-    double posZ = 0,
-    double rotacao = 0,
+  Future<int?> criar({String apelido = '', double posX = 0,
+      double posZ = 0, double rotacao = 0}) async {
+    if (modoMemoria) return _criar(apelido: apelido, posX: posX, posZ: posZ, rotacao: rotacao);
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _criar(apelido: apelido, posX: posX, posZ: posZ, rotacao: rotacao)); }
+    on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<int?> _criar({
+    String apelido = '', double posX = 0, double posZ = 0, double rotacao = 0,
   }) async {
     if (modoMemoria) {
       final num = _maxNumEmMemoria() + 1;
@@ -176,7 +182,7 @@ class PaleteRegistry {
         DateTime.now().toIso8601String(),
       ]);
       await carregar();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return num;
     } catch (_) {
       return null;
@@ -188,6 +194,13 @@ class PaleteRegistry {
 
   /// Atualiza apelido/posição/rotação (e demais campos) do palete.
   Future<bool> atualizar(Palete p) async {
+    if (modoMemoria) return _atualizar(p);
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _atualizar(p)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _atualizar(Palete p) async {
     if (modoMemoria) {
       substituirEmMemoria(
           [for (final q in _paletes) q.num == p.num ? p : q]);
@@ -210,7 +223,7 @@ class PaleteRegistry {
         p.num,
       ]);
       await carregar();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -223,6 +236,13 @@ class PaleteRegistry {
   /// do palete em estoque_localizado continuam no banco, como nos removidos
   /// da parede — o produto deve ser recadastrado em outro endereço.
   Future<bool> desativar(int num) async {
+    if (modoMemoria) return _desativar(num);
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _desativar(num)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _desativar(int num) async {
     if (modoMemoria) {
       substituirEmMemoria([
         for (final q in _paletes) q.num == num ? q.copyWith(ativo: false) : q
@@ -236,7 +256,7 @@ class PaleteRegistry {
       );
       await stmt.query(positional: [num]);
       await carregar();
-      TursoService().marcarGravacaoLocal();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
