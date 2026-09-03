@@ -518,4 +518,45 @@ void main() {
       expect(msg, contains('nada em fila'));
     });
   });
+
+
+  group('conserto automático da réplica', () {
+    bool pode({
+      bool primeira = true,
+      bool travada = false,
+      int pendentes = 0,
+      bool divergencia = true,
+    }) =>
+        podeConsertarReplicaSozinho(
+          primeiraTentativa:  primeira,
+          recuperacaoTravada: travada,
+          gravacoesPendentes: pendentes,
+          erroDeDivergencia:  divergencia,
+        );
+
+    test('arquivo que nem abre, sem nada pendente, se conserta sozinho', () {
+      expect(pode(), isTrue);
+    });
+
+    test('réplica MARCADA nunca é apagada sozinha, nem com contador zerado',
+        () {
+      expect(pode(travada: true), isFalse,
+          reason: 'o app prometeu preservá-la até o usuário mandar apagar; '
+              'contador zerado não é prova por causa da janela entre o '
+              'commit local e a persistência do contador');
+    });
+
+    test('gravação pendente barra', () {
+      expect(pode(pendentes: 1), isFalse);
+    });
+
+    test('falha que não é divergência barra', () {
+      expect(pode(divergencia: false), isFalse,
+          reason: 'sem rede o arquivo está bom — apagar seria perda gratuita');
+    });
+
+    test('segunda tentativa na mesma abertura barra', () {
+      expect(pode(primeira: false), isFalse);
+    });
+  });
 }

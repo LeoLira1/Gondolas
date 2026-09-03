@@ -51,6 +51,15 @@ class TursoService {
   // novidade" de "o envio não saiu" quando o sync volta calado (ver
   // avaliarSync em replica_local.dart).
   static const String keyGravacoesPendentes = 'turso_gravacoes_pendentes';
+  // Marca que a replica local DESTE banco divergiu do servidor e só volta a
+  // aceitar gravação depois de uma recuperação explícita. Persistida porque a
+  // divergência não se cura sozinha: o servidor recusa os frames locais para
+  // sempre, então reabrir o app não pode ser o bastante para o portão de
+  // escrita reabrir. Sai só em _apagarArquivosDaReplica — quando o arquivo
+  // divergente deixa de existir, não há mais o que recuperar.
+  static const String keyRecuperacaoNecessaria = 'turso_recuperacao_necessaria';
+  // Identidade (hash da URL) do banco cujas chaves acima estão em uso.
+  static const String keyIdentidadeAtiva = 'turso_identidade_ativa';
 
   static const Map<String, String> categoriaCores = {
     'Lubrificantes': '#2e7d4f',
@@ -88,6 +97,12 @@ class TursoService {
   int       _enviadasNoUltimoSync = 0;
   final CoordenadorReplica _coordenador = CoordenadorReplica();
   String? _identidadeAtiva;
+  // Sync nativo do libsql em andamento. Existe porque `Future.timeout` NÃO
+  // cancela nada: quando o prazo do chamador estoura, o controle volta mas o
+  // sync continua falando com o servidor a partir do mesmo arquivo — e o
+  // mutex do coordenador já foi liberado. Toda chamada ao sync nativo e toda
+  // escrita admitida passam por aqui para nunca rodar por baixo dele.
+  Future<void>? _syncNativoEmAndamento;
 
   String _chavePorBanco(String base) =>
       _identidadeAtiva == null ? base : '${base}_${_identidadeAtiva!}';
@@ -179,10 +194,76 @@ class TursoService {
       Future<T> Function() acao) async {
     await _garantirConexao();
     try {
-      return await _coordenador.executarEscrita(acao);
+      return await _coordenador.executarEscrita(() async {
+        // Dentro do mutex, mas ainda não é hora de escrever: um sync nativo
+        // cujo prazo estourou continua vivo (ver _syncNativoEmAndamento) e o
+        // mutex não o segura. A recusa por estado já aconteceu acima, então
+        // esta espera só atrasa gravação que vai mesmo acontecer.
+        await _aguardarSyncNativo();
+        return acao();
+      });
     } on ReplicaNaoProntaParaEscrita catch (e) {
       _ultimoErroSync = e.toString();
       rethrow;
+    }
+  }
+
+  /// Roda o `sync()` do libsql serializado com os outros: um sync nativo que
+  /// ainda está no ar (porque o `.timeout` de quem o chamou desistiu sem
+  /// cancelá-lo) é aguardado antes de começar o próximo. Sem isto, dois syncs
+  /// nativos podiam disputar o mesmo arquivo de replica.
+  Future<void> _syncNativo(LibsqlClient client) async {
+    await _aguardarSyncNativo();
+    final futuro = client.sync();
+    _syncNativoEmAndamento = futuro;
+    try {
+      await futuro;
+    } finally {
+      if (identical(_syncNativoEmAndamento, futuro)) {
+        _syncNativoEmAndamento = null;
+      }
+    }
+  }
+
+  /// Espera o sync nativo em andamento terminar, se houver. A falha dele não
+  /// é problema de quem espera — quem chamou já a recebeu.
+  Future<void> _aguardarSyncNativo() async {
+    while (_syncNativoEmAndamento != null) {
+      await _syncNativoEmAndamento!.then<void>((_) {}, onError: (_) {});
+    }
+  }
+
+  /// Motivo para NÃO trocar a URL do banco agora, ou null quando pode trocar.
+  ///
+  /// A troca reescreve as credenciais em disco, e são elas que dizem ao app
+  /// qual banco é o seu. Trocar com gravação pendente abandonaria essas
+  /// gravações num arquivo de réplica que ninguém mais consegue sincronizar:
+  /// a URL de origem já não está em lugar nenhum. Por isso a pergunta é feita
+  /// ANTES de gravar — descobrir depois é descobrir tarde demais.
+  Future<String?> impedimentoParaTrocarBanco(String novaUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    final atual = prefs.getString(keyDbUrl) ?? '';
+    if (atual.isEmpty) return null;
+    if (idBanco(atual) == idBanco(novaUrl)) return null;
+    final pendentes = prefs.getInt('${keyGravacoesPendentes}_${idBanco(atual)}')
+        ?? prefs.getInt(keyGravacoesPendentes) ?? 0;
+    if (pendentes <= 0) return null;
+    final plural = pendentes == 1 ? 'gravação' : 'gravações';
+    return '$pendentes $plural deste banco ainda não subiram. Sincronize '
+        'antes de trocar a URL — depois da troca não há como enviá-las.';
+  }
+
+  /// Tranca o app em recuperação e GRAVA a marca antes de devolver: é ela que
+  /// sobrevive ao fechamento do app. Só o apagamento da réplica desfaz.
+  Future<void> _exigirRecuperacao() async {
+    _coordenador.exigirRecuperacao();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_chavePorBanco(keyRecuperacaoNecessaria), true);
+    } catch (_) {
+      // Perder a persistência não pode derrubar a trava em memória — nesta
+      // sessão o portão de escrita já está fechado, que é o que protege os
+      // dados agora.
     }
   }
 
@@ -295,7 +376,7 @@ class TursoService {
     final token      = prefs.getString(keyDbToken) ?? '';
     final cacheLocal = !kIsWeb && (prefs.getBool(keyCacheLocal) ?? true);
     final identidade = idBanco(url);
-    final anterior = prefs.getString('turso_identidade_ativa');
+    final anterior = prefs.getString(keyIdentidadeAtiva);
     if (anterior != null && anterior != identidade) {
       final pendentesAntigas =
           prefs.getInt('${keyGravacoesPendentes}_$anterior') ??
@@ -308,7 +389,7 @@ class TursoService {
       }
     }
     _identidadeAtiva = identidade;
-    await prefs.setString('turso_identidade_ativa', identidade);
+    await prefs.setString(keyIdentidadeAtiva, identidade);
     if (anterior == null) {
       final baseLegada = prefs.getBool(keyBaseLocalOk);
       final syncLegada = prefs.getString(keyUltimaSync);
@@ -326,6 +407,25 @@ class TursoService {
             _chavePorBanco(keyGravacoesPendentes), pendentesLegadas);
         await prefs.remove(keyGravacoesPendentes);
       }
+    }
+
+    // Antes de qualquer `pronta`: a divergência é uma condição do ARQUIVO da
+    // réplica, não da sessão. Reabrir o app não a desfaz, então a marca em
+    // disco volta a trancar o coordenador — e, trancado, ele ignora todos os
+    // `definirEstado` que este init ainda vai fazer.
+    //
+    // A trava pertence à RÉPLICA marcada, não ao app: fora dela não há frame
+    // local nenhum para o servidor recusar. Por isso a decisão é refeita a
+    // cada init, e vale só quando este init vai mesmo usar aquele arquivo —
+    // com o cache local desligado (gravação vai direto ao remoto) ou em outro
+    // banco, travar seria recusar escrita que não tem como divergir. A marca
+    // em disco fica onde está: voltar para aquele banco volta a trancar.
+    if (cacheLocal &&
+        (prefs.getBool(_chavePorBanco(keyRecuperacaoNecessaria)) ?? false)) {
+      _coordenador.exigirRecuperacao();
+      _ultimoErroSync = _erroRecuperacao;
+    } else if (_coordenador.recuperacaoTravada) {
+      _coordenador.concluirRecuperacao();
     }
 
     final ultimaSyncIso = prefs.getString(_chavePorBanco(keyUltimaSync));
@@ -542,9 +642,12 @@ class TursoService {
       // Apaga os arquivos e refaz do zero, uma vez, em vez de cair calado pro
       // modo remoto e deixar o cache local quebrado para sempre. Falha de rede
       // não entra aqui: aí o arquivo está bom e o fallback remoto é o certo.
-      if (podeReconstruir &&
-          _gravacoesPendentes == 0 &&
-          erroDeReplicaDivergente(e) &&
+      if (podeConsertarReplicaSozinho(
+            primeiraTentativa:   podeReconstruir,
+            recuperacaoTravada:  _coordenador.recuperacaoTravada,
+            gravacoesPendentes:  _gravacoesPendentes,
+            erroDeDivergencia:   erroDeReplicaDivergente(e),
+          ) &&
           await _apagarArquivosDaReplica()) {
         return _conectarComCacheLocal(url, token, podeReconstruir: false);
       }
@@ -560,7 +663,7 @@ class TursoService {
   /// recomeça do mesmo frame.
   Future<void> _estabelecerBaseLocal(
       LibsqlClient client, Duration limite) async {
-    await client.sync().timeout(limite);
+    await _syncNativo(client).timeout(limite);
     // O sync do libsql devolve sucesso quando a requisição HTTP não completa
     // (falha de rede vira "0 frames sincronizados"). Se a replica continua no
     // frame 0 depois dele, o estado é ambíguo: ou o servidor realmente não
@@ -756,7 +859,16 @@ class TursoService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_chavePorBanco(keyBaseLocalOk));
       _gravacoesPendentes = 0;
+      // As DUAS chaves: a com namespace do banco é a que vale hoje, e a sem
+      // namespace pode ter sobrado de uma instalação anterior à migração.
+      // Deixar a com namespace para trás ressuscitava, na próxima abertura,
+      // pendências de gravações que sumiram junto com o arquivo.
+      await prefs.remove(_chavePorBanco(keyGravacoesPendentes));
       await prefs.remove(keyGravacoesPendentes);
+      // A marca de recuperação NÃO sai aqui. Este método também roda no
+      // conserto automático de um arquivo que nem abre (ver
+      // _conectarComCacheLocal), e ali o apagamento não é escolha do usuário.
+      // Quem destrava é só limparCacheLocal.
       return true;
     } catch (_) {
       return false;
@@ -995,6 +1107,13 @@ class TursoService {
   /// No modo remoto (sem cache local) não há o que empurrar: só renova o
   /// cache do catálogo em memória.
   Future<bool> sincronizar() async {
+    // Réplica divergente: sincronizar de novo é repetir o erro que a condenou.
+    // Antes esta tentativa ainda "curava" o estado no fim, reabrindo o portão
+    // de escrita sobre uma réplica que o servidor recusa.
+    if (_coordenador.recuperacaoTravada) {
+      _ultimoErroSync = _erroRecuperacao;
+      return false;
+    }
     if (_coordenador.syncReservado) {
       _ultimoErroSync = 'já existe uma sincronização em andamento';
       return false;
@@ -1003,8 +1122,21 @@ class TursoService {
     return operacao.timeout(_timeoutSync, onTimeout: () {
       _ultimoErroSync = 'a sincronização continua em segundo plano; aguarde antes de tentar novamente';
       return false;
-    });
+    }).catchError((Object e) {
+      // A trava pode ter subido entre a checagem acima e a reserva. Quem
+      // explica é o próprio estado da exceção, não um palpite.
+      final recusa = e as ReplicaNaoProntaParaEscrita;
+      _ultimoErroSync =
+          recusa.estado == EstadoReplica.recuperacaoNecessaria
+              ? _erroRecuperacao
+              : recusa.toString();
+      return false;
+    }, test: (e) => e is ReplicaNaoProntaParaEscrita);
   }
+
+  static const String _erroRecuperacao =
+      'a réplica divergiu do banco e os dados locais foram preservados; '
+      'use "Limpar cache local" em ⚙️ para recuperar';
 
   Future<bool> _sincronizarExclusiva() async {
     if (!await _garantirConexao()) {
@@ -1031,8 +1163,8 @@ class TursoService {
       // Divergência nunca autoriza destruição silenciosa. Sem uma outbox com
       // ACK remoto, nem mesmo sabemos quais frames seriam perdidos.
       if (_modoLocal && erroDeReplicaDivergente(erro)) {
-        _coordenador.definirEstado(EstadoReplica.recuperacaoNecessaria);
-        _ultimoErroSync = 'a réplica divergiu; os dados locais foram preservados e precisam de recuperação';
+        await _exigirRecuperacao();
+        _ultimoErroSync = _erroRecuperacao;
         return false;
       }
       _ultimoErroSync = descreverErroSync(erro);
@@ -1096,7 +1228,7 @@ class TursoService {
   /// o aparelho tem, não há envio preso, e o contador estava velho.
   Future<Object?> _sincronizarReplica() async {
     final antes = await _estadoAtualDaReplica();
-    await _client!.sync();
+    await _syncNativo(_client!);
     final peloFrame = avaliarSync(
       antes: antes,
       depois: await _estadoAtualDaReplica(),
@@ -1116,7 +1248,7 @@ class TursoService {
       debugPrint('[turso] carimbo diferente em '
           '${conferencia.tabelas.join(", ")} '
           '(${conferencia.resultado.name}) — tentando de novo');
-      await _client!.sync();
+      await _syncNativo(_client!);
       conferencia = await _conferirCarimbos();
       if (_carimboAcusaAtraso(conferencia.resultado)) {
         return DadosForaDeSincronia(conferencia.resultado, conferencia.tabelas);
@@ -1179,6 +1311,10 @@ class TursoService {
     _ultimaSincronizacao = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(keyUltimaSync);
+    // Aqui, e só aqui: o usuário pediu para apagar sabendo que perde o que não
+    // subiu. É esta a recuperação explícita que a marca em disco espera.
+    await prefs.remove(_chavePorBanco(keyRecuperacaoNecessaria));
+    _coordenador.concluirRecuperacao();
 
     return true;
   }

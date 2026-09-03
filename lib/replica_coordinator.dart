@@ -35,11 +35,40 @@ class CoordenadorReplica {
   EstadoReplica _estado = EstadoReplica.desconectada;
   Future<void> _cauda = Future<void>.value();
   bool _syncReservado = false;
+  // Trava da recuperação. Enquanto ela está de pé, NADA move o estado: nem o
+  // `conectando` que todo init() anuncia, nem o `pronta` que ele conclui, nem
+  // o restauro no fim de uma sincronização. Sem a trava, uma réplica sabida
+  // divergente voltava a aceitar gravação só porque o app foi reaberto ou
+  // porque alguém tocou Sincronizar — e a divergência é justamente o estado
+  // em que o servidor recusa os frames locais para sempre.
+  bool _recuperacaoTravada = false;
 
   EstadoReplica get estado => _estado;
   bool get syncReservado => _syncReservado;
 
-  void definirEstado(EstadoReplica novo) => _estado = novo;
+  /// True quando só uma recuperação explícita (apagar a réplica divergente)
+  /// devolve o app ao normal.
+  bool get recuperacaoTravada => _recuperacaoTravada;
+
+  void definirEstado(EstadoReplica novo) {
+    if (_recuperacaoTravada) return;
+    _estado = novo;
+  }
+
+  /// Tranca o coordenador em [EstadoReplica.recuperacaoNecessaria]. Idempotente
+  /// — quem detecta a divergência não precisa saber se ela já era conhecida.
+  void exigirRecuperacao() {
+    _recuperacaoTravada = true;
+    _estado = EstadoReplica.recuperacaoNecessaria;
+  }
+
+  /// Destrava. Só quem de fato desfez a divergência pode chamar: hoje é o
+  /// apagamento dos arquivos da réplica. O estado volta a `desconectada`
+  /// porque não há mais réplica — quem reconecta é o init() seguinte.
+  void concluirRecuperacao() {
+    _recuperacaoTravada = false;
+    _estado = EstadoReplica.desconectada;
+  }
 
   Future<T> executarEscrita<T>(Future<T> Function() acao) {
     if (_estado != EstadoReplica.pronta || _syncReservado) {
@@ -51,6 +80,13 @@ class CoordenadorReplica {
   }
 
   Future<T> executarSincronizacao<T>(Future<T> Function() acao) {
+    // Sincronizar uma réplica divergente é repetir o erro que a condenou, e o
+    // restauro de estado no fim apagaria a marca da recuperação.
+    if (_recuperacaoTravada) {
+      return Future<T>.error(
+        const ReplicaNaoProntaParaEscrita(EstadoReplica.recuperacaoNecessaria),
+      );
+    }
     if (_syncReservado) {
       return Future<T>.error(
         const ReplicaNaoProntaParaEscrita(EstadoReplica.sincronizando),
@@ -62,6 +98,10 @@ class CoordenadorReplica {
     final futuro = _enfileirar(acao);
     return futuro.whenComplete(() {
       _syncReservado = false;
+      // A trava pode ter subido DENTRO desta sincronização (foi ela quem
+      // descobriu a divergência). Restaurar o estado anterior aqui seria
+      // apagar a descoberta que a própria operação acabou de fazer.
+      if (_recuperacaoTravada) return;
       if (_estado == EstadoReplica.sincronizando) {
         _estado = anterior == EstadoReplica.basePendente
             ? EstadoReplica.basePendente
