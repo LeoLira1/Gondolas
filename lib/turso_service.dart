@@ -413,9 +413,19 @@ class TursoService {
     // réplica, não da sessão. Reabrir o app não a desfaz, então a marca em
     // disco volta a trancar o coordenador — e, trancado, ele ignora todos os
     // `definirEstado` que este init ainda vai fazer.
-    if (prefs.getBool(_chavePorBanco(keyRecuperacaoNecessaria)) ?? false) {
+    //
+    // A trava pertence à RÉPLICA marcada, não ao app: fora dela não há frame
+    // local nenhum para o servidor recusar. Por isso a decisão é refeita a
+    // cada init, e vale só quando este init vai mesmo usar aquele arquivo —
+    // com o cache local desligado (gravação vai direto ao remoto) ou em outro
+    // banco, travar seria recusar escrita que não tem como divergir. A marca
+    // em disco fica onde está: voltar para aquele banco volta a trancar.
+    if (cacheLocal &&
+        (prefs.getBool(_chavePorBanco(keyRecuperacaoNecessaria)) ?? false)) {
       _coordenador.exigirRecuperacao();
       _ultimoErroSync = _erroRecuperacao;
+    } else if (_coordenador.recuperacaoTravada) {
+      _coordenador.concluirRecuperacao();
     }
 
     final ultimaSyncIso = prefs.getString(_chavePorBanco(keyUltimaSync));
@@ -632,9 +642,12 @@ class TursoService {
       // Apaga os arquivos e refaz do zero, uma vez, em vez de cair calado pro
       // modo remoto e deixar o cache local quebrado para sempre. Falha de rede
       // não entra aqui: aí o arquivo está bom e o fallback remoto é o certo.
-      if (podeReconstruir &&
-          _gravacoesPendentes == 0 &&
-          erroDeReplicaDivergente(e) &&
+      if (podeConsertarReplicaSozinho(
+            primeiraTentativa:   podeReconstruir,
+            recuperacaoTravada:  _coordenador.recuperacaoTravada,
+            gravacoesPendentes:  _gravacoesPendentes,
+            erroDeDivergencia:   erroDeReplicaDivergente(e),
+          ) &&
           await _apagarArquivosDaReplica()) {
         return _conectarComCacheLocal(url, token, podeReconstruir: false);
       }
@@ -852,10 +865,10 @@ class TursoService {
       // pendências de gravações que sumiram junto com o arquivo.
       await prefs.remove(_chavePorBanco(keyGravacoesPendentes));
       await prefs.remove(keyGravacoesPendentes);
-      // O arquivo divergente deixou de existir: é esta — e só esta — a
-      // recuperação explícita que destrava o portão de escrita.
-      await prefs.remove(_chavePorBanco(keyRecuperacaoNecessaria));
-      _coordenador.concluirRecuperacao();
+      // A marca de recuperação NÃO sai aqui. Este método também roda no
+      // conserto automático de um arquivo que nem abre (ver
+      // _conectarComCacheLocal), e ali o apagamento não é escolha do usuário.
+      // Quem destrava é só limparCacheLocal.
       return true;
     } catch (_) {
       return false;
@@ -1298,6 +1311,10 @@ class TursoService {
     _ultimaSincronizacao = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(keyUltimaSync);
+    // Aqui, e só aqui: o usuário pediu para apagar sabendo que perde o que não
+    // subiu. É esta a recuperação explícita que a marca em disco espera.
+    await prefs.remove(_chavePorBanco(keyRecuperacaoNecessaria));
+    _coordenador.concluirRecuperacao();
 
     return true;
   }

@@ -122,4 +122,70 @@ void main() {
           EstadoReplica.recuperacaoNecessaria);
     });
   });
+
+
+  // A trava é da RÉPLICA marcada, não do app: fora dela não existe frame
+  // local para o servidor recusar. Estes testes deixam o singleton
+  // destravado, por isso vêm depois do grupo acima.
+  group('a trava não vaza para onde não há réplica divergente', () {
+    final chaveVazio =
+        '${TursoService.keyRecuperacaoNecessaria}_${idBanco('')}';
+
+    test('cache local desligado grava direto no remoto', () async {
+      SharedPreferences.setMockInitialValues({chaveVazio: true});
+      await TursoService().init();
+      expect(TursoService().estadoReplica,
+          EstadoReplica.recuperacaoNecessaria,
+          reason: 'com cache local ligado, a marca vale');
+
+      // O usuário desliga o cache local: não há mais arquivo de réplica no
+      // caminho, e toda gravação vai pela rede. Travar aqui seria recusar
+      // escrita que não tem como divergir.
+      SharedPreferences.setMockInitialValues({
+        chaveVazio: true,
+        TursoService.keyCacheLocal: false,
+      });
+      await TursoService().init();
+
+      expect(TursoService().estadoReplica,
+          isNot(EstadoReplica.recuperacaoNecessaria));
+    });
+
+    test('outro banco não herda a trava do anterior', () async {
+      SharedPreferences.setMockInitialValues({chaveVazio: true});
+      await TursoService().init();
+      expect(TursoService().estadoReplica,
+          EstadoReplica.recuperacaoNecessaria);
+
+      // Troca para um banco que nunca divergiu. Sem token, o init decide tudo
+      // o que importa aqui e volta antes de tocar na rede.
+      SharedPreferences.setMockInitialValues({
+        chaveVazio: true,
+        TursoService.keyDbUrl: 'libsql://banco-saudavel.turso.io',
+      });
+      await TursoService().init();
+
+      expect(TursoService().estadoReplica,
+          isNot(EstadoReplica.recuperacaoNecessaria),
+          reason: 'a trava do banco anterior ficava presa em memória');
+    });
+
+    test('voltar ao banco marcado volta a travar', () async {
+      SharedPreferences.setMockInitialValues({
+        chaveVazio: true,
+        TursoService.keyDbUrl: 'libsql://banco-saudavel.turso.io',
+      });
+      await TursoService().init();
+      expect(TursoService().estadoReplica,
+          isNot(EstadoReplica.recuperacaoNecessaria));
+
+      // A marca continua em disco: ela não some por o app ter passado por
+      // outro banco no meio do caminho.
+      SharedPreferences.setMockInitialValues({chaveVazio: true});
+      await TursoService().init();
+
+      expect(TursoService().estadoReplica,
+          EstadoReplica.recuperacaoNecessaria);
+    });
+  });
 }

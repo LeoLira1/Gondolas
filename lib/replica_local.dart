@@ -413,6 +413,34 @@ class SincronizacaoNaoConfirmada implements Exception {
 /// A comparação é por texto porque o `libsql_dart` faz `unwrap()` no lado Rust:
 /// o que chega no Dart é uma `PanicException` com a mensagem do erro dentro,
 /// sem tipo nenhum para checar.
+/// True quando o conserto automático pode APAGAR a replica local para
+/// reabri-la do zero. É a única destruição de dados que o app faz sozinho, sem
+/// o usuário mandar, então cada condição está aqui por um motivo:
+///
+/// - [primeiraTentativa]: já reconstruímos uma vez nesta abertura; insistir
+///   viraria laço.
+/// - [recuperacaoTravada]: a replica está MARCADA como divergente e o app
+///   prometeu preservá-la até o usuário escolher "Limpar cache local". Apagar
+///   aqui desmentiria a promessa.
+/// - [gravacoesPendentes]: contador acima de zero é gravação que não subiu.
+/// - [erroDeDivergencia]: falha de rede não autoriza apagar nada — nesse caso
+///   o arquivo está bom e o fallback remoto é o certo.
+///
+/// Contador zerado NÃO é prova de que não há nada a perder: entre o commit
+/// local e a persistência do contador existe uma janela (ver
+/// docs/outbox-design.md). Ele só vale como salvaguarda A MAIS, nunca como a
+/// única — por isso a marca de recuperação tem voto próprio aqui.
+bool podeConsertarReplicaSozinho({
+  required bool primeiraTentativa,
+  required bool recuperacaoTravada,
+  required int  gravacoesPendentes,
+  required bool erroDeDivergencia,
+}) =>
+    primeiraTentativa &&
+    !recuperacaoTravada &&
+    gravacoesPendentes == 0 &&
+    erroDeDivergencia;
+
 bool erroDeReplicaDivergente(Object erro) {
   final texto = erro.toString();
   return texto.contains('InvalidPushFrameConflict') ||
