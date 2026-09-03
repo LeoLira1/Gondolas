@@ -7,6 +7,7 @@ import 'package:libsql_dart/src/transaction.dart' show Transaction;
 import 'barracao_config.dart';
 import 'models.dart' show localTipoBarracao;
 import 'turso_service.dart';
+import 'outbox.dart';
 import 'replica_coordinator.dart';
 
 /// Um endereço do barracão, já com o que está nele.
@@ -125,6 +126,7 @@ class BarracaoService {
       }
 
       final agora = DateTime.now().toIso8601String();
+      MutacaoOutbox? mutacao;
       final tx = await client.transaction();
       try {
         for (final p in BarracaoConfig.posicoesPadrao) {
@@ -137,12 +139,23 @@ class BarracaoService {
             positional: [p.rotulo, p.x, p.z, agora],
           );
         }
+        // Planta do barracão vinda do código, como o seed do galpão: sem
+        // estado declarado, porque ela se reexecuta sozinha se faltar.
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'barracao.garantirSeed',
+          tabela:   'barracao_enderecos',
+          chave:    const {},
+          estadoAnterior: null,
+          estadoFinal:    null,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
       } catch (e) {
         await tx.rollback();
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
       _seedFeito = true;
@@ -208,6 +221,7 @@ class BarracaoService {
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
     try {
+      MutacaoOutbox? mutacao;
       final tx = await client.transaction();
       try {
         final antes = await tx.query(
@@ -237,6 +251,27 @@ class BarracaoService {
         await _reescreverEspelho(tx, id, produtoCodigo, quantidade, agora);
         await _registrarLog(tx, rotulo, produtoCodigo,
             anterior: qtdAntes, nova: quantidade, agora: agora);
+        // O endereço do barracão tem `id` próprio e não é renumerado: a chave
+        // aponta sempre para o MESMO palete, então dá para reaplicar sozinho.
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'barracao.atribuir',
+          tabela:   'barracao_enderecos',
+          chave:    {'id': id},
+          estadoAnterior: {
+            'produto_codigo': codigoAntes,
+            'quantidade': (antes.first['quantidade'] as num?)?.toDouble() ?? 0,
+          },
+          estadoFinal: {
+            'produto_codigo': produtoCodigo,
+            'quantidade':     quantidade,
+          },
+          produtoCodigo: produtoCodigo,
+          produtoNome:   produtoNome,
+          posicao:       id,
+          quantidadeAnterior:   qtdAntes,
+          quantidadePretendida: quantidade,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
@@ -253,6 +288,7 @@ class BarracaoService {
         );
       } catch (e) {
         await tx.rollback();
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
     } catch (_) {
@@ -278,6 +314,7 @@ class BarracaoService {
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
     try {
+      MutacaoOutbox? mutacao;
       final tx = await client.transaction();
       try {
         final antes = await tx.query(
@@ -301,6 +338,23 @@ class BarracaoService {
         await _reescreverEspelho(tx, id, '', 0, agora);
         await _registrarLog(tx, rotulo, codigo,
             anterior: qtdAntes, nova: 0, agora: agora, origem: origem);
+        // O endereço continua existindo, vazio — por isso o estado final não é
+        // `null`: a linha não some, ela zera.
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'barracao.esvaziar',
+          tabela:   'barracao_enderecos',
+          chave:    {'id': id},
+          estadoAnterior: {
+            'produto_codigo': codigo,
+            'quantidade':     qtdAntes,
+          },
+          estadoFinal: const {'produto_codigo': '', 'quantidade': 0},
+          produtoCodigo: codigo,
+          posicao:       id,
+          quantidadeAnterior:   qtdAntes,
+          quantidadePretendida: 0,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
@@ -314,6 +368,7 @@ class BarracaoService {
         );
       } catch (e) {
         await tx.rollback();
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
     } catch (_) {

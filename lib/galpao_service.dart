@@ -12,6 +12,7 @@ import 'galpao_saldo.dart';
 import 'galpao_scene.dart' show RackGalpao;
 import 'models.dart' show localTipoGalpao;
 import 'turso_service.dart';
+import 'outbox.dart';
 import 'replica_coordinator.dart';
 
 /// Persistência do galpão: as 129 posições das duas partes (estrutura) e os
@@ -55,6 +56,7 @@ class GalpaoService {
     if (_seedFeito && !forcar) return true;
     final client = await _conexao();
     if (client == null) return false;
+    MutacaoOutbox? mutacao;
     try {
       final tx = await client.transaction();
       try {
@@ -74,12 +76,29 @@ class GalpaoService {
             ],
           );
         }
+        // O seed é a planta do galpão vinda do CÓDIGO (GalpaoConfig), não do
+        // usuário: são 129 upserts de constantes, idempotentes por construção.
+        // Por isso ele entra na outbox com os dois estados ausentes — a
+        // reaplicação o lê como "nada a fazer", e está certo: se a réplica for
+        // reconstruída, o próprio init roda o seed de novo. Registrar mesmo
+        // assim é o que mantém a regra "nenhuma mutação fica de fora".
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'galpao.garantirSeed',
+          tabela:   'galpao_posicoes',
+          chave:    const {},
+          estadoAnterior: null,
+          estadoFinal:    null,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
       } catch (e) {
         await tx.rollback();
+        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
+        // apaga nada —, só sai da fila de reaplicação.
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
       _seedFeito = true;
@@ -285,6 +304,8 @@ class GalpaoService {
     final client = await _conexao();
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
+    // Fora do try: o catch precisa saber se já houve registro para desfazer.
+    MutacaoOutbox? mutacao;
     try {
       final tx = await client.transaction();
       try {
@@ -311,6 +332,27 @@ class GalpaoService {
         await _reescreverEspelho(tx, posicao, pilha, agora);
         await _registrarLog(tx, posicao, ordem, produtoCodigo,
             anterior: null, nova: quantidade, agora: agora);
+        // Intenção registrada ANTES do commit, e o carimbo do UUID DENTRO da
+        // transação: assim o reconhecimento viaja nos mesmos frames da
+        // mutação. `atualizado_em` fica fora do estado — muda sempre, e faria
+        // toda comparação futura terminar em conflito.
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'galpao.lancar',
+          tabela:   'galpao_racks',
+          chave:    {'posicao': posicao, 'ordem': ordem},
+          estadoAnterior: null, // rack novo no topo da pilha
+          estadoFinal: {
+            'produto_codigo': produtoCodigo,
+            'produto_nome':   produtoNome,
+            'quantidade':     quantidade,
+          },
+          produtoCodigo: produtoCodigo,
+          produtoNome:   produtoNome,
+          posicao:       posicao,
+          ordem:         ordem,
+          quantidadePretendida: quantidade,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
@@ -318,6 +360,9 @@ class GalpaoService {
         return pilha;
       } catch (e) {
         await tx.rollback();
+        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
+        // apaga nada —, só sai da fila de reaplicação.
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
     } catch (_) {
@@ -355,11 +400,13 @@ class GalpaoService {
     final client = await _conexao();
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
+    // Fora do try: o catch precisa saber se já houve registro para desfazer.
+    MutacaoOutbox? mutacao;
     try {
       final tx = await client.transaction();
       try {
         final antes = await tx.query(
-          'SELECT produto_codigo, quantidade FROM galpao_racks '
+          'SELECT produto_codigo, produto_nome, quantidade FROM galpao_racks '
           'WHERE posicao = ? AND ordem = ? LIMIT 1',
           positional: [posicao, ordem],
         );
@@ -381,6 +428,26 @@ class GalpaoService {
         await _registrarLog(tx, posicao, ordem, codigo,
             anterior: qtdAntes, nova: quantidade, agora: agora,
             origem: origem);
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'galpao.ajustarQuantidade',
+          tabela:   'galpao_racks',
+          chave:    {'posicao': posicao, 'ordem': ordem},
+          estadoAnterior: {
+            'produto_codigo': codigo,
+            'quantidade':     qtdAntes,
+          },
+          estadoFinal: {
+            'produto_codigo': codigo,
+            'quantidade':     quantidade,
+          },
+          produtoCodigo: codigo,
+          produtoNome:   antes.first['produto_nome'] as String?,
+          posicao:       posicao,
+          ordem:         ordem,
+          quantidadeAnterior:   qtdAntes,
+          quantidadePretendida: quantidade,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
@@ -388,6 +455,9 @@ class GalpaoService {
         return pilha;
       } catch (e) {
         await tx.rollback();
+        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
+        // apaga nada —, só sai da fila de reaplicação.
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
     } catch (_) {
@@ -416,11 +486,13 @@ class GalpaoService {
     final client = await _conexao();
     if (client == null) return null;
     final agora = DateTime.now().toIso8601String();
+    // Fora do try: o catch precisa saber se já houve registro para desfazer.
+    MutacaoOutbox? mutacao;
     try {
       final tx = await client.transaction();
       try {
         final antes = await tx.query(
-          'SELECT produto_codigo, quantidade FROM galpao_racks '
+          'SELECT produto_codigo, produto_nome, quantidade FROM galpao_racks '
           'WHERE posicao = ? AND ordem = ? LIMIT 1',
           positional: [posicao, ordem],
         );
@@ -456,6 +528,23 @@ class GalpaoService {
         await _reescreverEspelho(tx, posicao, pilha, agora);
         await _registrarLog(tx, posicao, ordem, codigo,
             anterior: qtdAntes, nova: 0, agora: agora, origem: origem);
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'galpao.esvaziar',
+          tabela:   'galpao_racks',
+          chave:    {'posicao': posicao, 'ordem': ordem},
+          estadoAnterior: {
+            'produto_codigo': codigo,
+            'quantidade':     qtdAntes,
+          },
+          estadoFinal: null, // o rack deixa de existir e a pilha desce
+          produtoCodigo: codigo,
+          produtoNome:   antes.first['produto_nome'] as String?,
+          posicao:       posicao,
+          ordem:         ordem,
+          quantidadeAnterior:   qtdAntes,
+          quantidadePretendida: 0,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
@@ -463,6 +552,9 @@ class GalpaoService {
         return pilha;
       } catch (e) {
         await tx.rollback();
+        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
+        // apaga nada —, só sai da fila de reaplicação.
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
         rethrow;
       }
     } catch (_) {

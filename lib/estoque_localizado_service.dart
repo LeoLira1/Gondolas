@@ -1,6 +1,7 @@
 import 'package:libsql_dart/libsql_dart.dart';
 import 'models.dart';
 import 'turso_service.dart';
+import 'outbox.dart';
 import 'replica_coordinator.dart';
 
 /// Uma linha de estoque_localizado: quantidade de um produto num endereço
@@ -110,6 +111,23 @@ class ResultadoContagem {
 }
 
 class EstoqueLocalizadoService {
+  /// Chave LÓGICA de um endereço. É ela — e não o `id` autoincrementado, que
+  /// diverge entre réplicas offline — que permite reler a mesma linha no
+  /// remoto depois de uma reconstrução.
+  static Map<String, Object?> chaveDoEndereco({
+    required String produtoCodigo,
+    required String localTipo,
+    required int    localNum,
+    required int    faceOuColuna,
+    required int    andarOuNivel,
+  }) => {
+        'produto_codigo':  produtoCodigo,
+        'local_tipo':      localTipo,
+        'local_num':       localNum,
+        'face_ou_coluna':  faceOuColuna,
+        'andar_ou_nivel':  andarOuNivel,
+      };
+
   static final EstoqueLocalizadoService _instance =
       EstoqueLocalizadoService._internal();
   factory EstoqueLocalizadoService() => _instance;
@@ -430,6 +448,14 @@ class EstoqueLocalizadoService {
     final client = await _conexao();
     if (client == null) return false;
     final tx = await client.transaction();
+    MutacaoOutbox? mutacao;
+    final chaveEndereco = chaveDoEndereco(
+      produtoCodigo: produtoCodigo,
+      localTipo:     localTipo,
+      localNum:      localNum,
+      faceOuColuna:  faceOuColuna,
+      andarOuNivel:  andarOuNivel,
+    );
     try {
       final rowsAnterior = await tx.query(
         'SELECT quantidade FROM estoque_localizado WHERE produto_codigo = ? AND '
@@ -482,12 +508,32 @@ class EstoqueLocalizadoService {
         origem,
         agora,
       ]);
+      // Endereço lógico é chave estável (produto + local), não posição numa
+      // pilha: dá para reler a MESMA linha no remoto depois de reconstruir, e
+      // por isso esta operação é reaplicável automaticamente.
+      mutacao = await TursoService().abrirMutacao(
+        operacao: 'estoqueLocalizado.upsertQuantidade',
+        tabela:   'estoque_localizado',
+        chave:    chaveEndereco,
+        estadoAnterior:
+            rowsAnterior.isEmpty ? null : {'quantidade': qtdAnterior},
+        estadoFinal: {'quantidade': quantidade},
+        // NOT NULL no esquema e fora da comparação: sem ele, recriar um
+        // endereço que o remoto não tem mais falharia no INSERT.
+        extrasParaInsercao: {'atualizado_em': agora},
+        produtoCodigo: produtoCodigo,
+        posicao:       localNum,
+        quantidadeAnterior:   qtdAnterior?.toDouble(),
+        quantidadePretendida: quantidade,
+      );
+      await TursoService().carimbarMutacao(tx, mutacao);
       await tx.commit();
       _invalidarCachesBadges();
       await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       await tx.rollback();
+      if (mutacao != null) await TursoService().abortarMutacao(mutacao);
       return false;
     }
   }
@@ -516,6 +562,14 @@ class EstoqueLocalizadoService {
     final client = await _conexao();
     if (client == null) return false;
     final tx = await client.transaction();
+    MutacaoOutbox? mutacao;
+    final chaveEndereco = chaveDoEndereco(
+      produtoCodigo: produtoCodigo,
+      localTipo:     localTipo,
+      localNum:      localNum,
+      faceOuColuna:  faceOuColuna,
+      andarOuNivel:  andarOuNivel,
+    );
     try {
       final rowsAnterior = await tx.query(
         'SELECT quantidade FROM estoque_localizado WHERE produto_codigo = ? AND '
@@ -562,12 +616,25 @@ class EstoqueLocalizadoService {
         'gondolas_app_exclusao',
         DateTime.now().toIso8601String(),
       ]);
+      mutacao = await TursoService().abrirMutacao(
+        operacao: 'estoqueLocalizado.deleteEndereco',
+        tabela:   'estoque_localizado',
+        chave:    chaveEndereco,
+        estadoAnterior: {'quantidade': qtdAnterior},
+        estadoFinal:    null, // o endereço deixa de existir
+        produtoCodigo: produtoCodigo,
+        posicao:       localNum,
+        quantidadeAnterior:   qtdAnterior?.toDouble(),
+        quantidadePretendida: 0,
+      );
+      await TursoService().carimbarMutacao(tx, mutacao);
       await tx.commit();
       _invalidarCachesBadges();
       await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       await tx.rollback();
+      if (mutacao != null) await TursoService().abortarMutacao(mutacao);
       return false;
     }
   }
@@ -592,16 +659,41 @@ class EstoqueLocalizadoService {
   }) async {
     final client = await _conexao();
     if (client == null) return false;
+    // Virou transação para que o carimbo do UUID entre junto com o DELETE: um
+    // reconhecimento que pudesse viajar sem a mutação (ou vice-versa) não
+    // reconheceria coisa nenhuma.
+    final tx = await client.transaction();
+    MutacaoOutbox? mutacao;
     try {
-      final stmt = await client.prepare(
+      await tx.execute(
         'DELETE FROM estoque_localizado WHERE produto_codigo = ? AND '
         'local_tipo = ? AND local_num = ? AND quantidade = 0',
+        positional: [produtoCodigo, localTipo, localNum],
       );
-      await stmt.query(positional: [produtoCodigo, localTipo, localNum]);
+      // Sem estado declarado: só apaga linha ZERADA, e apagar de novo o que já
+      // não está lá não muda nada. Ver decidirReaplicacao.
+      mutacao = await TursoService().abrirMutacao(
+        operacao: 'estoqueLocalizado.deleteEnderecosZerados',
+        tabela:   'estoque_localizado',
+        chave: {
+          'produto_codigo': produtoCodigo,
+          'local_tipo':     localTipo,
+          'local_num':      localNum,
+          'quantidade':     0,
+        },
+        estadoAnterior: null,
+        estadoFinal:    null,
+        produtoCodigo: produtoCodigo,
+        posicao:       localNum,
+      );
+      await TursoService().carimbarMutacao(tx, mutacao);
+      await tx.commit();
       _invalidarCachesBadges();
       await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
+      await tx.rollback();
+      if (mutacao != null) await TursoService().abortarMutacao(mutacao);
       return false;
     }
   }
@@ -638,9 +730,14 @@ class EstoqueLocalizadoService {
         .join(' + ');
 
     final tx = await client.transaction();
+    MutacaoOutbox? mutacao;
     try {
+      // Traz os valores, não só o `1`: são eles o estado anterior que a outbox
+      // precisa para decidir, depois de uma reconstrução, se o remoto ainda
+      // está onde estava quando esta contagem foi fechada.
       final existe = await tx.query(
-        'SELECT 1 FROM inventario_cicli WHERE data_contagem = ? AND produto_id = ? LIMIT 1',
+        'SELECT qtd_contada, divergencia FROM inventario_cicli '
+        'WHERE data_contagem = ? AND produto_id = ? LIMIT 1',
         positional: [hoje, produtoCodigo],
       );
 
@@ -690,6 +787,26 @@ class EstoqueLocalizadoService {
         agoraIso,
         produtoCodigo,
       ]);
+      // Chave (data, produto) é estável: reaplicável automaticamente.
+      mutacao = await TursoService().abrirMutacao(
+        operacao: 'estoqueLocalizado.concluirContagem',
+        tabela:   'inventario_cicli',
+        chave:    {'data_contagem': hoje, 'produto_id': produtoCodigo},
+        estadoAnterior: existe.isEmpty
+            ? null
+            : {
+                'qtd_contada': (existe.first['qtd_contada'] as num?)?.toDouble(),
+                'divergencia': (existe.first['divergencia'] as num?)?.toDouble(),
+              },
+        estadoFinal: {'qtd_contada': total, 'divergencia': divergencia},
+        produtoCodigo: produtoCodigo,
+        produtoNome:   info.produtoNome,
+        quantidadeAnterior: existe.isEmpty
+            ? null
+            : (existe.first['qtd_contada'] as num?)?.toDouble(),
+        quantidadePretendida: total,
+      );
+      await TursoService().carimbarMutacao(tx, mutacao);
       await tx.commit();
 
       _invalidarCachesBadges();
@@ -702,6 +819,7 @@ class EstoqueLocalizadoService {
       );
     } catch (_) {
       await tx.rollback();
+      if (mutacao != null) await TursoService().abortarMutacao(mutacao);
       return null;
     }
   }

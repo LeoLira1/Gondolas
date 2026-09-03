@@ -5,6 +5,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart'
     show kDebugMode, kIsWeb, ValueNotifier, debugPrint;
 import 'package:libsql_dart/libsql_dart.dart';
+// `Transaction` não é reexportado pelo libsql_dart.dart, e carimbarMutacao
+// precisa nomear o tipo: o carimbo do UUID tem de entrar na MESMA transação da
+// mutação, então ele recebe a transação de quem está gravando. Caminho interno,
+// versão fixada no pubspec.lock.
+import 'package:libsql_dart/src/transaction.dart' show Transaction;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'galpao_config.dart';
@@ -14,6 +19,8 @@ import 'models.dart';
 import 'palete_registry.dart';
 import 'replica_local.dart';
 import 'replica_coordinator.dart';
+import 'outbox.dart';
+import 'outbox_store.dart';
 
 /// Cronometra uma etapa de banco e imprime o tempo no log, só em debug.
 ///
@@ -60,6 +67,9 @@ class TursoService {
   static const String keyRecuperacaoNecessaria = 'turso_recuperacao_necessaria';
   // Identidade (hash da URL) do banco cujas chaves acima estão em uso.
   static const String keyIdentidadeAtiva = 'turso_identidade_ativa';
+  // Identificador sorteado deste aparelho. Serve para a revisão manual dizer de
+  // onde veio a mutação em conflito; não identifica pessoa nenhuma.
+  static const String keyDispositivo = 'turso_dispositivo';
 
   static const Map<String, String> categoriaCores = {
     'Lubrificantes': '#2e7d4f',
@@ -103,6 +113,10 @@ class TursoService {
   // mutex do coordenador já foi liberado. Toda chamada ao sync nativo e toda
   // escrita admitida passam por aqui para nunca rodar por baixo dele.
   Future<void>? _syncNativoEmAndamento;
+  final OutboxStore _outbox = OutboxStore();
+  // Identificador deste aparelho, para a tela de revisão dizer de ONDE veio a
+  // mutação em conflito. Sorteado uma vez e guardado; não identifica pessoa.
+  String? _dispositivo;
 
   String _chavePorBanco(String base) =>
       _identidadeAtiva == null ? base : '${base}_${_identidadeAtiva!}';
@@ -231,6 +245,331 @@ class TursoService {
     while (_syncNativoEmAndamento != null) {
       await _syncNativoEmAndamento!.then<void>((_) {}, onError: (_) {});
     }
+  }
+
+  // ── Outbox de mutações ────────────────────────────────────────────────────
+  // O diário do que este aparelho gravou e o servidor ainda não confirmou. Vive
+  // num arquivo à parte da réplica de propósito: a recuperação APAGA a réplica,
+  // e o que serve para reconstruir não pode morrer junto com o que se perdeu.
+
+  Future<String> _caminhoOutbox() async {
+    final dir = await getApplicationSupportDirectory();
+    final id = _identidadeAtiva ?? 'sem_banco';
+    return '${dir.path}/camda_gondolas_outbox_$id.db';
+  }
+
+  Future<void> _abrirOutbox() async {
+    try {
+      await _outbox.abrir(await _caminhoOutbox());
+    } catch (_) {
+      // Sem outbox o app continua funcionando como antes dela; o que se perde
+      // é a capacidade de reaplicar depois de uma reconstrução. Derrubar a
+      // abertura do app por causa disso seria pior.
+    }
+  }
+
+  /// Identificador deste aparelho, resolvido uma vez por sessão.
+  ///
+  /// NUNCA lança, e isso é requisito, não zelo: quem chama é o `abrirMutacao`,
+  /// que roda DENTRO da transação da gravação. Uma exceção aqui — preferências
+  /// indisponíveis, `Platform` inexistente na Web — derrubaria por rollback um
+  /// lançamento que estava perfeitamente bom. Sem identidade, a mutação ainda
+  /// vale; ela só chega à conferência sem dizer de qual aparelho veio.
+  Future<String> _dispositivoAtual() async {
+    final emMemoria = _dispositivo;
+    if (emMemoria != null) return emMemoria;
+    // `Platform` vem do dart:io e não existe na Web, onde o app roda em modo
+    // remoto — e é justamente ali que toda gravação passaria por aqui.
+    final plataforma = kIsWeb ? 'web' : Platform.operatingSystem;
+    var id = '$plataforma-${gerarUuidV4().substring(0, 8)}';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final guardado = prefs.getString(keyDispositivo);
+      if (guardado != null) {
+        id = guardado;
+      } else {
+        await prefs.setString(keyDispositivo, id);
+      }
+    } catch (_) {
+      // Fica o sorteado desta sessão. Um nome de aparelho instável é menos
+      // grave do que uma gravação recusada.
+    }
+    _dispositivo = id;
+    return id;
+  }
+
+  /// Registra a INTENÇÃO de uma mutação antes de ela ser commitada.
+  ///
+  /// [estadoAnterior] é a linha como ela está agora (null se não existe) e
+  /// [estadoFinal] é onde ela deve chegar (null para um DELETE). São esses dois
+  /// que tornam a reaplicação segura depois de uma reconstrução: sem o
+  /// anterior, não há como saber se o remoto ainda está onde estava quando o
+  /// usuário agiu — e reaplicar por cima do trabalho de outra pessoa é
+  /// exatamente o que não se pode fazer.
+  ///
+  /// Só as colunas que interessam entram nos estados. Carimbo de
+  /// `atualizado_em` fica de fora: ele muda sempre, e faria toda comparação
+  /// terminar em conflito.
+  Future<MutacaoOutbox> abrirMutacao({
+    required String operacao,
+    required String tabela,
+    required Map<String, Object?> chave,
+    required Map<String, Object?>? estadoAnterior,
+    required Map<String, Object?>? estadoFinal,
+    /// Colunas NOT NULL necessárias para RECRIAR a linha, que não entram na
+    /// comparação de estado (`atualizado_em`, `criado_em`).
+    Map<String, Object?> extrasParaInsercao = const {},
+    String? produtoCodigo,
+    String? produtoNome,
+    int?    posicao,
+    int?    ordem,
+    double? quantidadeAnterior,
+    double? quantidadePretendida,
+  }) async {
+    final mutacao = MutacaoOutbox(
+      uuid:      gerarUuidV4(),
+      operacao:  operacao,
+      alvo:      AlvoMutacao(tabela: tabela, chave: chave),
+      estadoAnterior: estadoAnterior,
+      estadoFinal:    estadoFinal,
+      extrasParaInsercao: extrasParaInsercao,
+      criadoEm:    DateTime.now(),
+      dispositivo: await _dispositivoAtual(),
+      produtoCodigo:        produtoCodigo,
+      produtoNome:          produtoNome,
+      posicao:              posicao,
+      ordem:                ordem,
+      quantidadeAnterior:   quantidadeAnterior,
+      quantidadePretendida: quantidadePretendida,
+    );
+    // Sempre, não só quando fechada: se a URL do banco mudou nesta sessão, o
+    // caminho mudou junto e a store precisa rotacionar. Uma outbox presa no
+    // banco anterior gravaria as mutações novas no arquivo errado — e julgaria
+    // as antigas contra o servidor errado.
+    await _abrirOutbox();
+    try {
+      await _outbox.registrar(mutacao);
+    } catch (_) {
+      // Ver _abrirOutbox: falhar aqui não pode impedir a gravação em si.
+    }
+    return mutacao;
+  }
+
+  /// Carimba o UUID DENTRO da transação da mutação. É o que faz o
+  /// reconhecimento viajar nos mesmos frames: ou os dois chegam, ou nenhum.
+  Future<void> carimbarMutacao(Transaction tx, MutacaoOutbox m) =>
+      tx.execute(
+        'INSERT OR REPLACE INTO app_mutacoes_aplicadas '
+        '(uuid, aplicada_em, operacao, dispositivo) VALUES (?, ?, ?, ?)',
+        positional: [
+          m.uuid,
+          DateTime.now().toIso8601String(),
+          m.operacao,
+          m.dispositivo,
+        ],
+      );
+
+  /// A transação caiu antes do commit: nada foi gravado. O registro NÃO é
+  /// apagado (a outbox não apaga nada), só sai da fila de reaplicação.
+  Future<void> abortarMutacao(MutacaoOutbox m) async {
+    try {
+      await _outbox.marcar(m.uuid, EstadoMutacao.abortada);
+    } catch (_) {}
+  }
+
+  /// Quantas mutações o servidor ainda não confirmou, segundo a outbox.
+  Future<int> mutacoesNaoConfirmadas() async {
+    await _abrirOutbox();
+    try {
+      return await _outbox.quantidadeNaoConfirmada();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// O que precisa de uma pessoa: conflito com o remoto, ou operação que a
+  /// reconstrução não sabe reaplicar sozinha.
+  Future<List<MutacaoOutbox>> mutacoesParaRevisao() async {
+    await _abrirOutbox();
+    try {
+      return await _outbox.paraRevisao();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Confirma no SERVIDOR as mutações que a outbox ainda tem em aberto.
+  ///
+  /// A pergunta é feita ao remoto de propósito. Consultar a réplica devolveria
+  /// o UUID que este aparelho acabou de gravar nela — a linha está lá tendo o
+  /// push saído ou não, então a réplica responde "sim" para tudo. Só o servidor
+  /// sabe o que recebeu.
+  ///
+  /// Devolve quantas passaram a contar como confirmadas. Uma falha de rede não
+  /// confirma nem desconfirma nada: os registros ficam onde estavam.
+  Future<int> confirmarMutacoesNoRemoto() async {
+    await _abrirOutbox();
+    final List<MutacaoOutbox> abertas;
+    try {
+      abertas = await _outbox.naoConfirmadas();
+    } catch (_) {
+      return 0;
+    }
+    if (abertas.isEmpty) return 0;
+
+    final remoto = await _sondaRemota();
+    if (remoto == null) return 0;
+
+    var confirmadas = 0;
+    // Em lotes: um IN gigante com centenas de UUIDs é pedido rejeitado.
+    for (var i = 0; i < abertas.length; i += 100) {
+      final fim = (i + 100 < abertas.length) ? i + 100 : abertas.length;
+      final lote = abertas.sublist(i, fim);
+      try {
+        final marcadores = List.filled(lote.length, '?').join(', ');
+        final linhas = await remoto.query(
+          'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid IN ($marcadores)',
+          positional: [for (final m in lote) m.uuid],
+        ).timeout(_timeoutConexao);
+        final vistos = {for (final l in linhas) l['uuid'] as String?};
+        for (final m in lote) {
+          if (!vistos.contains(m.uuid)) continue;
+          await _outbox.marcar(m.uuid, EstadoMutacao.confirmada);
+          confirmadas++;
+        }
+      } catch (_) {
+        // Sem rede, ou a tabela ainda não existe no remoto (banco antigo):
+        // nada é confirmado, e nada é perdido. A próxima sincronização tenta
+        // de novo.
+        await _descartarSonda();
+        break;
+      }
+    }
+    return confirmadas;
+  }
+
+  /// Reaplica, depois de a réplica ter sido reconstruída, o que ainda não foi
+  /// confirmado — e SÓ o que dá para reaplicar em segurança.
+  ///
+  /// Para cada mutação em aberto, na ordem em que aconteceram:
+  ///
+  /// - operação que endereça a linha por posição numa pilha (ver
+  ///   [operacoesDeRevisaoManual]) → revisão manual, sem tocar no banco;
+  /// - remoto igual ao estado final → já aplicada, nada a fazer;
+  /// - remoto igual ao estado anterior → aplica o final;
+  /// - remoto diferente dos dois → conflito, para uma pessoa decidir.
+  ///
+  /// Nenhum registro é apagado em nenhum dos caminhos.
+  Future<int> reaplicarOutbox() async {
+    if (!await _garantirConexao()) return 0;
+    await _abrirOutbox();
+    final List<MutacaoOutbox> abertas;
+    try {
+      abertas = await _outbox.naoConfirmadas();
+    } catch (_) {
+      return 0;
+    }
+
+    var reaplicadas = 0;
+    for (final m in abertas) {
+      if (operacaoExigeRevisaoManual(m.operacao)) {
+        await _outbox.marcar(m.uuid, EstadoMutacao.revisaoManual);
+        continue;
+      }
+      try {
+        final decisao = decidirReaplicacao(
+          remoto:      await _lerLinha(m.alvo),
+          anterior:    m.estadoAnterior,
+          estadoFinal: m.estadoFinal,
+          colunas:     m.colunasComparadas,
+        );
+        switch (decisao) {
+          case DecisaoReaplicacao.jaAplicada:
+            await _outbox.marcar(m.uuid, EstadoMutacao.confirmada);
+          case DecisaoReaplicacao.conflito:
+            await _outbox.marcar(m.uuid, EstadoMutacao.conflito);
+          case DecisaoReaplicacao.aplicarFinal:
+            try {
+              await _aplicarEstadoFinal(m);
+              reaplicadas++;
+            } catch (_) {
+              // A aplicação genérica recria a linha só com a chave mais o
+              // estado declarado. Numa tabela com outras colunas NOT NULL
+              // (inventario_cicli, por exemplo) isso não basta — e o certo
+              // então é mandar para conferência, não tentar de novo para
+              // sempre em silêncio.
+              await _outbox.marcar(m.uuid, EstadoMutacao.conflito);
+            }
+        }
+      } catch (_) {
+        // Erro ao ler ou aplicar não vira confirmação nem descarte: o registro
+        // fica em aberto e a próxima passada tenta de novo.
+      }
+    }
+    return reaplicadas;
+  }
+
+  /// Lê a linha que a mutação endereça, ou null se ela não existe.
+  Future<Map<String, Object?>?> _lerLinha(AlvoMutacao alvo) async {
+    if (alvo.chave.isEmpty) return null;
+    final onde = alvo.chave.keys.map((c) => '$c = ?').join(' AND ');
+    final linhas = await _client!.query(
+      'SELECT * FROM ${alvo.tabela} WHERE $onde LIMIT 1',
+      positional: alvo.chave.values.toList(),
+    );
+    return linhas.isEmpty ? null : Map<String, Object?>.from(linhas.first);
+  }
+
+  /// Leva a linha ao estado final registrado — e carimba o MESMO UUID, para que
+  /// a reaplicação possa ser confirmada pelo servidor como qualquer gravação.
+  Future<void> _aplicarEstadoFinal(MutacaoOutbox m) async {
+    final tx = await _client!.transaction();
+    try {
+      final onde = m.alvo.chave.keys.map((c) => '$c = ?').join(' AND ');
+      if (m.estadoFinal == null) {
+        await tx.execute(
+          'DELETE FROM ${m.alvo.tabela} WHERE $onde',
+          positional: m.alvo.chave.values.toList(),
+        );
+      } else {
+        final colunas = m.estadoFinal!.keys.toList();
+        final atualiza = colunas.map((c) => '$c = ?').join(', ');
+        final alterou = await tx.execute(
+          'UPDATE ${m.alvo.tabela} SET $atualiza WHERE $onde',
+          positional: [
+            ...colunas.map((c) => m.estadoFinal![c]),
+            ...m.alvo.chave.values,
+          ],
+        );
+        if (alterou == 0) {
+          // A linha não existia (o estado anterior era "ausente"): recria com
+          // a chave, o estado final e os extras. Os extras são as colunas
+          // NOT NULL que não entram na comparação — `atualizado_em`,
+          // `criado_em`. Sem elas o SQLite recusa o INSERT, e uma gravação
+          // perfeitamente reaplicável terminaria como conflito.
+          final extras = m.extrasParaInsercao.keys
+              .where((c) => !m.alvo.chave.containsKey(c) && !colunas.contains(c))
+              .toList();
+          final todas = [...m.alvo.chave.keys, ...colunas, ...extras];
+          await tx.execute(
+            'INSERT INTO ${m.alvo.tabela} (${todas.join(', ')}) '
+            'VALUES (${List.filled(todas.length, '?').join(', ')})',
+            positional: [
+              ...m.alvo.chave.values,
+              ...colunas.map((c) => m.estadoFinal![c]),
+              ...extras.map((c) => m.extrasParaInsercao[c]),
+            ],
+          );
+        }
+      }
+      await carimbarMutacao(tx, m);
+      await tx.commit();
+      await marcarGravacaoLocal();
+    } catch (e) {
+      await tx.rollback();
+      rethrow;
+    }
+    _invalidarCachesDeLeitura();
   }
 
   /// Motivo para NÃO trocar a URL do banco agora, ou null quando pode trocar.
@@ -427,6 +766,10 @@ class TursoService {
     } else if (_coordenador.recuperacaoTravada) {
       _coordenador.concluirRecuperacao();
     }
+
+    // Fora de qualquer transação: quando a primeira gravação chegar, o id já
+    // está em memória e o abrirMutacao não precisa tocar em disco.
+    unawaited(_dispositivoAtual());
 
     final ultimaSyncIso = prefs.getString(_chavePorBanco(keyUltimaSync));
     _ultimaSincronizacao =
@@ -944,6 +1287,19 @@ class TursoService {
         aplicada_em TEXT NOT NULL
       )
     ''');
+    // Reconhecimento de mutação. Cada gravação insere aqui o seu UUID NA MESMA
+    // transação local, então a linha viaja nos mesmos frames que a mutação: ou
+    // as duas chegam ao servidor, ou nenhuma. Achar o UUID numa consulta AO
+    // REMOTO é a única prova de que o push saiu — o frame não prova (um pull
+    // também o move) e a ausência de exceção não prova nada.
+    await client.execute('''
+      CREATE TABLE IF NOT EXISTS app_mutacoes_aplicadas (
+        uuid TEXT PRIMARY KEY,
+        aplicada_em TEXT NOT NULL,
+        operacao TEXT,
+        dispositivo TEXT
+      )
+    ''');
     // Quantidade de cada produto por endereço físico (gôndola ou estante).
     // Chave por endereço lógico — não referencia gondola_layout.id/estante_layout.id
     // porque salvarLayout/salvarLayoutEstante são destrutivos (DELETE + INSERT).
@@ -1157,6 +1513,9 @@ class TursoService {
     try {
       final erro = await _tentarSincronizar();
       if (erro == null) {
+        // O sync deu certo; agora o servidor é quem diz o que de fato chegou.
+        // É esta consulta — ao REMOTO — que fecha o ciclo de cada mutação.
+        await confirmarMutacoesNoRemoto();
         _ultimoErroSync = null;
         return true;
       }
@@ -1315,6 +1674,9 @@ class TursoService {
     // subiu. É esta a recuperação explícita que a marca em disco espera.
     await prefs.remove(_chavePorBanco(keyRecuperacaoNecessaria));
     _coordenador.concluirRecuperacao();
+    // A outbox NÃO foi apagada junto (ela mora noutro arquivo, é esse o
+    // ponto). Quem reconecta é o init do chamador; a reaplicação vem depois
+    // dele, em reaplicarOutbox.
 
     return true;
   }
@@ -1672,7 +2034,15 @@ class TursoService {
   Future<bool> _salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
     if (!await _garantirConexao()) return false;
     final tx = await _client!.transaction();
+    MutacaoOutbox? mutacao;
     try {
+      // O layout de antes, lido dentro da própria transação: é ele que permite
+      // a uma pessoa ver, na revisão, o que este salvamento substituiu.
+      final antes = await tx.query(
+        'SELECT andar, produto_codigo, pos_x, pos_z FROM gondola_layout '
+        'WHERE gondola_num = ? ORDER BY andar, pos_x, pos_z',
+        positional: [gondolaNum],
+      );
       await tx.execute(
         'DELETE FROM gondola_layout WHERE gondola_num = ?',
         positional: [gondolaNum],
@@ -1707,6 +2077,25 @@ class TursoService {
           positional: params,
         );
       }
+      mutacao = await abrirMutacao(
+        operacao: 'layout.salvarGondola',
+        tabela:   'gondola_layout',
+        chave:    {'gondola_num': gondolaNum},
+        estadoAnterior: {'itens': _resumoLayout(antes)},
+        estadoFinal: {
+          'itens': _resumoLayout([
+            for (final i in itens)
+              {
+                'andar':          i.andar,
+                'produto_codigo': i.produtoCodigo,
+                'pos_x':          i.posX,
+                'pos_z':          i.posZ,
+              },
+          ]),
+        },
+        posicao: gondolaNum,
+      );
+      await carimbarMutacao(tx, mutacao);
       await tx.commit();
       // Write-through: as linhas recém-gravadas SÃO o novo estado persistido,
       // então dá para atualizar o cache sem reler.
@@ -1715,6 +2104,7 @@ class TursoService {
       return true;
     } catch (_) {
       await tx.rollback();
+      if (mutacao != null) await abortarMutacao(mutacao);
       _cacheGondola.invalidar(gondolaNum);
       return false;
     }
@@ -1863,7 +2253,13 @@ class TursoService {
       int estanteNum, List<CaixaLayoutEstante> itens) async {
     if (!await _garantirConexao()) return false;
     final tx = await _client!.transaction();
+    MutacaoOutbox? mutacao;
     try {
+      final antes = await tx.query(
+        'SELECT coluna, nivel, slot, produto_codigo FROM estante_layout '
+        'WHERE estante_num = ? ORDER BY coluna, nivel, slot',
+        positional: [estanteNum],
+      );
       await tx.execute(
         'DELETE FROM estante_layout WHERE estante_num = ?',
         positional: [estanteNum],
@@ -1895,14 +2291,41 @@ class TursoService {
           positional: params,
         );
       }
+      mutacao = await abrirMutacao(
+        operacao: 'layout.salvarEstante',
+        tabela:   'estante_layout',
+        chave:    {'estante_num': estanteNum},
+        estadoAnterior: {'itens': _resumoLayout(antes)},
+        estadoFinal: {
+          'itens': _resumoLayout([
+            for (final i in itens)
+              {
+                'coluna':         i.coluna,
+                'nivel':          i.nivel,
+                'slot':           i.slot,
+                'produto_codigo': i.produtoCodigo,
+              },
+          ]),
+        },
+        posicao: estanteNum,
+      );
+      await carimbarMutacao(tx, mutacao);
       await tx.commit();
       await marcarGravacaoLocal();
       return true;
     } catch (_) {
       await tx.rollback();
+      if (mutacao != null) await abortarMutacao(mutacao);
       return false;
     }
   }
+
+  /// Serializa um layout inteiro numa linha de texto estável, para caber num
+  /// estado da outbox. Não é para exibir: é para COMPARAR — dois layouts iguais
+  /// têm de dar o mesmo texto, e a ordem vem do ORDER BY de quem leu.
+  static String _resumoLayout(List<Map<String, dynamic>> linhas) => linhas
+      .map((l) => (l.keys.toList()..sort()).map((k) => '$k=${l[k]}').join(','))
+      .join(';');
 
   Future<CaixaLayoutEstante?> buscarProdutoEstante(String produtoCodigo) async {
     if (!await _garantirConexao()) return null;

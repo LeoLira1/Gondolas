@@ -8,6 +8,7 @@ import 'loja_scene.dart' show PreferenciasMapa;
 import 'baixa_por_contagem_service.dart';
 import 'palete_registry.dart';
 import 'replica_local.dart' show resumoDoSync;
+import 'revisao_mutacoes_page.dart';
 import 'turso_service.dart';
 
 class ConfiguracaoPage extends StatefulWidget {
@@ -28,6 +29,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   bool    _reconectando = false;
   bool    _sincronizando = false;
   bool    _limpandoCache = false;
+  // Quantas gravações a reconstrução deixou para conferência humana.
+  int     _paraConferir  = 0;
 
   List<Palete> _paletes = const [];
   bool _salvandoPalete  = false;
@@ -44,6 +47,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     super.initState();
     _carregarCredenciais();
     _carregarPaletes();
+    _contarParaConferir();
     PreferenciasMapa.lerBonecos().then((n) {
       if (mounted) setState(() => _bonecos = n);
     });
@@ -57,6 +61,11 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     _urlCtrl.dispose();
     _tokenCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _contarParaConferir() async {
+    final lista = await TursoService().mutacoesParaRevisao();
+    if (mounted) setState(() => _paraConferir = lista.length);
   }
 
   Future<void> _carregarCredenciais() async {
@@ -387,18 +396,36 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   Future<void> _limparCacheLocal() async {
     setState(() => _limpandoCache = true);
     final ok = await TursoService().limparCacheLocal();
-    if (ok) await TursoService().init();
+    var reaplicadas = 0;
+    var paraRevisao = 0;
+    if (ok) {
+      await TursoService().init();
+      // A réplica voltou do banco online; agora o que este aparelho gravou e
+      // não subiu é reavaliado uma a uma. O que não dá para reaplicar em
+      // segurança fica esperando conferência, nunca é descartado.
+      reaplicadas = await TursoService().reaplicarOutbox();
+      paraRevisao = (await TursoService().mutacoesParaRevisao()).length;
+      if (mounted) setState(() => _paraConferir = paraRevisao);
+    }
     if (!mounted) return;
     setState(() => _limpandoCache = false);
+    final base = ok
+        ? (TursoService().isConnected
+            ? 'Cache local limpo e rebaixado do banco online ✓'
+            : 'Cache local limpo — sem conexão para rebaixar agora')
+        : 'Não foi possível limpar o cache local';
+    // O destino de cada gravação que não tinha subido, dito na cara: o que
+    // voltou sozinho e o que espera conferência. Silêncio aqui seria a mesma
+    // perda silenciosa de antes, só com outro nome.
+    final detalhe = [
+      if (reaplicadas > 0) '$reaplicadas reaplicada(s)',
+      if (paraRevisao > 0) '$paraRevisao para conferir',
+    ].join(' · ');
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? (TursoService().isConnected
-              ? 'Cache local limpo e rebaixado do banco online ✓'
-              : 'Cache local limpo — sem conexão para rebaixar agora')
-          : 'Não foi possível limpar o cache local'),
+      content: Text(detalhe.isEmpty ? base : '$base\n$detalhe'),
       backgroundColor:
           ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 4),
+      duration: Duration(seconds: detalhe.isEmpty ? 4 : 7),
     ));
   }
 
@@ -743,6 +770,32 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                               : 'Limpar cache local'),
                           style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFFe57373),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 4),
+                          ),
+                        ),
+                      ),
+                    ),
+                  // Só aparece quando existe algo pendente: um atalho para uma
+                  // lista vazia seria ruído numa tela que já é densa.
+                  if (_paraConferir > 0)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () async {
+                            await Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const RevisaoMutacoesPage(),
+                            ));
+                            await _contarParaConferir();
+                          },
+                          icon: const Icon(Icons.fact_check_outlined, size: 18),
+                          label: Text(_paraConferir == 1
+                              ? '1 gravação para conferir'
+                              : '$_paraConferir gravações para conferir'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFFd9b46a),
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 4, vertical: 4),
                           ),
