@@ -443,7 +443,7 @@ class EstoqueLocalizadoService {
       ]);
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
-          : (rowsAnterior.first as Map<String, dynamic>)['quantidade'] as num?;
+          : rowsAnterior.first['quantidade'] as num?;
 
       final agora = DateTime.now().toIso8601String();
       await tx.execute(
@@ -529,7 +529,7 @@ class EstoqueLocalizadoService {
       ]);
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
-          : (rowsAnterior.first as Map<String, dynamic>)['quantidade'] as num?;
+          : rowsAnterior.first['quantidade'] as num?;
 
       await tx.execute(
         'DELETE FROM estoque_localizado WHERE produto_codigo = ? AND '

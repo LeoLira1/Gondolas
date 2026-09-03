@@ -168,8 +168,16 @@ class TursoService {
   EstadoReplica get estadoReplica => _coordenador.estado;
 
   /// Porta única de toda mutação. A reserva síncrona impede corrida com sync.
+  ///
+  /// A conexão vem antes do portão de propósito: quem define o estado do
+  /// coordenador é o `init()`, que o app dispara sem esperar na abertura
+  /// (ver main.dart). Consultar o estado primeiro recusaria a gravação feita
+  /// nos segundos iniciais — enquanto o init ainda roda, o estado é
+  /// `conectando` — mesmo com a replica local inteira. Garantir a conexão
+  /// aqui é o que o caminho de escrita já fazia antes do coordenador existir.
   Future<T> garantirReplicaProntaParaEscrita<T>(
       Future<T> Function() acao) async {
+    await _garantirConexao();
     try {
       return await _coordenador.executarEscrita(acao);
     } on ReplicaNaoProntaParaEscrita catch (e) {
@@ -1140,47 +1148,6 @@ class TursoService {
   bool _carimboAcusaAtraso(ConferenciaDoCarimbo conferencia) =>
       conferencia != ConferenciaDoCarimbo.iguais &&
       conferencia != ConferenciaDoCarimbo.indeterminada;
-
-  /// Apaga a replica local divergente e refaz o arquivo a partir do Turso.
-  /// É a única saída quando o servidor recusa os frames locais — sem isso o
-  /// app fica preso repetindo o mesmo erro a cada Sincronizar. Devolve false
-  /// se não deu (sem internet, por exemplo): aí a conexão anterior já foi
-  /// solta, mas o próximo init() reconecta e tenta de novo.
-  Future<bool> _reconstruirReplicaLocal() async {
-    final url   = _urlAtiva;
-    final token = _tokenAtivo;
-    if (url == null || token == null) return false;
-
-    final clienteAntigo = _client;
-    _connected    = false;
-    _client       = null;
-    _modoLocal    = false;
-    _basePendente = false;
-    _invalidarCachesDeLeitura();
-    if (clienteAntigo != null) {
-      try {
-        await clienteAntigo.dispose();
-      } catch (_) {}
-    }
-
-    if (!await _apagarArquivosDaReplica()) return false;
-
-    final client = await _conectarComCacheLocal(url, token);
-    if (client == null) return false;
-
-    _client       = client;
-    _connected    = true;
-    _modoLocal    = true;
-    _basePendente = true;
-    try {
-      await _estabelecerBaseLocal(client, _timeoutBootstrap);
-      return true;
-    } catch (_) {
-      // Arquivo novo e vazio de frames: fica marcado como base pendente, então
-      // nada será escrito nele até o próximo Sincronizar completar o pull.
-      return false;
-    }
-  }
 
   /// Apaga o arquivo de cache local (embedded replica) e reseta a conexão,
   /// forçando o próximo init() a rebaixar tudo do zero do Turso. É a única
