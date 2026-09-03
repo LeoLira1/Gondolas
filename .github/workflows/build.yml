@@ -23,6 +23,7 @@ on:
       - "claude/barracao-camda-3d-scene-cd1b73"
       - "claude/new-session-okic0g"
       - "claude/workflow-failure-fix-a418bh"
+      - "claude/galpao-concrete-floor-texture-pxhp8w"
   workflow_dispatch:
 
 jobs:

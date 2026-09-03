@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui show Image;
 import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 import 'package:flutter/material.dart';
 
@@ -9,6 +10,7 @@ import 'gondola_scene.dart'
         corEnderecoDivergentePositiva;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
+import 'textura_piso.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cena 3D do galpão de racks
@@ -116,6 +118,15 @@ const Color _corVazio       = Color(0x59FFFFFF);
 const Color _corRack        = Color(0xFF888888);
 const Color _corContorno    = Color(0x44000000);
 const Color _corRotuloRua   = Color(0x4DFFFFFF);
+
+/// Lado, em METROS, da laje de concreto de assets/textures/galpao_concreto.png.
+///
+/// A imagem é uma textura contínua com UMA junta em cada eixo, então ladrilhada
+/// ela vira uma laje de [_ladoLajeConcreto] m — não quatro de um quarto disso,
+/// que é o que a moldura da imagem sugere à primeira vista. 6 m é o painel de
+/// concreto industrial típico e deixa a repetição rara no envelope do galpão
+/// (~18 × 20 m na parte 1), sem esticar o grão a ponto de borrar no zoom.
+const double _ladoLajeConcreto = 6.0;
 
 /// Contorno dos racks acesos pela busca — o mesmo laranja clareado, para
 /// separar dois paletes vizinhos do mesmo produto sem inventar outra cor.
@@ -299,6 +310,12 @@ class GalpaoPainter extends CustomPainter {
   /// quando [mostrarSaldo] está ligado.
   final Map<String, SaldoProduto> saldos;
 
+  /// Textura de concreto do chão, já decodificada (ver textura_piso.dart), ou
+  /// null enquanto o asset carrega — nesse intervalo o piso é a cor chapada de
+  /// sempre. O painter NÃO carrega nada: decodificar dentro do paint colocaria
+  /// um decode de imagem em cada frame de arrasto da câmera.
+  final ui.Image? texturaPiso;
+
   GalpaoPainter(
     this.camera, {
     this.pilhas             = const {},
@@ -314,6 +331,7 @@ class GalpaoPainter extends CustomPainter {
     this.contagemConferencia = const {},
     this.mostrarSaldo       = false,
     this.saldos             = const {},
+    this.texturaPiso,
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
@@ -446,14 +464,27 @@ class GalpaoPainter extends CustomPainter {
 
   // ── Piso ───────────────────────────────────────────────────────────────────
 
-  /// Grade discreta no chão, do tamanho da parte aberta. Não entra na ordem
-  /// de desenho: a câmera está sempre acima do piso, então ele é sempre a
-  /// superfície mais ao fundo.
+  /// Concreto + grade discreta no chão, do tamanho da parte aberta. Não entra
+  /// na ordem de desenho: a câmera está sempre acima do piso, então ele é
+  /// sempre a superfície mais ao fundo.
+  ///
+  /// O concreto é a textura do PLANO y = 0, instalada no canvas como uma
+  /// homografia (ver textura_piso.dart) — não um fundo 2D. A grade e a borda
+  /// continuam desenhadas em cima dele, em coordenadas de tela, exatamente como
+  /// antes: o concreto entrou por baixo do mapa, não no lugar dele.
   void _desenharPiso(Canvas canvas, ProjecaoCamera proj) {
     const passo = 2.0;
     final lim = GalpaoConfig.limitesDaParte(parte);
     final x0 = lim.minX - 1.0, x1 = lim.maxX + 1.0;
     final z0 = lim.minZ - 1.0, z1 = lim.maxZ + 1.0;
+
+    pintarPisoTexturado(
+      canvas, proj,
+      x0: x0, x1: x1, z0: z0, z1: z1,
+      textura:     texturaPiso,
+      ladoTextura: _ladoLajeConcreto,
+      corFallback: _corPiso,
+    );
 
     final grade = Path();
     void linha(double ax, double az, double bx, double bz) {
@@ -802,7 +833,8 @@ class GalpaoPainter extends CustomPainter {
       old.mostrarSaldo        != mostrarSaldo      ||
       !identical(old.saldos, saldos)              ||
       !identical(old.pilhas, pilhas)             ||
-      !identical(old.corPorProduto, corPorProduto);
+      !identical(old.corPorProduto, corPorProduto) ||
+      !identical(old.texturaPiso, texturaPiso);
 }
 
 // ── GalpaoScene ──────────────────────────────────────────────────────────────
@@ -966,6 +998,10 @@ class _GalpaoSceneState extends State<GalpaoScene>
       duration: const Duration(milliseconds: 250),
     )..addListener(() => setState(() {}));
     _reconstruirAlvos();
+    // Idempotente e compartilhada com as outras cenas: abrir o mapa dez vezes
+    // decodifica o concreto UMA vez (ver TexturaPiso). Enquanto ela não chega,
+    // o piso é a cor chapada de sempre e o mapa funciona igual.
+    TexturaPiso.carregar();
   }
 
   void _reconstruirAlvos() {
@@ -1219,25 +1255,32 @@ class _GalpaoSceneState extends State<GalpaoScene>
           child: GestureDetector(
             onScaleStart:  _onScaleStart,
             onScaleUpdate: _onScaleUpdate,
-            child: CustomPaint(
-              key: _painterKey,
-              painter: GalpaoPainter(
-                camera,
-                pilhas:              widget.pilhas,
-                corPorProduto:       widget.corPorProduto,
-                mostrarEtiquetas:    widget.mostrarEtiquetas,
-                selecionado:         widget.selecionado,
-                destacadoCodigo:     widget.destacadoCodigo,
-                descida:             _descidaDoFrame,
-                parte:               widget.parte,
-                ruasVisiveis:        widget.ruasVisiveis,
-                modoConferencia:     widget.modoConferencia,
-                codigosConferencia:  widget.codigosConferencia,
-                contagemConferencia: widget.contagemConferencia,
-                mostrarSaldo:        widget.mostrarSaldo,
-                saldos:              widget.saldos,
+            // O builder existe só para o frame em que a textura termina de
+            // carregar: ele repinta a cena com o concreto no lugar da cor
+            // chapada. Depois disso o valor não muda mais e ele sai do caminho.
+            child: ValueListenableBuilder<ui.Image?>(
+              valueListenable: TexturaPiso.imagem,
+              builder: (context, textura, _) => CustomPaint(
+                key: _painterKey,
+                painter: GalpaoPainter(
+                  camera,
+                  pilhas:              widget.pilhas,
+                  corPorProduto:       widget.corPorProduto,
+                  mostrarEtiquetas:    widget.mostrarEtiquetas,
+                  selecionado:         widget.selecionado,
+                  destacadoCodigo:     widget.destacadoCodigo,
+                  descida:             _descidaDoFrame,
+                  parte:               widget.parte,
+                  ruasVisiveis:        widget.ruasVisiveis,
+                  modoConferencia:     widget.modoConferencia,
+                  codigosConferencia:  widget.codigosConferencia,
+                  contagemConferencia: widget.contagemConferencia,
+                  mostrarSaldo:        widget.mostrarSaldo,
+                  saldos:              widget.saldos,
+                  texturaPiso:         textura,
+                ),
+                child: const SizedBox.expand(),
               ),
-              child: const SizedBox.expand(),
             ),
           ),
         );
