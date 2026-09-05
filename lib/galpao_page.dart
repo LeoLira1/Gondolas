@@ -278,7 +278,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   Future<void> _carregarPilhas() async {
     setState(() => _carregandoPilhas = true);
-    await GalpaoService().garantirSeed();
+    unawaited(GalpaoService().garantirSeed());
     final pilhas = await GalpaoService().carregarPilhas();
     if (!mounted) return;
     setState(() {

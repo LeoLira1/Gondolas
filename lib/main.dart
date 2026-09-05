@@ -113,7 +113,7 @@ class LojaPage extends StatefulWidget {
   State<LojaPage> createState() => _LojaPageState();
 }
 
-class _LojaPageState extends State<LojaPage> {
+class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   int?               _selecionadoIdx;
   ProdutoEncontrado? _produtoSelecionado;
   Vec3?              _focarEm;
@@ -140,8 +140,16 @@ class _LojaPageState extends State<LojaPage> {
   ResumoBaixa? _resumoBaixa;
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(TursoService().atualizarConsultas());
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Bonecos caminhando pelo mapa (0 = desligado, 1 ou 2): quem escolhe a
     // quantidade é a tela de Configuração; aqui só carregamos o valor salvo e
     // deixamos o notifier de PreferenciasMapa reconstruir a cena.
@@ -184,6 +192,7 @@ class _LojaPageState extends State<LojaPage> {
     _debounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -1595,6 +1604,7 @@ class _GondolaPageState extends State<GondolaPage> {
   // produtos, então o endereço sozinho não identifica qual foi selecionada.
   CaixaColocada? _caixaSelecionada;
 
+  final Set<int> _editadas = {};
   final Map<int, List<CaixaColocada>> _caixas = {};
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
@@ -1706,6 +1716,8 @@ class _GondolaPageState extends State<GondolaPage> {
       _dbConectado        = false;
     });
 
+    unawaited(_carregarLayout(_gondolaAtual));
+    unawaited(_carregarCatalogo());
     await TursoService().init();
     if (!mounted) return;
 
@@ -1753,7 +1765,7 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
     // Descarta só as OUTRAS estruturas: limpar a atual aqui (fora de setState,
     // com o reload assíncrono) daria um frame com a gôndola vazia.
-    _caixas.removeWhere((k, _) => k != _gondolaAtual);
+    _caixas.removeWhere((k, _) => k != _gondolaAtual && !_editadas.contains(k));
     _carregarLayout(_gondolaAtual);
     unawaited(_carregarDesatualizados(forceRefresh: true));
     // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
@@ -1798,6 +1810,7 @@ class _GondolaPageState extends State<GondolaPage> {
   ///
   /// Deve ser chamado de dentro de um setState.
   bool _semearDoCache(int gondolaNum) {
+    if (_editadas.contains(gondolaNum)) return true;
     final cache = TursoService().layoutEmCache(gondolaNum);
     if (cache == null) return false;
     _aplicarLayout(gondolaNum, cache);
@@ -1807,6 +1820,7 @@ class _GondolaPageState extends State<GondolaPage> {
   /// Aplica as linhas do banco à cena: as caixas e, junto, o mapa de cores e
   /// nomes que vem nas próprias linhas. Deve ser chamado de dentro de setState.
   void _aplicarLayout(int gondolaNum, List<CaixaLayout> layouts) {
+    if (_editadas.contains(gondolaNum)) return;
     _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
     if (gondolaNum == _gondolaAtual) {
       _hexDoLayout   = {for (final l in layouts) l.produtoCodigo: l.corHex};
@@ -1832,12 +1846,12 @@ class _GondolaPageState extends State<GondolaPage> {
 
   Future<void> _carregarLayout(int gondolaNum) async {
     final layouts = await TursoService().fetchLayout(gondolaNum);
-    if (!mounted) return;
+    if (!mounted || _salvando || _editadas.contains(gondolaNum)) return;
     setState(() => _aplicarLayout(gondolaNum, layouts));
   }
 
   void _onTapAndar(int andar, double x, double z) {
-    if (_produtoSelecionadoId == null) return;
+    if (_salvando || _produtoSelecionadoId == null) return;
     final nova = CaixaColocada(
       andar:     andar,
       produtoId: _produtoSelecionadoId!,
@@ -1845,6 +1859,7 @@ class _GondolaPageState extends State<GondolaPage> {
       z:         z,
     );
     setState(() {
+      _editadas.add(_gondolaAtual);
       _caixas[_gondolaAtual] = [..._caixasAtuais, nova];
       _faceSelecionada  = faceFromPos(x, z);
       _andarSelecionado = andar;
@@ -1946,10 +1961,14 @@ class _GondolaPageState extends State<GondolaPage> {
     _carregarDesatualizados();
   }
 
-  void _limparGondola() => setState(() => _caixas.remove(_gondolaAtual));
+  void _limparGondola() => setState(() {
+    _editadas.add(_gondolaAtual);
+    _caixas.remove(_gondolaAtual);
+  });
 
   void _limparPorProduto(String produtoId) {
     setState(() {
+      _editadas.add(_gondolaAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
       if (restantes.isEmpty) {
         _caixas.remove(_gondolaAtual);
@@ -2076,6 +2095,7 @@ class _GondolaPageState extends State<GondolaPage> {
 
     final ok = await TursoService().salvarLayout(_gondolaAtual, itens);
     if (ok) {
+      _editadas.remove(_gondolaAtual);
       final depois = itens.map((i) => i.produtoCodigo).toSet();
       for (final codigo in antes.difference(depois)) {
         await EstoqueLocalizadoService().deleteEnderecosZerados(
@@ -2089,7 +2109,7 @@ class _GondolaPageState extends State<GondolaPage> {
     setState(() => _salvando = false);
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok ? 'Layout salvo ✓' : 'Erro ao salvar'),
+      content: Text(ok ? 'Layout salvo ✓' : 'Gravação não confirmada. Verifique a conexão e tente salvar novamente.'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: const Duration(seconds: 2),
     ));
@@ -3072,6 +3092,7 @@ class _EstantePageState extends State<EstantePage> {
   int? _nivelSelecionado;
   int? _slotSelecionado;
 
+  final Set<int> _editadas = {};
   final Map<int, List<CaixaColocadaEstante>> _caixas = {};
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
@@ -3171,6 +3192,8 @@ class _EstantePageState extends State<EstantePage> {
       _dbConectado        = false;
     });
 
+    unawaited(_carregarLayout(_estanteAtual));
+    unawaited(_carregarCatalogo());
     await TursoService().init();
     if (!mounted) return;
 
@@ -3209,7 +3232,7 @@ class _EstantePageState extends State<EstantePage> {
   // caminho de recarga pós-sync — ver a nota do gêmeo em _GondolaPageState.
   void _aoAtualizarDados() {
     if (!mounted) return;
-    _caixas.removeWhere((k, _) => k != _estanteAtual);
+    _caixas.removeWhere((k, _) => k != _estanteAtual && !_editadas.contains(k));
     _carregarLayout(_estanteAtual);
     unawaited(_carregarDesatualizados(forceRefresh: true));
     unawaited(_carregarCatalogo());
@@ -3260,6 +3283,7 @@ class _EstantePageState extends State<EstantePage> {
   /// Preenche a estante a partir do cache do serviço, se ela já tiver sido
   /// lida. Ver o gêmeo em _GondolaPageState. Chamar de dentro de setState.
   bool _semearDoCache(int estanteNum) {
+    if (_editadas.contains(estanteNum)) return true;
     final cache = TursoService().layoutEstanteEmCache(estanteNum);
     if (cache == null) return false;
     _aplicarLayout(estanteNum, cache);
@@ -3269,6 +3293,7 @@ class _EstantePageState extends State<EstantePage> {
   /// Aplica as linhas do banco à cena, junto com as cores e nomes que vêm
   /// nelas. Chamar de dentro de setState.
   void _aplicarLayout(int estanteNum, List<CaixaLayoutEstante> layouts) {
+    if (_editadas.contains(estanteNum)) return;
     _caixas[estanteNum] = layouts
         .map((l) => CaixaColocadaEstante(
               coluna:    l.coluna,
@@ -3287,7 +3312,7 @@ class _EstantePageState extends State<EstantePage> {
 
   Future<void> _carregarLayout(int estanteNum) async {
     final layouts = await TursoService().fetchLayoutEstante(estanteNum);
-    if (!mounted) return;
+    if (!mounted || _salvando || _editadas.contains(estanteNum)) return;
     setState(() => _aplicarLayout(estanteNum, layouts));
   }
 
@@ -3480,7 +3505,7 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   void _onTapCelula(int coluna, int nivel, double hx) {
-    if (_produtoSelecionadoId == null) return;
+    if (_salvando || _produtoSelecionadoId == null) return;
 
     final geo = _geometriaCelula(coluna, nivel);
     final maxSlots = geo.maxSlots;
@@ -3517,6 +3542,7 @@ class _EstantePageState extends State<EstantePage> {
     }
 
     setState(() {
+      _editadas.add(_estanteAtual);
       _caixas[_estanteAtual] = [
         ..._caixasAtuais,
         CaixaColocadaEstante(
@@ -3532,10 +3558,14 @@ class _EstantePageState extends State<EstantePage> {
     });
   }
 
-  void _limparEstante() => setState(() => _caixas.remove(_estanteAtual));
+  void _limparEstante() => setState(() {
+    _editadas.add(_estanteAtual);
+    _caixas.remove(_estanteAtual);
+  });
 
   void _limparEstantePorProduto(String produtoId) {
     setState(() {
+      _editadas.add(_estanteAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
       if (restantes.isEmpty) {
         _caixas.remove(_estanteAtual);
@@ -3657,6 +3687,7 @@ class _EstantePageState extends State<EstantePage> {
 
     final ok = await TursoService().salvarLayoutEstante(_estanteAtual, itens);
     if (ok) {
+      _editadas.remove(_estanteAtual);
       final depois = itens.map((i) => i.produtoCodigo).toSet();
       for (final codigo in antes.difference(depois)) {
         await EstoqueLocalizadoService().deleteEnderecosZerados(
@@ -3670,7 +3701,7 @@ class _EstantePageState extends State<EstantePage> {
     setState(() => _salvando = false);
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok ? 'Layout salvo ✓' : 'Erro ao salvar'),
+      content: Text(ok ? 'Layout salvo ✓' : 'Gravação não confirmada. Verifique a conexão e tente salvar novamente.'),
       backgroundColor:
           ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: const Duration(seconds: 2),
