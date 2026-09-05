@@ -39,8 +39,7 @@ void main() {
         chavePendentes: 0,
       });
 
-      expect(
-          await TursoService().impedimentoParaTrocarBanco(outraUrl), isNull);
+      expect(await TursoService().impedimentoParaTrocarBanco(outraUrl), isNull);
     });
 
     test('primeira configuração do app passa', () async {
@@ -55,8 +54,9 @@ void main() {
         chavePendentes: 3,
       });
 
-      final impedimento =
-          await TursoService().impedimentoParaTrocarBanco(outraUrl);
+      final impedimento = await TursoService().impedimentoParaTrocarBanco(
+        outraUrl,
+      );
 
       expect(impedimento, isNotNull);
       expect(impedimento, contains('3 gravações'));
@@ -72,8 +72,9 @@ void main() {
         TursoService.keyGravacoesPendentes: 1,
       });
 
-      final impedimento =
-          await TursoService().impedimentoParaTrocarBanco(outraUrl);
+      final impedimento = await TursoService().impedimentoParaTrocarBanco(
+        outraUrl,
+      );
 
       expect(impedimento, isNotNull);
       expect(impedimento, contains('1 gravação'));
@@ -90,17 +91,20 @@ void main() {
 
       await TursoService().init();
 
-      expect(TursoService().estadoReplica,
-          EstadoReplica.recuperacaoNecessaria);
+      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
 
       var escreveu = false;
       await expectLater(
         TursoService().garantirReplicaProntaParaEscrita(
-            () async => escreveu = true),
+          () async => escreveu = true,
+        ),
         throwsA(isA<ReplicaNaoProntaParaEscrita>()),
       );
-      expect(escreveu, isFalse,
-          reason: 'a réplica divergente não pode receber gravação nova');
+      expect(
+        escreveu,
+        isFalse,
+        reason: 'a réplica divergente não pode receber gravação nova',
+      );
     });
 
     test('reabrir o app não destrava', () async {
@@ -109,20 +113,17 @@ void main() {
       // fechar e abrir.
       await TursoService().init();
 
-      expect(TursoService().estadoReplica,
-          EstadoReplica.recuperacaoNecessaria);
+      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
     });
 
     test('Sincronizar não roda nem apaga a marca', () async {
       final ok = await TursoService().sincronizar();
 
       expect(ok, isFalse);
-      expect(TursoService().ultimoErroSync, contains('Limpar cache local'));
-      expect(TursoService().estadoReplica,
-          EstadoReplica.recuperacaoNecessaria);
+      expect(TursoService().ultimoErroSync, contains('Revisar recuperação'));
+      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
     });
   });
-
 
   // A trava é da RÉPLICA marcada, não do app: fora dela não existe frame
   // local para o servidor recusar. Estes testes deixam o singleton
@@ -134,9 +135,11 @@ void main() {
     test('cache local desligado grava direto no remoto', () async {
       SharedPreferences.setMockInitialValues({chaveVazio: true});
       await TursoService().init();
-      expect(TursoService().estadoReplica,
-          EstadoReplica.recuperacaoNecessaria,
-          reason: 'com cache local ligado, a marca vale');
+      expect(
+        TursoService().estadoReplica,
+        EstadoReplica.recuperacaoNecessaria,
+        reason: 'com cache local ligado, a marca vale',
+      );
 
       // O usuário desliga o cache local: não há mais arquivo de réplica no
       // caminho, e toda gravação vai pela rede. Travar aqui seria recusar
@@ -147,15 +150,16 @@ void main() {
       });
       await TursoService().init();
 
-      expect(TursoService().estadoReplica,
-          isNot(EstadoReplica.recuperacaoNecessaria));
+      expect(
+        TursoService().estadoReplica,
+        isNot(EstadoReplica.recuperacaoNecessaria),
+      );
     });
 
     test('outro banco não herda a trava do anterior', () async {
       SharedPreferences.setMockInitialValues({chaveVazio: true});
       await TursoService().init();
-      expect(TursoService().estadoReplica,
-          EstadoReplica.recuperacaoNecessaria);
+      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
 
       // Troca para um banco que nunca divergiu. Sem token, o init decide tudo
       // o que importa aqui e volta antes de tocar na rede.
@@ -165,9 +169,11 @@ void main() {
       });
       await TursoService().init();
 
-      expect(TursoService().estadoReplica,
-          isNot(EstadoReplica.recuperacaoNecessaria),
-          reason: 'a trava do banco anterior ficava presa em memória');
+      expect(
+        TursoService().estadoReplica,
+        isNot(EstadoReplica.recuperacaoNecessaria),
+        reason: 'a trava do banco anterior ficava presa em memória',
+      );
     });
 
     test('voltar ao banco marcado volta a travar', () async {
@@ -176,16 +182,17 @@ void main() {
         TursoService.keyDbUrl: 'libsql://banco-saudavel.turso.io',
       });
       await TursoService().init();
-      expect(TursoService().estadoReplica,
-          isNot(EstadoReplica.recuperacaoNecessaria));
+      expect(
+        TursoService().estadoReplica,
+        isNot(EstadoReplica.recuperacaoNecessaria),
+      );
 
       // A marca continua em disco: ela não some por o app ter passado por
       // outro banco no meio do caminho.
       SharedPreferences.setMockInitialValues({chaveVazio: true});
       await TursoService().init();
 
-      expect(TursoService().estadoReplica,
-          EstadoReplica.recuperacaoNecessaria);
+      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
     });
   });
 }

@@ -24,9 +24,9 @@ class AlvoMutacao {
   Map<String, Object?> toJson() => {'tabela': tabela, 'chave': chave};
 
   static AlvoMutacao fromJson(Map<String, Object?> json) => AlvoMutacao(
-        tabela: json['tabela'] as String,
-        chave: Map<String, Object?>.from(json['chave'] as Map),
-      );
+    tabela: json['tabela'] as String,
+    chave: Map<String, Object?>.from(json['chave'] as Map),
+  );
 }
 
 enum EstadoMutacao {
@@ -78,6 +78,7 @@ class MutacaoOutbox {
 
   final DateTime criadoEm;
   final String dispositivo;
+  final Map<String, Object?>? auditoria;
   final EstadoMutacao estado;
 
   // Campos de exibição da revisão manual. Ficam gravados em vez de derivados
@@ -99,6 +100,7 @@ class MutacaoOutbox {
     required this.criadoEm,
     required this.dispositivo,
     this.extrasParaInsercao = const {},
+    this.auditoria,
     this.estado = EstadoMutacao.pendente,
     this.produtoCodigo,
     this.produtoNome,
@@ -109,44 +111,40 @@ class MutacaoOutbox {
   });
 
   MutacaoOutbox copyWith({EstadoMutacao? estado}) => MutacaoOutbox(
-        uuid: uuid,
-        operacao: operacao,
-        alvo: alvo,
-        estadoAnterior: estadoAnterior,
-        estadoFinal: estadoFinal,
-        criadoEm: criadoEm,
-        dispositivo: dispositivo,
-        extrasParaInsercao: extrasParaInsercao,
-        estado: estado ?? this.estado,
-        produtoCodigo: produtoCodigo,
-        produtoNome: produtoNome,
-        posicao: posicao,
-        ordem: ordem,
-        quantidadeAnterior: quantidadeAnterior,
-        quantidadePretendida: quantidadePretendida,
-      );
+    uuid: uuid,
+    auditoria: auditoria,
+    operacao: operacao,
+    alvo: alvo,
+    estadoAnterior: estadoAnterior,
+    estadoFinal: estadoFinal,
+    criadoEm: criadoEm,
+    dispositivo: dispositivo,
+    extrasParaInsercao: extrasParaInsercao,
+    estado: estado ?? this.estado,
+    produtoCodigo: produtoCodigo,
+    produtoNome: produtoNome,
+    posicao: posicao,
+    ordem: ordem,
+    quantidadeAnterior: quantidadeAnterior,
+    quantidadePretendida: quantidadePretendida,
+  );
 
   /// Colunas que participam da comparação de estado: a união do que o anterior
   /// e o final declaram. O que não está aqui (carimbos de `atualizado_em`, por
   /// exemplo) NÃO entra na conta — senão toda comparação daria conflito só
   /// porque o relógio andou.
   Set<String> get colunasComparadas => {
-        ...?estadoAnterior?.keys,
-        ...?estadoFinal?.keys,
-      };
+    ...?estadoAnterior?.keys,
+    ...?estadoFinal?.keys,
+  };
 }
 
 /// Operações que a reconstrução automática NÃO pode reaplicar sozinha.
 ///
-/// As três do galpão endereçam o rack por `(posição, ordem)`, e `ordem` é a
-/// altura na pilha: esvaziar um rack do meio renumera os de cima. Depois de uma
-/// renumeração, `(posição, ordem)` aponta para OUTRO rack — então reaplicar
-/// acertaria a linha errada com um número que parece certo. `ajustarQuantidade`
-/// entra na lista mesmo gravando um valor absoluto, pelo mesmo motivo: o valor
-/// é absoluto, o endereço não é.
-///
-/// A saída definitiva é um `rack_uuid` estável (ver docs/outbox-design.md); até
-/// lá, estas vão para revisão manual, que é o desfecho ruim mas honesto.
+/// Novas gravações do galpão usam rack_uuid. Registros antigos ainda usam
+/// (posição, ordem). Ambos continuam exigindo revisão: lançamento e exclusão
+/// reordenam a pilha, e todas as operações atualizam também o espelho e o log.
+/// Identidade estável, sozinha, não torna esses efeitos reaplicáveis por linha.
 /// Os dois salvamentos de layout entram pelo outro motivo: eles substituem o
 /// layout INTEIRO de uma gôndola/estante (DELETE + INSERT), e a reaplicação
 /// deste primeiro desenho compara e aplica linha a linha. Reaplicar uma troca
@@ -173,6 +171,13 @@ const Set<String> operacoesDeRevisaoManual = {
 
 bool operacaoExigeRevisaoManual(String operacao) =>
     operacoesDeRevisaoManual.contains(operacao);
+
+/// Revisão é persistente: uma nova tentativa não autoriza sobrescrever dados.
+bool mutacaoExigeRevisaoManual(MutacaoOutbox m) =>
+    m.estado == EstadoMutacao.revisaoManual ||
+    m.estado == EstadoMutacao.conflito ||
+    operacaoExigeRevisaoManual(m.operacao) ||
+    (m.operacao.startsWith('estoqueLocalizado.') && m.auditoria == null);
 
 /// O que fazer com uma mutação não confirmada depois de reconstruir a réplica.
 enum DecisaoReaplicacao {
@@ -218,7 +223,9 @@ DecisaoReaplicacao decidirReaplicacao({
 /// Reduz uma linha às [colunas] que a mutação declarou. Uma linha que o remoto
 /// não tem continua `null` — "não existe" é um estado, não um mapa vazio.
 Map<String, Object?>? projetar(
-    Map<String, Object?>? linha, Set<String> colunas) {
+  Map<String, Object?>? linha,
+  Set<String> colunas,
+) {
   if (linha == null) return null;
   return {
     for (final coluna in colunas)

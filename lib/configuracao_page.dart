@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'loja_scene.dart' show PreferenciasMapa;
 import 'baixa_por_contagem_service.dart';
 import 'palete_registry.dart';
@@ -19,21 +20,24 @@ class ConfiguracaoPage extends StatefulWidget {
 }
 
 class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
-  final _urlCtrl   = TextEditingController();
+  final _urlCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
 
-  bool    _testando    = false;
+  bool _testando = false;
   String? _statusTeste;
-  bool    _testeOk     = false;
-  bool    _cacheLocal  = true;
-  bool    _reconectando = false;
-  bool    _sincronizando = false;
-  bool    _limpandoCache = false;
+  bool _testeOk = false;
+  bool _cacheLocal = true;
+  bool _reconectando = false;
+  bool _sincronizando = false;
+  bool _limpandoCache = false;
   // Quantas gravações a reconstrução deixou para conferência humana.
-  int     _paraConferir  = 0;
+  int _paraConferir = 0;
+  String? _erroPendencias;
+  String? _resultadoRecuperacao;
+  bool get _ocupado => _sincronizando || _limpandoCache || _reconectando;
 
   List<Palete> _paletes = const [];
-  bool _salvandoPalete  = false;
+  bool _salvandoPalete = false;
 
   // Bonecos caminhando pelo mapa da loja: 0 (desligado), 1 ou 2.
   int _bonecos = PreferenciasMapa.bonecos.value;
@@ -64,17 +68,31 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   }
 
   Future<void> _contarParaConferir() async {
-    final lista = await TursoService().mutacoesParaRevisao();
-    if (mounted) setState(() => _paraConferir = lista.length);
+    if (kIsWeb) return;
+    try {
+      await TursoService().init();
+      final lista = await TursoService().mutacoesParaRevisao();
+      if (mounted)
+        setState(() {
+          _paraConferir = lista.length;
+          _erroPendencias = null;
+        });
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _erroPendencias =
+              'Não foi possível verificar as pendências. Tente novamente.',
+        );
+    }
   }
 
   Future<void> _carregarCredenciais() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _urlCtrl.text   = prefs.getString(TursoService.keyDbUrl)   ?? '';
+      _urlCtrl.text = prefs.getString(TursoService.keyDbUrl) ?? '';
       _tokenCtrl.text = prefs.getString(TursoService.keyDbToken) ?? '';
-      _cacheLocal     = prefs.getBool(TursoService.keyCacheLocal) ?? true;
+      _cacheLocal = prefs.getBool(TursoService.keyCacheLocal) ?? true;
     });
   }
 
@@ -98,16 +116,21 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     if (!mounted) return;
     setState(() {
       _salvandoPalete = false;
-      _paletes        = PaleteRegistry().ativos;
+      _paletes = PaleteRegistry().ativos;
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(num != null
-          ? 'Palete $num cadastrado ✓'
-          : 'Não foi possível cadastrar o palete — verifique a conexão'),
-      backgroundColor:
-          num != null ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: num != null ? 3 : 5),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          num != null
+              ? 'Palete $num cadastrado ✓'
+              : 'Não foi possível cadastrar o palete — verifique a conexão',
+        ),
+        backgroundColor: num != null
+            ? const Color(0xFF2e6b46)
+            : const Color(0xFF8b1a1a),
+        duration: Duration(seconds: num != null ? 3 : 5),
+      ),
+    );
   }
 
   Future<void> _editarPalete(Palete p) async {
@@ -118,15 +141,19 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     if (!mounted) return;
     setState(() {
       _salvandoPalete = false;
-      _paletes        = PaleteRegistry().ativos;
+      _paletes = PaleteRegistry().ativos;
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? 'Palete ${p.num} atualizado ✓'
-          : 'Não foi possível salvar o palete ${p.num}'),
-      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 3),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Palete ${p.num} atualizado ✓'
+              : 'Não foi possível salvar o palete ${p.num}',
+        ),
+        backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _confirmarDesativarPalete(Palete p) async {
@@ -140,7 +167,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         title: Text(
           'Desativar o palete ${p.num}?',
           style: const TextStyle(
-              color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         content: Text(
           '$nome sai do mapa e do carrossel.\n\n'
@@ -151,18 +181,25 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
           'estão neste palete: as contagens deles continuam gravadas no '
           'número ${p.num} e deixarão de aparecer nas buscas.',
           style: const TextStyle(
-              color: Color(0xFF8a9aa8), fontSize: 13, height: 1.4),
+            color: Color(0xFF8a9aa8),
+            fontSize: 13,
+            height: 1.4,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar',
-                style: TextStyle(color: Color(0xFF8a9aa8))),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(color: Color(0xFF8a9aa8)),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Desativar',
-                style: TextStyle(color: Color(0xFFe57373))),
+            child: const Text(
+              'Desativar',
+              style: TextStyle(color: Color(0xFFe57373)),
+            ),
           ),
         ],
       ),
@@ -174,15 +211,19 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     if (!mounted) return;
     setState(() {
       _salvandoPalete = false;
-      _paletes        = PaleteRegistry().ativos;
+      _paletes = PaleteRegistry().ativos;
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? 'Palete ${p.num} desativado — o número não será reutilizado'
-          : 'Não foi possível desativar o palete ${p.num}'),
-      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: const Duration(seconds: 4),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Palete ${p.num} desativado — o número não será reutilizado'
+              : 'Não foi possível desativar o palete ${p.num}',
+        ),
+        backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   /// Dialog de cadastro/edição. Devolve o apelido, ou null se cancelou.
@@ -204,7 +245,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         title: Text(
           inicial == null ? 'Novo palete' : 'Palete ${inicial.num}',
           style: const TextStyle(
-              color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         content: SingleChildScrollView(
           child: Column(
@@ -215,10 +259,13 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 child: Text(
                   inicial == null
                       ? 'Tamanho padrão: 1,20 × 1,00 m, 15 posições (5 × 3). '
-                          'O número é alocado automaticamente e mostrado ao salvar.'
+                            'O número é alocado automaticamente e mostrado ao salvar.'
                       : 'Tamanho padrão: 1,20 × 1,00 m, 15 posições (5 × 3).',
                   style: const TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 12, height: 1.4),
+                    color: Color(0xFF8a9aa8),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
                 ),
               ),
               _Campo(
@@ -233,13 +280,17 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar',
-                style: TextStyle(color: Color(0xFF8a9aa8))),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(color: Color(0xFF8a9aa8)),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, apelidoCtrl.text.trim()),
-            child: const Text('Salvar',
-                style: TextStyle(color: Color(0xFF4a9d6a))),
+            child: const Text(
+              'Salvar',
+              style: TextStyle(color: Color(0xFF4a9d6a)),
+            ),
           ),
         ],
       ),
@@ -247,6 +298,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   }
 
   Future<void> _alterarCacheLocal(bool valor) async {
+    if (_ocupado) return;
     setState(() => _cacheLocal = valor);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(TursoService.keyCacheLocal, valor);
@@ -265,63 +317,67 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   void _conectarEmSegundoPlano(String aoIniciar) {
     setState(() => _reconectando = true);
     _avisarConexao(aoIniciar, const Color(0xFF2e6b46), 5);
-    unawaited(TursoService().reconectar().then((_) {
-      if (!mounted) return;
-      setState(() => _reconectando = false);
-      final servico = TursoService();
-      final (texto, cor) = switch (servico) {
-        _ when !servico.isConnected => (
+    unawaited(
+      TursoService().reconectar().then((_) {
+        if (!mounted) return;
+        setState(() => _reconectando = false);
+        final servico = TursoService();
+        final (texto, cor) = switch (servico) {
+          _ when !servico.isConnected => (
             'Não deu para conectar — confira URL, token e a internet.',
             const Color(0xFF8b1a1a),
           ),
-        _ when servico.caiuParaRemoto => (
+          _ when servico.caiuParaRemoto => (
             'O cache local não pôde ser aberto — veja o aviso logo abaixo.',
             const Color(0xFF8b6a1a),
           ),
-        _ when servico.modoLocal => (
+          _ when servico.modoLocal => (
             'Cache local pronto ✓ — os dados já estão no aparelho.',
             const Color(0xFF2e6b46),
           ),
-        _ => (
-            'Conectado direto no banco online ✓',
-            const Color(0xFF2e6b46),
-          ),
-      };
-      _avisarConexao(texto, cor, servico.modoLocal ? 3 : 6);
-    }));
+          _ => ('Conectado direto no banco online ✓', const Color(0xFF2e6b46)),
+        };
+        _avisarConexao(texto, cor, servico.modoLocal ? 3 : 6);
+      }),
+    );
   }
 
   void _avisarConexao(String texto, Color cor, int segundos) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(texto),
-      backgroundColor: cor,
-      duration: Duration(seconds: segundos),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(texto),
+        backgroundColor: cor,
+        duration: Duration(seconds: segundos),
+      ),
+    );
   }
 
   /// Tenta reabrir o cache local sem precisar fechar e reabrir o app.
   void _tentarCacheLocal() => _conectarEmSegundoPlano(
-      'Baixando a base em segundo plano — pode continuar usando o app.');
+    'Baixando a base em segundo plano — pode continuar usando o app.',
+  );
 
   Future<void> _salvarConfig() async {
+    if (_ocupado) return;
     final url = _urlCtrl.text.trim();
     // A pergunta vem ANTES da gravação: quem grava as credenciais novas
     // primeiro apaga o único endereço por onde as gravações pendentes ainda
     // poderiam subir. Descobrir a pendência depois não adianta mais.
-    final impedimento =
-        await TursoService().impedimentoParaTrocarBanco(url);
+    final impedimento = await TursoService().impedimentoParaTrocarBanco(url);
     if (!mounted) return;
     if (impedimento != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(impedimento),
-        backgroundColor: const Color(0xFF8b1a1a),
-        duration: const Duration(seconds: 8),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(impedimento),
+          backgroundColor: const Color(0xFF8b1a1a),
+          duration: const Duration(seconds: 8),
+        ),
+      );
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(TursoService.keyDbUrl,   url);
+    await prefs.setString(TursoService.keyDbUrl, url);
     await prefs.setString(TursoService.keyDbToken, _tokenCtrl.text.trim());
     if (!mounted) return;
 
@@ -331,102 +387,96 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     // em que o app fosse consultar algo — tipicamente já no galpão, com sinal
     // fraco, que é como se cai no modo remoto sem perceber.
     _conectarEmSegundoPlano(
-        'Salvo ✓ — conectando. A 1ª vez baixa a base e pode demorar; '
-        'pode continuar usando o app.');
+      'Salvo ✓ — conectando. A 1ª vez baixa a base e pode demorar; '
+      'pode continuar usando o app.',
+    );
   }
 
   Future<void> _sincronizarAgora() async {
+    if (_ocupado) return;
     setState(() => _sincronizando = true);
-    final ok = await TursoService().sincronizar();
-    if (!mounted) return;
-    setState(() => _sincronizando = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      // O aviso só aparece quando o sync deu certo depois de reconstruir a
-      // replica local divergente: o usuário precisa saber que o cache foi
-      // refeito do zero, senão some gravação sem explicação.
-      content: Text(ok
-          ? (TursoService().ultimoAvisoSync ??
-              resumoDoSync(
+    try {
+      final ok = await TursoService().sincronizar();
+      await _contarParaConferir();
+      if (!mounted || !ok) return; // falha permanece no cartão, sem duplicação
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            resumoDoSync(
               modoLocal: TursoService().modoLocal,
-              enviadas:  TursoService().enviadasNoUltimoSync))
-          : 'Não foi possível sincronizar — '
-              '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
-      backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(
-          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
-    ));
+              enviadas: TursoService().enviadasNoUltimoSync,
+            ),
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: const Color(0xFF2e6b46),
+        ),
+      );
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _erroPendencias = 'Não foi possível verificar o envio. As pendências foram preservadas.',
+        );
+    } finally {
+      if (mounted) setState(() => _sincronizando = false);
+    }
   }
 
   Future<void> _confirmarLimparCache() async {
-    final confirmou = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF141a22),
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: const Text(
-          'Limpar cache local?',
-          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-        ),
-        content: const Text(
-          'Apaga o arquivo de dados salvo neste dispositivo e baixa tudo de '
-          'novo do banco online.\n\n'
-          'É esta a saída quando o Sincronizar avisa que a réplica divergiu: '
-          'ele não refaz o cache sozinho, justamente para não descartar '
-          'gravação nenhuma sem você mandar.\n\n'
-          'Gravações feitas offline e ainda não sincronizadas serão perdidas.',
-          style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF8a9aa8))),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Limpar e rebaixar',
-                style: TextStyle(color: Color(0xFFe57373))),
-          ),
-        ],
-      ),
-    );
-    if (confirmou == true) _limparCacheLocal();
-  }
-
-  Future<void> _limparCacheLocal() async {
+    if (_ocupado) return;
     setState(() => _limpandoCache = true);
-    final ok = await TursoService().limparCacheLocal();
-    var reaplicadas = 0;
-    var paraRevisao = 0;
-    if (ok) {
+    try {
+      await TursoService().verificarProtecaoParaRecuperar();
+      final protegidas = await TursoService().mutacoesNaoConfirmadas();
+      if (!mounted) return;
+      final confirmou = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Revisar recuperação'),
+          content: Text(
+            '$protegidas alteração(ões) registrada(s) na proteção local.\n\n'
+            'O app preservará uma cópia do cache e baixará a base online. '
+            'Alterações seguras serão reaplicadas; conflitos e operações '
+            'que exigem conferência continuarão na lista de pendências.\n\n'
+            'A recuperação será cancelada se a proteção não puder ser verificada.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Recuperar dados'),
+            ),
+          ],
+        ),
+      );
+      if (confirmou != true) return;
+      final ok = await TursoService().limparCacheLocal();
+      if (!ok) throw StateError('Não foi possível recuperar o cache.');
       await TursoService().init();
-      // A réplica voltou do banco online; agora o que este aparelho gravou e
-      // não subiu é reavaliado uma a uma. O que não dá para reaplicar em
-      // segurança fica esperando conferência, nunca é descartado.
-      reaplicadas = await TursoService().reaplicarOutbox();
-      paraRevisao = (await TursoService().mutacoesParaRevisao()).length;
-      if (mounted) setState(() => _paraConferir = paraRevisao);
+      if (!TursoService().isConnected) {
+        throw StateError(
+          'A base ainda não foi baixada. As alterações protegidas continuam pendentes.',
+        );
+      }
+      final reaplicadas = await TursoService().reaplicarOutbox();
+      final conferir = (await TursoService().mutacoesParaRevisao()).length;
+      if (mounted)
+        setState(
+          () => _resultadoRecuperacao =
+              'Base recuperada. $reaplicadas alteração(ões) reaplicada(s), '
+              'aguardando confirmação do envio; $conferir para conferir.',
+        );
+      await _contarParaConferir();
+    } catch (e) {
+      if (mounted)
+        setState(
+          () => _resultadoRecuperacao = e is StateError ? e.message.toString() : 'A recuperação não foi concluída. Os registros de proteção foram mantidos.',
+        );
+    } finally {
+      if (mounted) setState(() => _limpandoCache = false);
     }
-    if (!mounted) return;
-    setState(() => _limpandoCache = false);
-    final base = ok
-        ? (TursoService().isConnected
-            ? 'Cache local limpo e rebaixado do banco online ✓'
-            : 'Cache local limpo — sem conexão para rebaixar agora')
-        : 'Não foi possível limpar o cache local';
-    // O destino de cada gravação que não tinha subido, dito na cara: o que
-    // voltou sozinho e o que espera conferência. Silêncio aqui seria a mesma
-    // perda silenciosa de antes, só com outro nome.
-    final detalhe = [
-      if (reaplicadas > 0) '$reaplicadas reaplicada(s)',
-      if (paraRevisao > 0) '$paraRevisao para conferir',
-    ].join(' · ');
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(detalhe.isEmpty ? base : '$base\n$detalhe'),
-      backgroundColor:
-          ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: detalhe.isEmpty ? 4 : 7),
-    ));
   }
 
   String _textoUltimaSync() {
@@ -437,21 +487,20 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
         '${quando.year} ${dois(quando.hour)}:${dois(quando.minute)}';
   }
 
-
   Future<void> _testarConexao() async {
     setState(() {
-      _testando    = true;
+      _testando = true;
       _statusTeste = null;
     });
 
-    final url   = _urlCtrl.text.trim();
+    final url = _urlCtrl.text.trim();
     final token = _tokenCtrl.text.trim();
 
     if (url.isEmpty || token.isEmpty) {
       setState(() {
-        _testando    = false;
+        _testando = false;
         _statusTeste = 'Preencha URL e Token antes de testar.';
-        _testeOk     = false;
+        _testeOk = false;
       });
       return;
     }
@@ -462,16 +511,16 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
       await client.query('SELECT 1');
       if (!mounted) return;
       setState(() {
-        _testando    = false;
+        _testando = false;
         _statusTeste = 'Conexão bem-sucedida ✓';
-        _testeOk     = true;
+        _testeOk = true;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _testando    = false;
+        _testando = false;
         _statusTeste = 'Erro: $e';
-        _testeOk     = false;
+        _testeOk = false;
       });
     }
   }
@@ -522,7 +571,11 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               child: const Text(
                 'Conexão direta via libsql_dart ao banco Turso CAMDA.\n'
                 'As credenciais são salvas localmente no dispositivo.',
-                style: TextStyle(color: Color(0xFF7a9ab8), fontSize: 12, height: 1.5),
+                style: TextStyle(
+                  color: Color(0xFF7a9ab8),
+                  fontSize: 12,
+                  height: 1.5,
+                ),
               ),
             ),
             const SizedBox(height: 28),
@@ -551,14 +604,18 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               // A primeira vez baixa o banco inteiro e pode levar minutos —
               // sem dizer isso, o botão parado parece travado e o usuário sai
               // da tela no meio, que é como o download não termina nunca.
-              label: Text(_reconectando
-                  ? 'Conectando — a 1ª vez baixa a base…'
-                  : 'Salvar configuração'),
+              label: Text(
+                _reconectando
+                    ? 'Conectando — a 1ª vez baixa a base…'
+                    : 'Salvar configuração',
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2e6b46),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -580,7 +637,9 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 foregroundColor: const Color(0xFF4a9d6a),
                 side: const BorderSide(color: Color(0xFF2e4a38)),
                 padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
 
@@ -592,217 +651,268 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: const Color(0xFF232f3a)),
                 ),
-                child: Column(children: [
-                  SwitchListTile(
-                    value: _cacheLocal,
-                    onChanged: _alterarCacheLocal,
-                    activeThumbColor: const Color(0xFF4a9d6a),
-                    title: const Text(
-                      'Cache local',
-                      style: TextStyle(color: Colors.white, fontSize: 13),
-                    ),
-                    subtitle: const Text(
-                      'Guarda os dados num arquivo do dispositivo: o app abre '
-                      'e salva na hora, mesmo com internet ruim. Use o botão '
-                      'Sincronizar para enviar/receber do banco online.',
-                      style: TextStyle(
-                          color: Color(0xFF8a9aa8), fontSize: 11, height: 1.4),
-                    ),
-                  ),
-                  // O app está em modo remoto com o cache local LIGADO: até
-                  // aqui, esta tela mostrava a preferência e escondia o que
-                  // valia de verdade. Quem está nesse estado grava tudo pela
-                  // rede (e vê "não deu para gravar" com sinal ruim) sem ter
-                  // como saber por quê.
-                  if (_cacheLocal && TursoService().caiuParaRemoto)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                      child: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2a1e10),
-                          borderRadius: BorderRadius.circular(6),
-                          border:
-                              Border.all(color: const Color(0xFF6b4a1e)),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      value: _cacheLocal,
+                      onChanged: _ocupado ? null : _alterarCacheLocal,
+                      activeThumbColor: const Color(0xFF4a9d6a),
+                      title: const Text(
+                        'Cache local',
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                      subtitle: const Text(
+                        'Guarda os dados num arquivo do dispositivo: o app abre '
+                        'e salva na hora, mesmo com internet ruim. Use o botão '
+                        'Sincronizar para enviar/receber do banco online.',
+                        style: TextStyle(
+                          color: Color(0xFF8a9aa8),
+                          fontSize: 11,
+                          height: 1.4,
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              '⚠ O cache local não pôde ser aberto',
-                              style: TextStyle(
+                      ),
+                    ),
+                    // O app está em modo remoto com o cache local LIGADO: até
+                    // aqui, esta tela mostrava a preferência e escondia o que
+                    // valia de verdade. Quem está nesse estado grava tudo pela
+                    // rede (e vê "não deu para gravar" com sinal ruim) sem ter
+                    // como saber por quê.
+                    if (_cacheLocal && TursoService().caiuParaRemoto)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2a1e10),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFF6b4a1e)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                '⚠ O cache local não pôde ser aberto',
+                                style: TextStyle(
                                   color: Color(0xFFe0a33e),
                                   fontSize: 12,
-                                  fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'O app está gravando direto no banco online, '
-                              'então cada lançamento depende da internet e o '
-                              'Sincronizar não tem o que enviar. Costuma ser '
-                              'sinal fraco na primeira abertura, enquanto a '
-                              'base é baixada.',
-                              style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                'O app está gravando direto no banco online, '
+                                'então cada lançamento depende da internet e o '
+                                'Sincronizar não tem o que enviar. Costuma ser '
+                                'sinal fraco na primeira abertura, enquanto a '
+                                'base é baixada.',
+                                style: TextStyle(
                                   color: Color(0xFFc8b79a),
                                   fontSize: 11,
-                                  height: 1.4),
-                            ),
-                            if (TursoService().motivoFalhaCacheLocal !=
-                                null) ...[
-                              const SizedBox(height: 6),
-                              Text(
-                                'Motivo: '
-                                '${TursoService().motivoFalhaCacheLocal}',
-                                style: const TextStyle(
+                                  height: 1.4,
+                                ),
+                              ),
+                              if (TursoService().motivoFalhaCacheLocal !=
+                                  null) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Motivo: '
+                                  '${TursoService().motivoFalhaCacheLocal}',
+                                  style: const TextStyle(
                                     color: Color(0xFFe0a33e),
                                     fontSize: 11,
-                                    height: 1.3),
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: _reconectando
+                                    ? null
+                                    : _tentarCacheLocal,
+                                icon: const Icon(Icons.refresh, size: 16),
+                                label: Text(
+                                  _reconectando
+                                      ? 'Baixando a base…'
+                                      : 'Tentar de novo',
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xFFe0a33e),
+                                  side: const BorderSide(
+                                    color: Color(0xFF6b4a1e),
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
                               ),
                             ],
-                            const SizedBox(height: 8),
+                          ),
+                        ),
+                      ),
+                    if (_cacheLocal)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _textoUltimaSync(),
+                                    style: const TextStyle(
+                                      color: Color(0xFF8a9aa8),
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  if (TursoService().gravacoesPendentes >
+                                      0) ...[
+                                    const SizedBox(height: 4),
+                                    // O que ainda não subiu, dito antes de o
+                                    // usuário apertar Sincronizar: é a resposta
+                                    // para "sincronizou mesmo?" sem ter de
+                                    // adivinhar pelo tempo que o botão levou.
+                                    Text(
+                                      TursoService().gravacoesPendentes == 1
+                                          ? '1 gravação esperando envio'
+                                          : '${TursoService().gravacoesPendentes} '
+                                                'gravações esperando envio',
+                                      style: const TextStyle(
+                                        color: Color(0xFFe0a33e),
+                                        fontSize: 11,
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ],
+                                  if (_erroPendencias != null ||
+                                      _resultadoRecuperacao != null)
+                                    Text(
+                                      _erroPendencias ?? _resultadoRecuperacao!,
+                                      style: const TextStyle(
+                                        color: Color(0xFFffcc80),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  if (TursoService().ultimoErroSync !=
+                                      null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Sincronização requer atenção: '
+                                      '${TursoService().ultimoErroSync}',
+                                      style: const TextStyle(
+                                        color: Color(0xFFe57373),
+                                        fontSize: 11,
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
                             OutlinedButton.icon(
-                              onPressed:
-                                  _reconectando ? null : _tentarCacheLocal,
-                              icon: const Icon(Icons.refresh, size: 16),
-                              label: Text(_reconectando
-                                  ? 'Baixando a base…'
-                                  : 'Tentar de novo'),
+                              onPressed: _ocupado ? null : _sincronizarAgora,
+                              icon: _sincronizando
+                                  ? const SizedBox(
+                                      width: 13,
+                                      height: 13,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFF4a9d6a),
+                                      ),
+                                    )
+                                  : const Icon(Icons.sync, size: 15),
+                              label: Text(
+                                _sincronizando
+                                    ? 'Sincronizando...'
+                                    : 'Sincronizar',
+                              ),
                               style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFFe0a33e),
+                                foregroundColor: const Color(0xFF4a9d6a),
                                 side: const BorderSide(
-                                    color: Color(0xFF6b4a1e)),
-                                visualDensity: VisualDensity.compact,
+                                  color: Color(0xFF2e4a38),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ),
-                  if (_cacheLocal)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _textoUltimaSync(),
-                                style: const TextStyle(
-                                    color: Color(0xFF8a9aa8), fontSize: 11),
-                              ),
-                              if (TursoService().gravacoesPendentes > 0) ...[
-                                const SizedBox(height: 4),
-                                // O que ainda não subiu, dito antes de o
-                                // usuário apertar Sincronizar: é a resposta
-                                // para "sincronizou mesmo?" sem ter de
-                                // adivinhar pelo tempo que o botão levou.
-                                Text(
-                                  TursoService().gravacoesPendentes == 1
-                                      ? '1 gravação esperando envio'
-                                      : '${TursoService().gravacoesPendentes} '
-                                          'gravações esperando envio',
-                                  style: const TextStyle(
-                                      color: Color(0xFFe0a33e),
-                                      fontSize: 11,
-                                      height: 1.3),
-                                ),
-                              ],
-                              if (TursoService().ultimoErroSync != null) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Última falha: '
-                                  '${TursoService().ultimoErroSync}',
-                                  style: const TextStyle(
+                    if (_cacheLocal)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: _ocupado ? null : _confirmarLimparCache,
+                            icon: _limpandoCache
+                                ? const SizedBox(
+                                    width: 13,
+                                    height: 13,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
                                       color: Color(0xFFe57373),
-                                      fontSize: 11,
-                                      height: 1.3),
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.delete_sweep_outlined,
+                                    size: 15,
+                                  ),
+                            label: Text(
+                              _limpandoCache
+                                  ? 'Limpando...'
+                                  : 'Revisar recuperação',
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFFe57373),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 4,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    // Só aparece quando existe algo pendente: um atalho para uma
+                    // lista vazia seria ruído numa tela que já é densa.
+                    if (_cacheLocal)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const RevisaoMutacoesPage(),
                                 ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: _sincronizando ? null : _sincronizarAgora,
-                          icon: _sincronizando
-                              ? const SizedBox(
-                                  width: 13,
-                                  height: 13,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Color(0xFF4a9d6a),
-                                  ),
-                                )
-                              : const Icon(Icons.sync, size: 15),
-                          label: Text(
-                              _sincronizando ? 'Sincronizando...' : 'Sincronizar'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF4a9d6a),
-                            side: const BorderSide(color: Color(0xFF2e4a38)),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 8),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
-                      ]),
-                    ),
-                  if (_cacheLocal)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed:
-                              _limpandoCache ? null : _confirmarLimparCache,
-                          icon: _limpandoCache
-                              ? const SizedBox(
-                                  width: 13,
-                                  height: 13,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Color(0xFFe57373),
-                                  ),
-                                )
-                              : const Icon(Icons.delete_sweep_outlined, size: 15),
-                          label: Text(_limpandoCache
-                              ? 'Limpando...'
-                              : 'Limpar cache local'),
-                          style: TextButton.styleFrom(
-                            foregroundColor: const Color(0xFFe57373),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 4, vertical: 4),
+                              );
+                              await _contarParaConferir();
+                            },
+                            icon: const Icon(
+                              Icons.fact_check_outlined,
+                              size: 18,
+                            ),
+                            label: Text(
+                              _paraConferir > 0
+                                  ? 'Ver pendências · $_paraConferir para conferir'
+                                  : 'Ver pendências',
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFFd9b46a),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 4,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  // Só aparece quando existe algo pendente: um atalho para uma
-                  // lista vazia seria ruído numa tela que já é densa.
-                  if (_paraConferir > 0)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: () async {
-                            await Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => const RevisaoMutacoesPage(),
-                            ));
-                            await _contarParaConferir();
-                          },
-                          icon: const Icon(Icons.fact_check_outlined, size: 18),
-                          label: Text(_paraConferir == 1
-                              ? '1 gravação para conferir'
-                              : '$_paraConferir gravações para conferir'),
-                          style: TextButton.styleFrom(
-                            foregroundColor: const Color(0xFFd9b46a),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 4, vertical: 4),
-                          ),
-                        ),
-                      ),
-                    ),
-                ]),
+                  ],
+                ),
               ),
             ],
 
@@ -823,58 +933,66 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 14, 12, 6),
-                    child: Row(children: [
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Paletes',
-                              style: TextStyle(
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Paletes',
+                                style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 13,
-                                  fontWeight: FontWeight.w600),
-                            ),
-                            SizedBox(height: 3),
-                            Text(
-                              'Paletes de madeira do piso (15 posições, 5 × 3). '
-                              'Aparecem no fim do carrossel de estantes; como a '
-                              'estante 5, não são desenhados no mapa da loja.',
-                              style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 3),
+                              Text(
+                                'Paletes de madeira do piso (15 posições, 5 × 3). '
+                                'Aparecem no fim do carrossel de estantes; como a '
+                                'estante 5, não são desenhados no mapa da loja.',
+                                style: TextStyle(
                                   color: Color(0xFF8a9aa8),
                                   fontSize: 11,
-                                  height: 1.4),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (_salvandoPalete)
-                        const Padding(
-                          padding: EdgeInsets.only(left: 8),
-                          child: SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Color(0xFFe87722),
-                            ),
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                    ]),
+                        if (_salvandoPalete)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 8),
+                            child: SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFFe87722),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                   if (_paletes.isEmpty)
                     const Padding(
                       padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
                       child: Text(
                         'Nenhum palete cadastrado.',
-                        style:
-                            TextStyle(color: Color(0xFF5a6a78), fontSize: 12),
+                        style: TextStyle(
+                          color: Color(0xFF5a6a78),
+                          fontSize: 12,
+                        ),
                       ),
                     )
                   else
-                    ..._paletes.map((p) => Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-                          child: Row(children: [
+                    ..._paletes.map(
+                      (p) => Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+                        child: Row(
+                          children: [
                             Container(
                               width: 34,
                               height: 26,
@@ -883,14 +1001,16 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                 color: const Color(0xFF2a1a0e),
                                 borderRadius: BorderRadius.circular(5),
                                 border: Border.all(
-                                    color: const Color(0xFFb7783f)),
+                                  color: const Color(0xFFb7783f),
+                                ),
                               ),
                               child: Text(
                                 '${p.num}',
                                 style: const TextStyle(
-                                    color: Color(0xFFd9a26a),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700),
+                                  color: Color(0xFFd9a26a),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -903,15 +1023,18 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                         ? 'Palete ${p.num}'
                                         : p.apelido,
                                     style: const TextStyle(
-                                        color: Colors.white, fontSize: 12.5),
+                                      color: Colors.white,
+                                      fontSize: 12.5,
+                                    ),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
                                     '${p.colunas * p.fileiras} posições · '
                                     '${p.colunas} × ${p.fileiras}',
                                     style: const TextStyle(
-                                        color: Color(0xFF8a9aa8),
-                                        fontSize: 11),
+                                      color: Color(0xFF8a9aa8),
+                                      fontSize: 11,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -930,13 +1053,17 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                   ? null
                                   : () => _confirmarDesativarPalete(p),
                               icon: const Icon(
-                                  Icons.remove_circle_outline, size: 17),
+                                Icons.remove_circle_outline,
+                                size: 17,
+                              ),
                               color: const Color(0xFFe57373),
                               tooltip: 'Desativar',
                               visualDensity: VisualDensity.compact,
                             ),
-                          ]),
-                        )),
+                          ],
+                        ),
+                      ),
+                    ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
                     child: Align(
@@ -949,9 +1076,12 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                           foregroundColor: const Color(0xFFe87722),
                           side: const BorderSide(color: Color(0xFF5a3a1e)),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 9),
+                            horizontal: 14,
+                            vertical: 9,
+                          ),
                           shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
                     ),
@@ -989,7 +1119,10 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                   'na conta. Nunca cria quantidade, e nunca mexe num produto '
                   'lançado depois da contagem.',
                   style: TextStyle(
-                      color: Color(0xFF8a9aa8), fontSize: 11, height: 1.4),
+                    color: Color(0xFF8a9aa8),
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
                 ),
               ),
             ),
@@ -1027,29 +1160,33 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                           'loja. Desligue se preferir a cena parada ou se o '
                           'aparelho estiver lento.',
                           style: TextStyle(
-                              color: Color(0xFF8a9aa8),
-                              fontSize: 11,
-                              height: 1.4),
+                            color: Color(0xFF8a9aa8),
+                            fontSize: 11,
+                            height: 1.4,
+                          ),
                         ),
                       ],
                     ),
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-                    child: Row(children: [
-                      for (var n = 0; n <= PreferenciasMapa.maxBonecos; n++)
-                        Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                                right: n == PreferenciasMapa.maxBonecos ? 0 : 8),
-                            child: _OpcaoBonecos(
-                              quantidade:  n,
-                              selecionado: _bonecos == n,
-                              onTap:       () => _alterarBonecos(n),
+                    child: Row(
+                      children: [
+                        for (var n = 0; n <= PreferenciasMapa.maxBonecos; n++)
+                          Expanded(
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                right: n == PreferenciasMapa.maxBonecos ? 0 : 8,
+                              ),
+                              child: _OpcaoBonecos(
+                                quantidade: n,
+                                selecionado: _bonecos == n,
+                                onTap: () => _alterarBonecos(n),
+                              ),
                             ),
                           ),
-                        ),
-                    ]),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -1092,8 +1229,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
 // Uma das três opções de personagens no mapa: nenhum, 1 ou 2.
 
 class _OpcaoBonecos extends StatelessWidget {
-  final int          quantidade;
-  final bool         selecionado;
+  final int quantidade;
+  final bool selecionado;
   final VoidCallback onTap;
 
   const _OpcaoBonecos({
@@ -1103,10 +1240,10 @@ class _OpcaoBonecos extends StatelessWidget {
   });
 
   String get _rotulo => switch (quantidade) {
-        0 => 'Nenhum',
-        1 => '1 pessoa',
-        _ => '$quantidade pessoas',
-      };
+    0 => 'Nenhum',
+    1 => '1 pessoa',
+    _ => '$quantidade pessoas',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -1131,7 +1268,7 @@ class _OpcaoBonecos extends StatelessWidget {
               quantidade == 0
                   ? Icons.person_off_outlined
                   : Icons.directions_walk,
-              size:  18,
+              size: 18,
               color: selecionado ? camda : const Color(0xFF8a9aa8),
             ),
             const SizedBox(height: 4),
@@ -1197,10 +1334,15 @@ class _Campo extends StatelessWidget {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFF2e6b46), width: 1.5),
+              borderSide: const BorderSide(
+                color: Color(0xFF2e6b46),
+                width: 1.5,
+              ),
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 12,
+            ),
           ),
         ),
       ],

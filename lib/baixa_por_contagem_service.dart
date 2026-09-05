@@ -37,8 +37,9 @@ class BaixaPorContagemService {
 
   /// O resultado da última passada, para as telas mostrarem sem consultar
   /// nada. Null enquanto a baixa nunca rodou nesta sessão.
-  final ValueNotifier<ResumoBaixa?> ultimoResumo =
-      ValueNotifier<ResumoBaixa?>(null);
+  final ValueNotifier<ResumoBaixa?> ultimoResumo = ValueNotifier<ResumoBaixa?>(
+    null,
+  );
 
   /// Intervalo mínimo entre duas passadas AUTOMÁTICAS.
   ///
@@ -115,7 +116,7 @@ class BaixaPorContagemService {
       }
 
       final aplicaveis = planos.where((p) => p.aplicavel).toList();
-      final ignorados  = planos.where((p) => !p.aplicavel).toList();
+      final ignorados = planos.where((p) => !p.aplicavel).toList();
 
       if (!aplicar) {
         final resumo = ResumoBaixa(
@@ -127,7 +128,7 @@ class BaixaPorContagemService {
       }
 
       final aplicados = <PlanoBaixa>[];
-      final falhados  = <PlanoBaixa>[];
+      final falhados = <PlanoBaixa>[];
       for (final plano in aplicaveis) {
         if (await _aplicar(plano)) {
           aplicados.add(plano);
@@ -138,7 +139,7 @@ class BaixaPorContagemService {
 
       final resumo = ResumoBaixa(
         aplicados: aplicados,
-        falhados:  falhados,
+        falhados: falhados,
         ignorados: ignorados,
       );
       ultimoResumo.value = resumo;
@@ -169,14 +170,12 @@ class BaixaPorContagemService {
 
       final mestre = await _lerMestre(client);
       final grupos = gruposDeCodigos(
-        codigos:            enderecos.keys,
+        codigos: enderecos.keys,
         produtoIdPorCodigo: await _lerVinculosDoMapa(client),
-        nomePorCodigo:      {
-          for (final e in mestre.entries) e.key: e.value.nome,
-        },
+        nomePorCodigo: {for (final e in mestre.entries) e.key: e.value.nome},
       );
       final divergencias = await _lerDivergencias(client);
-      final contagens    = await _lerContagens(client);
+      final contagens = await _lerContagens(client);
 
       final planos = <PlanoBaixa>[];
       final gruposVistos = <String>{};
@@ -197,7 +196,7 @@ class BaixaPorContagemService {
         var nome = '';
         for (final c in grupo) {
           qtdSistema += mestre[c]?.qtdSistema ?? 0;
-          delta      += divergencias[c] ?? 0;
+          delta += divergencias[c] ?? 0;
           doGrupo.addAll(enderecos[c] ?? const []);
           if (nome.isEmpty) nome = mestre[c]?.nome ?? '';
           final dt = contagens[c];
@@ -206,16 +205,18 @@ class BaixaPorContagemService {
           }
         }
 
-        planos.add(planejarBaixa(
-          contagem: ContagemDoProduto(
-            codigos:           grupo,
-            nome:              nome,
-            qtdSistema:        qtdSistema,
-            deltaDivergencias: delta,
-            confirmadaEm:      confirmada,
+        planos.add(
+          planejarBaixa(
+            contagem: ContagemDoProduto(
+              codigos: grupo,
+              nome: nome,
+              qtdSistema: qtdSistema,
+              deltaDivergencias: delta,
+              confirmadaEm: confirmada,
+            ),
+            enderecos: doGrupo,
           ),
-          enderecos: doGrupo,
-        ));
+        );
       }
       return planos;
     } catch (_) {
@@ -227,28 +228,34 @@ class BaixaPorContagemService {
   /// ele que o grupo de códigos irmãos cruza. O código original fica dentro
   /// do [EnderecoLocalizado], porque é ele que volta para o UPDATE.
   Future<Map<String, List<EnderecoLocalizado>>> _lerEnderecos(
-      LibsqlClient client) async {
+    LibsqlClient client,
+  ) async {
     final stmt = await client.prepare(
-      'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
-      'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado',
+      'SELECT e.*, r.rack_uuid FROM estoque_localizado e '
+      'LEFT JOIN galpao_racks r ON e.local_tipo = \'galpao\' '
+      'AND r.posicao = e.local_num AND r.ordem = e.andar_ou_nivel '
+      'AND r.produto_codigo = e.produto_codigo',
     );
     final rows = await stmt.query() as List<dynamic>;
     final porCodigo = <String, List<EnderecoLocalizado>>{};
     for (final dynamic row in rows) {
-      final r      = row as Map<String, dynamic>;
-      final bruto  = r['produto_codigo'] as String? ?? '';
+      final r = row as Map<String, dynamic>;
+      final bruto = r['produto_codigo'] as String? ?? '';
       final codigo = normalizarCodigo(bruto);
       if (codigo == null) continue;
-      porCodigo.putIfAbsent(codigo, () => <EnderecoLocalizado>[]).add(
+      porCodigo
+          .putIfAbsent(codigo, () => <EnderecoLocalizado>[])
+          .add(
             EnderecoLocalizado(
-              id:            r['id']            as int?,
+              rackUuid: r['rack_uuid'] as String?,
+              id: r['id'] as int?,
               produtoCodigo: bruto,
-              localTipo:     r['local_tipo']     as String? ?? 'gondola',
-              localNum:      r['local_num']      as int?    ?? 0,
-              faceOuColuna:  r['face_ou_coluna'] as int?    ?? 0,
-              andarOuNivel:  r['andar_ou_nivel'] as int?    ?? 0,
-              quantidade:    (r['quantidade'] as num?)?.toDouble() ?? 0,
-              atualizadoEm:  r['atualizado_em']  as String?,
+              localTipo: r['local_tipo'] as String? ?? 'gondola',
+              localNum: r['local_num'] as int? ?? 0,
+              faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
+              andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
+              quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+              atualizadoEm: r['atualizado_em'] as String?,
             ),
           );
     }
@@ -259,7 +266,8 @@ class BaixaPorContagemService {
   /// catálogo: o irmão de um código fora do mapa só é achável pelo NOME (ver
   /// codigos_vinculados.dart).
   Future<Map<String, ({String nome, double qtdSistema})>> _lerMestre(
-      LibsqlClient client) async {
+    LibsqlClient client,
+  ) async {
     final stmt = await client.prepare(
       'SELECT codigo, produto, qtd_sistema FROM estoque_mestre LIMIT 5000',
     );
@@ -270,7 +278,7 @@ class BaixaPorContagemService {
       final codigo = normalizarCodigo(r['codigo'] as String?);
       if (codigo == null) continue;
       mestre[codigo] = (
-        nome:       r['produto'] as String? ?? '',
+        nome: r['produto'] as String? ?? '',
         qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
       );
     }
@@ -358,7 +366,7 @@ class BaixaPorContagemService {
         for (final dynamic row in rows) {
           final r = row as Map<String, dynamic>;
           final codigo = normalizarCodigo(r['produto_codigo'] as String?);
-          final texto  = r['ultima'] as String?;
+          final texto = r['ultima'] as String?;
           if (codigo == null || texto == null) continue;
           final dt = _parseData(texto);
           if (dt != null) por[codigo] = dt;
@@ -393,20 +401,23 @@ class BaixaPorContagemService {
     // [ordenarGravacaoGalpao], que é onde essa regra está explicada e travada
     // em teste.
     for (final a in ordenarGravacaoGalpao(plano.ajustes)) {
+      if (a.endereco.rackUuid == null) return false;
       final ok = a.esvazia
           ? await GalpaoService().esvaziar(
-                posicao: a.endereco.localNum,
-                ordem:   a.endereco.andarOuNivel,
-                origem:  origemLog,
-              ) !=
-              null
+                  rackUuid: a.endereco.rackUuid,
+                  posicao: a.endereco.localNum,
+                  ordem: a.endereco.andarOuNivel,
+                  origem: origemLog,
+                ) !=
+                null
           : await GalpaoService().ajustarQuantidade(
-                posicao:    a.endereco.localNum,
-                ordem:      a.endereco.andarOuNivel,
-                quantidade: a.qtdNova,
-                origem:     origemLog,
-              ) !=
-              null;
+                  rackUuid: a.endereco.rackUuid,
+                  posicao: a.endereco.localNum,
+                  ordem: a.endereco.andarOuNivel,
+                  quantidade: a.qtdNova,
+                  origem: origemLog,
+                ) !=
+                null;
       if (!ok) return false;
     }
 
@@ -417,12 +428,12 @@ class BaixaPorContagemService {
       if (a.endereco.localTipo == localTipoGalpao) continue;
       final ok = await EstoqueLocalizadoService().upsertQuantidade(
         produtoCodigo: a.endereco.produtoCodigo,
-        localTipo:     a.endereco.localTipo,
-        localNum:      a.endereco.localNum,
-        faceOuColuna:  a.endereco.faceOuColuna,
-        andarOuNivel:  a.endereco.andarOuNivel,
-        quantidade:    a.qtdNova,
-        origem:        origemLog,
+        localTipo: a.endereco.localTipo,
+        localNum: a.endereco.localNum,
+        faceOuColuna: a.endereco.faceOuColuna,
+        andarOuNivel: a.endereco.andarOuNivel,
+        quantidade: a.qtdNova,
+        origem: origemLog,
       );
       if (!ok) return false;
     }

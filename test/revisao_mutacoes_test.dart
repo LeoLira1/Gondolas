@@ -7,24 +7,25 @@ void main() {
   MutacaoOutbox mutacao({
     String operacao = 'galpao.ajustarQuantidade',
     EstadoMutacao estado = EstadoMutacao.revisaoManual,
-  }) =>
-      MutacaoOutbox(
-        uuid: 'abc',
-        operacao: operacao,
-        alvo: const AlvoMutacao(
-            tabela: 'galpao_racks', chave: {'posicao': 12, 'ordem': 2}),
-        estadoAnterior: const {'quantidade': 14},
-        estadoFinal: const {'quantidade': 90},
-        criadoEm: DateTime(2026, 9, 3, 14, 5),
-        dispositivo: 'android-1a2b3c4d',
-        estado: estado,
-        produtoCodigo: 'BORAL',
-        produtoNome: 'HERBICIDA BORAL 500 SC 20L',
-        posicao: 12,
-        ordem: 2,
-        quantidadeAnterior: 14,
-        quantidadePretendida: 90,
-      );
+  }) => MutacaoOutbox(
+    uuid: 'abc',
+    operacao: operacao,
+    alvo: const AlvoMutacao(
+      tabela: 'galpao_racks',
+      chave: {'posicao': 12, 'ordem': 2},
+    ),
+    estadoAnterior: const {'quantidade': 14},
+    estadoFinal: const {'quantidade': 90},
+    criadoEm: DateTime(2026, 9, 3, 14, 5),
+    dispositivo: 'android-1a2b3c4d',
+    estado: estado,
+    produtoCodigo: 'BORAL',
+    produtoNome: 'HERBICIDA BORAL 500 SC 20L',
+    posicao: 12,
+    ordem: 2,
+    quantidadeAnterior: 14,
+    quantidadePretendida: 90,
+  );
 
   Widget montar(List<MutacaoOutbox> lista) =>
       MaterialApp(home: RevisaoMutacoesPage(mutacoesIniciais: lista));
@@ -35,20 +36,22 @@ void main() {
 
     expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
     expect(find.text('BORAL'), findsOneWidget);
-    expect(find.text('12 · N2'), findsOneWidget);       // posição
-    expect(find.text('N2'), findsOneWidget);            // ordem original
-    expect(find.text('14 unidades'), findsOneWidget);   // quantidade anterior
-    expect(find.text('90 unidades'), findsOneWidget);   // resultado pretendido
+    expect(find.text('12 · N2'), findsOneWidget); // posição
+    expect(find.text('N2'), findsOneWidget); // ordem original
+    expect(find.text('14 unidades'), findsOneWidget); // quantidade anterior
+    expect(find.text('90 unidades'), findsOneWidget); // resultado pretendido
     expect(find.text('03/09/2026 14:05'), findsOneWidget);
     expect(find.text('android-1a2b3c4d'), findsOneWidget);
     expect(find.text('Ajuste de quantidade no galpão'), findsOneWidget);
   });
 
   testWidgets('separa conflito de conferência', (tester) async {
-    await tester.pumpWidget(montar([
-      mutacao(estado: EstadoMutacao.conflito),
-      mutacao(estado: EstadoMutacao.revisaoManual),
-    ]));
+    await tester.pumpWidget(
+      montar([
+        mutacao(estado: EstadoMutacao.conflito),
+        mutacao(estado: EstadoMutacao.revisaoManual),
+      ]),
+    );
     await tester.pump();
 
     expect(find.text('conflito'), findsOneWidget);
@@ -59,7 +62,7 @@ void main() {
     await tester.pumpWidget(montar(const []));
     await tester.pump();
 
-    expect(find.textContaining('Nada para conferir'), findsOneWidget);
+    expect(find.textContaining('Nenhuma pendência registrada'), findsOneWidget);
   });
 
   testWidgets('a tela não oferece apagar nem aplicar', (tester) async {
@@ -72,5 +75,38 @@ void main() {
     expect(find.widgetWithText(TextButton, 'Descartar'), findsNothing);
     expect(find.widgetWithText(TextButton, 'Aplicar'), findsNothing);
     expect(find.byIcon(Icons.delete_outline), findsNothing);
+  });
+  testWidgets('falha de leitura mostra erro e permite nova tentativa', (
+    tester,
+  ) async {
+    var tentativas = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RevisaoMutacoesPage(
+          carregar: () async {
+            if (++tentativas == 1) throw StateError('falha simulada');
+            return [];
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Não foi possível verificar as pendências.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Nenhuma pendência registrada'), findsNothing);
+    await tester.tap(find.text('Tentar novamente'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Nenhuma pendência registrada'), findsOneWidget);
+  });
+
+  testWidgets('alteração pendente não aparece como conferência', (
+    tester,
+  ) async {
+    await tester.pumpWidget(montar([mutacao(estado: EstadoMutacao.pendente)]));
+    await tester.pump();
+    expect(find.text('aguardando envio'), findsOneWidget);
+    expect(find.text('conferência'), findsNothing);
   });
 }

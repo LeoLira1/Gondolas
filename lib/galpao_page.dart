@@ -30,7 +30,7 @@ class GalpaoPage extends StatefulWidget {
   /// banco — é a costura dos testes e do uso offline. Null = carrega tudo do
   /// Turso e grava lá as mudanças.
   final Map<int, List<RackGalpao>>? pilhasIniciais;
-  final List<Produto>?             catalogoInicial;
+  final List<Produto>? catalogoInicial;
 
   /// Abrir já isolando a rua desta posição e marcando o endereço — é por onde
   /// a busca do mapa da loja entra quando o produto está no galpão.
@@ -82,19 +82,17 @@ class GalpaoPage extends StatefulWidget {
 /// preenchida.
 class LancamentoRecente {
   final Produto produto;
-  final double  quantidade;
+  final double quantidade;
 
   const LancamentoRecente({required this.produto, required this.quantidade});
 }
 
 class _GalpaoPageState extends State<GalpaoPage> {
-  late final Map<int, List<RackGalpao>> _pilhas = {
-    ...?widget.pilhasIniciais,
-  };
+  late final Map<int, List<RackGalpao>> _pilhas = {...?widget.pilhasIniciais};
 
-  List<Produto>      _catalogo           = const [];
-  Map<String, Color> _corPorProduto      = const {};
-  bool               _carregandoCatalogo = false;
+  List<Produto> _catalogo = const [];
+  Map<String, Color> _corPorProduto = const {};
+  bool _carregandoCatalogo = false;
 
   final List<LancamentoRecente> _recentes = [];
   static const int _maxRecentes = 4;
@@ -109,16 +107,16 @@ class _GalpaoPageState extends State<GalpaoPage> {
   // pendente de hoje acende em ciano, o resto do galpão apaga. A lista de
   // pendentes é a MESMA (contagem_itens), então os dois prédios sempre falam
   // do mesmo dia de contagem.
-  bool                      _modoConferencia       = false;
-  bool                      _carregandoConferencia = false;
+  bool _modoConferencia = false;
+  bool _carregandoConferencia = false;
   ModoConferenciaResultado? _conferencia;
 
   // Saldo por produto: quanto o sistema diz que existe contra quanto já está
   // endereçado. Ligado, pinta de vermelho o rack de produto com carga ainda
   // por endereçar e de azul o que passou do sistema — a mesma convenção das
   // gôndolas e estantes.
-  late bool                 _mostrarSaldo = widget.saldoAoAbrir;
-  Map<String, SaldoProduto> _saldos       = const {};
+  late bool _mostrarSaldo = widget.saldoAoAbrir;
+  Map<String, SaldoProduto> _saldos = const {};
 
   // Baixa automática do que foi vendido (ver baixa_por_contagem.dart): roda
   // ao abrir o galpão e, quando tira quantidade de algum rack, deixa a faixa
@@ -126,7 +124,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   ResumoBaixa? _resumoBaixa;
 
   DescidaPilha? _descida;
-  int           _descidaSeq = 0;
+  int _descidaSeq = 0;
 
   /// Parte do galpão aberta no mapa: 1 ou 2. O galpão são dois blocos
   /// separados, e a tela mostra um de cada vez — ver GalpaoConfig.
@@ -153,7 +151,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   void _trocarParte(int parte) {
     if (parte == _parte) return;
     setState(() {
-      _parte        = parte;
+      _parte = parte;
       _ruasVisiveis = null;
       final sel = _selecionado;
       if (sel != null && GalpaoConfig.parteDe(sel.posicao) != parte) {
@@ -186,20 +184,24 @@ class _GalpaoPageState extends State<GalpaoPage> {
     final numero = int.tryParse(texto.trim());
     final posicao = numero == null ? null : GalpaoConfig.porNumero(numero);
     if (posicao == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Posição $texto não existe — são 1 a '
-            '${GalpaoConfig.totalPosicoes}.'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Posição $texto não existe — são 1 a '
+            '${GalpaoConfig.totalPosicoes}.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       return;
     }
     final pilha = _pilhas[posicao.numero] ?? const <RackGalpao>[];
     setState(() {
-      _parte        = posicao.parte;
+      _parte = posicao.parte;
       _ruasVisiveis = {posicao.rua.numero};
       _selecionado = ToqueGalpao(
         posicao: posicao.numero,
-        ordem:   pilha.isEmpty ? 1 : pilha.length,
+        ordem: pilha.isEmpty ? 1 : pilha.length,
         ocupado: pilha.isNotEmpty,
       );
       _irParaCtrl.clear();
@@ -217,8 +219,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   /// True quando os saldos vêm do banco. Semeados por parâmetro (testes, uso
   /// offline), a página não consulta nada.
-  bool get _consultandoSaldos =>
-      widget.saldosIniciais == null && _persistindo;
+  bool get _consultandoSaldos => widget.saldosIniciais == null && _persistindo;
 
   bool _carregandoPilhas = false;
 
@@ -228,8 +229,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
     // Código vazio (rack gravado sem código) não destaca nada — senão o
     // destaque casaria com todos os outros racks sem código.
     final destaque = widget.codigoDestacado;
-    _destacadoCodigo =
-        destaque != null && destaque.isNotEmpty ? destaque : null;
+    _destacadoCodigo = destaque != null && destaque.isNotEmpty
+        ? destaque
+        : null;
     final semente = widget.catalogoInicial;
     if (semente != null) {
       _aplicarCatalogo(semente);
@@ -349,12 +351,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
       // A parte é a do endereço escolhido, mesmo com o produto espalhado pelos
       // dois blocos: o mapa mostra um de cada vez, e o ponto laranja no chip
       // da outra parte é o que diz que há mais paletes lá.
-      _parte        = posicao.parte;
-      _ruasVisiveis =
-          ruasDoProduto.length > 1 ? null : {posicao.rua.numero};
+      _parte = posicao.parte;
+      _ruasVisiveis = ruasDoProduto.length > 1 ? null : {posicao.rua.numero};
       _selecionado = ToqueGalpao(
         posicao: numero,
-        ordem:   pilha.isEmpty ? 1 : pilha.length,
+        ordem: pilha.isEmpty ? 1 : pilha.length,
         ocupado: pilha.isNotEmpty,
       );
     });
@@ -374,8 +375,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 
   /// Posições (1–129) que guardam o produto destacado.
-  Set<int> get _posicoesComDestaque =>
-      {for (final rack in _racksDestacados) rack.posicao};
+  Set<int> get _posicoesComDestaque => {
+    for (final rack in _racksDestacados) rack.posicao,
+  };
 
   /// Ruas que guardam o produto destacado — vira um ponto laranja no chip da
   /// rua, pelo mesmo motivo do ponto ciano da conferência: com uma rua
@@ -418,8 +420,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// outras posições, e trocar o filtro por baixo dele seria o mapa se mexer
   /// sozinho.
   void _alternarDestaque(String codigo) {
-    setState(() =>
-        _destacadoCodigo = _destacadoCodigo == codigo ? null : codigo);
+    setState(
+      () => _destacadoCodigo = _destacadoCodigo == codigo ? null : codigo,
+    );
   }
 
   Future<void> _carregarCatalogo() async {
@@ -433,7 +436,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 
   void _aplicarCatalogo(List<Produto> produtos) {
-    _catalogo      = produtos;
+    _catalogo = produtos;
     _corPorProduto = {for (final p in produtos) p.codigo: p.cor};
   }
 
@@ -462,7 +465,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
     if (!mounted) return;
     setState(() {
-      _conferencia           = resultado;
+      _conferencia = resultado;
       _carregandoConferencia = false;
     });
   }
@@ -517,25 +520,33 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// travaria o ritmo. Se a gravação falhar, o estado local volta atrás e o
   /// aviso é explícito — nunca fica um rack "lançado" só na tela.
   Future<void> _onLancar(
-      int posicao, Produto produto, double quantidade) async {
+    int posicao,
+    Produto produto,
+    double quantidade,
+  ) async {
     final antes = _pilhas[posicao] ?? const <RackGalpao>[];
     final nova = pilhaAposLancar(
       antes,
-      posicao:       posicao,
+      posicao: posicao,
       produtoCodigo: produto.codigo,
-      produtoNome:   produto.nome,
-      quantidade:    quantidade,
+      produtoNome: produto.nome,
+      quantidade: quantidade,
     );
     if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
     setState(() {
       _pilhas[posicao] = nova;
       // O saldo do produto acompanha o lançamento na hora: o cubo que acabou
       // de entrar não pode continuar vermelho esperando a releitura do banco.
-      _saldos = saldosComDelta(_saldos,
-          codigo: produto.codigo, delta: quantidade);
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: produto.codigo,
+        delta: quantidade,
+      );
       _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
       _recentes.insert(
-          0, LancamentoRecente(produto: produto, quantidade: quantidade));
+        0,
+        LancamentoRecente(produto: produto, quantidade: quantidade),
+      );
       if (_recentes.length > _maxRecentes) _recentes.removeLast();
       // Fecha o painel: no fluxo de carga o próximo gesto é tocar a próxima
       // vaga, e o produto recém-lançado está nos recentes.
@@ -544,20 +555,25 @@ class _GalpaoPageState extends State<GalpaoPage> {
     if (!_persistindo) return;
 
     final gravada = await GalpaoService().lancar(
-      posicao:       posicao,
+      posicao: posicao,
       produtoCodigo: produto.codigo,
-      produtoNome:   produto.nome,
-      quantidade:    quantidade,
+      produtoNome: produto.nome,
+      quantidade: quantidade,
     );
     if (!mounted) return;
     if (gravada == null) {
       setState(() {
         _pilhas[posicao] = antes;
-        _saldos = saldosComDelta(_saldos,
-            codigo: produto.codigo, delta: -quantidade);
+        _saldos = saldosComDelta(
+          _saldos,
+          codigo: produto.codigo,
+          delta: -quantidade,
+        );
       });
-      _avisar('Não deu para gravar o lançamento — confira a conexão com o '
-          'banco em ⚙️.');
+      _avisar(
+        'Não deu para gravar o lançamento — confira a conexão com o '
+        'banco em ⚙️.',
+      );
     } else {
       // A pilha do banco manda: se outra pessoa lançou nesta posição no meio
       // do caminho, o rack novo entrou num nível acima do previsto.
@@ -577,32 +593,41 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// que o número agora bate com o sistema.
   Future<void> _onAjustar(int posicao, int ordem, double quantidade) async {
     final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-    final rack  = ordem >= 1 && ordem <= antes.length ? antes[ordem - 1] : null;
+    final rack = ordem >= 1 && ordem <= antes.length ? antes[ordem - 1] : null;
     if (rack == null || quantidade <= 0) return;
     final delta = quantidade - rack.quantidade;
     if (delta == 0) return;
 
     setState(() {
       _pilhas[posicao] = pilhaAposAjustar(antes, ordem, quantidade);
-      _saldos = saldosComDelta(_saldos,
-          codigo: rack.produtoCodigo, delta: delta);
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: rack.produtoCodigo,
+        delta: delta,
+      );
     });
     if (!_persistindo) return;
 
     final gravada = await GalpaoService().ajustarQuantidade(
-      posicao:    posicao,
-      ordem:      ordem,
+      rackUuid: rack.rackUuid,
+      posicao: posicao,
+      ordem: ordem,
       quantidade: quantidade,
     );
     if (!mounted) return;
     if (gravada == null) {
       setState(() {
         _pilhas[posicao] = antes;
-        _saldos = saldosComDelta(_saldos,
-            codigo: rack.produtoCodigo, delta: -delta);
+        _saldos = saldosComDelta(
+          _saldos,
+          codigo: rack.produtoCodigo,
+          delta: -delta,
+        );
       });
-      _avisar('Não deu para gravar a quantidade — confira a conexão com o '
-          'banco em ⚙️.');
+      _avisar(
+        'Não deu para gravar a quantidade — confira a conexão com o '
+        'banco em ⚙️.',
+      );
     } else {
       setState(() => _pilhas[posicao] = gravada);
       unawaited(_carregarSaldos());
@@ -619,29 +644,36 @@ class _GalpaoPageState extends State<GalpaoPage> {
     setState(() {
       _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
       if (saindo != null) {
-        _saldos = saldosComDelta(_saldos,
-            codigo: saindo.produtoCodigo, delta: -saindo.quantidade);
+        _saldos = saldosComDelta(
+          _saldos,
+          codigo: saindo.produtoCodigo,
+          delta: -saindo.quantidade,
+        );
       }
       _descida = DescidaPilha(
-        posicao:        posicao,
+        posicao: posicao,
         aPartirDaOrdem: ordem,
-        id:             ++_descidaSeq,
+        id: ++_descidaSeq,
       );
       _selecionado = null;
     });
     if (!_persistindo) return;
 
     final gravada = await GalpaoService().esvaziar(
+      rackUuid: saindo?.rackUuid,
       posicao: posicao,
-      ordem:   ordem,
+      ordem: ordem,
     );
     if (!mounted) return;
     if (gravada == null) {
       setState(() {
         _pilhas[posicao] = antes;
         if (saindo != null) {
-          _saldos = saldosComDelta(_saldos,
-              codigo: saindo.produtoCodigo, delta: saindo.quantidade);
+          _saldos = saldosComDelta(
+            _saldos,
+            codigo: saindo.produtoCodigo,
+            delta: saindo.quantidade,
+          );
         }
       });
       _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
@@ -654,16 +686,16 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// Códigos com rack no galpão — a base do resumo de saldo (um produto em
   /// oito paletes conta uma vez).
   Iterable<String> get _codigosComRack => [
-        for (final pilha in _pilhas.values)
-          for (final rack in pilha) rack.produtoCodigo,
-      ];
+    for (final pilha in _pilhas.values)
+      for (final rack in pilha) rack.produtoCodigo,
+  ];
 
   /// Quantos produtos do galpão estão com falta e quantos com sobra. Vazio
   /// com a leitura desligada (ou no Modo Conferência, que manda nas cores).
   ({int comFalta, int comSobra}) get _resumoSaldo =>
       _mostrarSaldo && !_modoConferencia
-          ? resumoSaldos(_saldos, _codigosComRack)
-          : (comFalta: 0, comSobra: 0);
+      ? resumoSaldos(_saldos, _codigosComRack)
+      : (comFalta: 0, comSobra: 0);
 
   void _toggleSaldo() => setState(() => _mostrarSaldo = !_mostrarSaldo);
 
@@ -676,10 +708,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
   int get _vagasLivres => GalpaoConfig.totalEnderecos - _racksOcupados;
 
   void _avisar(String mensagem) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(mensagem),
-      behavior: SnackBarBehavior.floating,
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensagem), behavior: SnackBarBehavior.floating),
+    );
   }
 
   @override
@@ -694,25 +725,27 @@ class _GalpaoPageState extends State<GalpaoPage> {
       body: Stack(
         children: [
           GalpaoScene(
-            pilhas:        _pilhas,
+            pilhas: _pilhas,
             corPorProduto: _corPorProduto,
-            selecionado:   sel == null
+            selecionado: sel == null
                 ? null
                 : (posicao: sel.posicao, ordem: sel.ordem),
-            destacadoCodigo:     _destacadoCodigo,
-            onTapEndereco:       _onTapEndereco,
-            descida:             _descida,
-            parte:               _parte,
-            ruasVisiveis:        _ruasVisiveis,
-            modoConferencia:     _modoConferencia,
-            codigosConferencia:  _codigosConferencia,
+            destacadoCodigo: _destacadoCodigo,
+            onTapEndereco: _onTapEndereco,
+            descida: _descida,
+            parte: _parte,
+            ruasVisiveis: _ruasVisiveis,
+            modoConferencia: _modoConferencia,
+            codigosConferencia: _codigosConferencia,
             contagemConferencia: _contagemConferencia,
-            mostrarSaldo:        _mostrarSaldo,
-            saldos:              _saldos,
+            mostrarSaldo: _mostrarSaldo,
+            saldos: _saldos,
           ),
 
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
@@ -744,8 +777,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color:      Colors.white,
-                              fontSize:   15,
+                              color: Colors.white,
+                              fontSize: 15,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -757,7 +790,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color:    Colors.white.withValues(alpha: 0.45),
+                              color: Colors.white.withValues(alpha: 0.45),
                               fontSize: 11,
                             ),
                           ),
@@ -791,30 +824,40 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           FilteringTextInputFormatter.digitsOnly,
                         ],
                         style: const TextStyle(
-                            color: Colors.white, fontSize: 13),
+                          color: Colors.white,
+                          fontSize: 13,
+                        ),
                         decoration: InputDecoration(
                           hintText: 'nº',
                           hintStyle: const TextStyle(
-                              color: Color(0x44ffffff), fontSize: 13),
+                            color: Color(0x44ffffff),
+                            fontSize: 13,
+                          ),
                           filled: true,
                           fillColor: const Color(0xEE141518),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 12),
+                            horizontal: 10,
+                            vertical: 12,
+                          ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.10)),
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.10)),
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide:
-                                const BorderSide(color: corCamda, width: 1.4),
+                            borderSide: const BorderSide(
+                              color: corCamda,
+                              width: 1.4,
+                            ),
                           ),
                         ),
                       ),
@@ -827,7 +870,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
           // ── Filtro por rua (+ banner da conferência, quando ligada) ─────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.only(top: 68),
@@ -857,10 +902,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                         child: _FaixaDestaqueProduto(
-                          nome:      _nomeDestacado,
-                          posicoes:  _posicoesComDestaque.length,
-                          racks:     _racksDestacados.length,
-                          onLimpar:  () =>
+                          nome: _nomeDestacado,
+                          posicoes: _posicoesComDestaque.length,
+                          racks: _racksDestacados.length,
+                          onLimpar: () =>
                               setState(() => _destacadoCodigo = null),
                         ),
                       ),
@@ -871,7 +916,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                         child: FaixaBaixaAutomatica(
-                          resumo:   _resumoBaixa!,
+                          resumo: _resumoBaixa!,
                           onFechar: () => setState(() => _resumoBaixa = null),
                         ),
                       ),
@@ -888,9 +933,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
                         padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
                         child: _BannerConferenciaGalpao(
                           carregando: _carregandoConferencia,
-                          resultado:  _conferencia,
-                          onRefresh: _carregandoConferencia ||
-                                  !_consultandoConferencia
+                          resultado: _conferencia,
+                          onRefresh:
+                              _carregandoConferencia || !_consultandoConferencia
                               ? null
                               : _carregarConferencia,
                         ),
@@ -904,7 +949,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
           // ── Painel inferior ─────────────────────────────────────────────
           if (sel != null)
             Positioned(
-              left: 16, right: 16, bottom: 16,
+              left: 16,
+              right: 16,
+              bottom: 16,
               child: SafeArea(
                 top: false,
                 child: PainelEnderecoGalpao(
@@ -912,16 +959,16 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   // de endereço — resto de digitação de um endereço não pode
                   // vazar para o outro.
                   key: ValueKey('${sel.posicao}-${sel.ordem}-${sel.ocupado}'),
-                  toque:               sel,
-                  pilhas:              _pilhas,
-                  catalogo:            _catalogo,
-                  recentes:            _recentes,
-                  carregandoCatalogo:  _carregandoCatalogo,
-                  codigosConferencia:  _codigosConferencia,
-                  destacadoCodigo:     _destacadoCodigo,
-                  saldos:              _saldos,
-                  onConsultarSaldo:    _saldoDoProduto,
-                  onAlternarDestaque:  _modoConferencia
+                  toque: sel,
+                  pilhas: _pilhas,
+                  catalogo: _catalogo,
+                  recentes: _recentes,
+                  carregandoCatalogo: _carregandoCatalogo,
+                  codigosConferencia: _codigosConferencia,
+                  destacadoCodigo: _destacadoCodigo,
+                  saldos: _saldos,
+                  onConsultarSaldo: _saldoDoProduto,
+                  onAlternarDestaque: _modoConferencia
                       ? null
                       : _alternarDestaque,
                   onFechar: () => setState(() => _selecionado = null),
@@ -935,7 +982,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
             )
           else
             Positioned(
-              left: 16, right: 16, bottom: 20,
+              left: 16,
+              right: 16,
+              bottom: 20,
               // IgnorePointer: o parágrafo aceita hit na caixa inteira, e sem
               // isso a dica roubava o toque das posições desenhadas perto do
               // rodapé (a fileira mais próxima da câmera).
@@ -945,12 +994,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   child: Text(
                     _modoConferencia
                         ? 'Racks em ciano guardam produto para conferir hoje — '
-                          'toque num deles para ver o que contar.'
+                              'toque num deles para ver o que contar.'
                         : 'Toque num rack ou numa vaga para ver o endereço. '
-                          'Um dedo arrasta · dois dedos giram e dão zoom.',
+                              'Um dedo arrasta · dois dedos giram e dão zoom.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color:    Colors.white.withValues(alpha: 0.35),
+                      color: Colors.white.withValues(alpha: 0.35),
                       fontSize: 11,
                     ),
                   ),
@@ -975,16 +1024,16 @@ class _GalpaoPageState extends State<GalpaoPage> {
 /// outra parte de sumir do mundo: com um bloco fora da tela, é a marca no chip
 /// que diz que o produto procurado — ou a conferência de hoje — também está lá.
 class _BarraDePartes extends StatelessWidget {
-  final int               parte;
+  final int parte;
   final ValueChanged<int> onSelecionar;
-  final Set<int>          comPendencia;
-  final Set<int>          comDestaque;
+  final Set<int> comPendencia;
+  final Set<int> comDestaque;
 
   const _BarraDePartes({
     required this.parte,
     required this.onSelecionar,
     this.comPendencia = const {},
-    this.comDestaque  = const {},
+    this.comDestaque = const {},
   });
 
   @override
@@ -997,10 +1046,10 @@ class _BarraDePartes extends StatelessWidget {
         children: [
           for (final p in GalpaoConfig.partes)
             _ChipGalpao(
-              texto:     'Parte $p',
-              ativo:     p == parte,
-              onTap:     () => onSelecionar(p),
-              pendente:  comPendencia.contains(p),
+              texto: 'Parte $p',
+              ativo: p == parte,
+              onTap: () => onSelecionar(p),
+              pendente: comPendencia.contains(p),
               destacada: comDestaque.contains(p),
             ),
         ],
@@ -1017,25 +1066,25 @@ class _BarraDePartes extends StatelessWidget {
 class _BarraDeRuas extends StatelessWidget {
   /// Parte aberta: manda em QUAIS chips existem. Sem isto a barra ofereceria
   /// ruas que não estão desenhadas, e tocá-las esvaziaria a tela.
-  final int                parte;
+  final int parte;
 
-  final Set<int>?          visiveis;
+  final Set<int>? visiveis;
   final ValueChanged<int?> onSelecionar;
 
   /// Ruas com pendente de conferência hoje — ganham um ponto ciano no chip.
-  final Set<int>           comPendencia;
+  final Set<int> comPendencia;
 
   /// Ruas com o produto destacado pela busca — ponto laranja no chip. Sem
   /// ele, isolar uma rua esconderia as outras posições do produto sem dizer
   /// para onde ir procurá-las.
-  final Set<int>           comDestaque;
+  final Set<int> comDestaque;
 
   const _BarraDeRuas({
     required this.parte,
     required this.visiveis,
     required this.onSelecionar,
     this.comPendencia = const {},
-    this.comDestaque  = const {},
+    this.comDestaque = const {},
   });
 
   @override
@@ -1053,10 +1102,10 @@ class _BarraDeRuas extends StatelessWidget {
           ),
           for (final rua in GalpaoConfig.ruasDaParte(parte))
             _ChipGalpao(
-              texto:     'R${rua.numero}',
-              ativo:     visiveis != null && visiveis!.contains(rua.numero),
-              onTap:     () => onSelecionar(rua.numero),
-              pendente:  comPendencia.contains(rua.numero),
+              texto: 'R${rua.numero}',
+              ativo: visiveis != null && visiveis!.contains(rua.numero),
+              onTap: () => onSelecionar(rua.numero),
+              pendente: comPendencia.contains(rua.numero),
               destacada: comDestaque.contains(rua.numero),
             ),
         ],
@@ -1070,76 +1119,75 @@ class _BarraDeRuas extends StatelessWidget {
 /// coladas na tela — dois desenhos parecidos mas diferentes ali seriam lidos
 /// como coisas de naturezas diferentes, que não são.
 class _ChipGalpao extends StatelessWidget {
-  final String       texto;
-  final bool         ativo;
+  final String texto;
+  final bool ativo;
   final VoidCallback onTap;
-  final bool         pendente;
-  final bool         destacada;
+  final bool pendente;
+  final bool destacada;
 
   const _ChipGalpao({
     required this.texto,
     required this.ativo,
     required this.onTap,
-    this.pendente  = false,
+    this.pendente = false,
     this.destacada = false,
   });
 
   @override
-  Widget build(BuildContext context) =>
-      Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: ativo
-                  ? corCamda.withValues(alpha: 0.18)
-                  : const Color(0xEE141518),
-              borderRadius: BorderRadius.circular(9),
-              border: Border.all(
-                color: ativo
-                    ? corCamda
-                    : Colors.white.withValues(alpha: 0.10),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  texto,
-                  style: TextStyle(
-                    color:      ativo ? corCamda : const Color(0xFF8a877f),
-                    fontSize:   12,
-                    fontWeight: ativo ? FontWeight.bold : FontWeight.w500,
-                  ),
-                ),
-                if (pendente) ...[
-                  const SizedBox(width: 5),
-                  Container(
-                    width: 6, height: 6,
-                    decoration: const BoxDecoration(
-                      color: corConferenciaCiano,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ],
-                if (destacada) ...[
-                  const SizedBox(width: 5),
-                  Container(
-                    width: 6, height: 6,
-                    decoration: const BoxDecoration(
-                      color: corCamda,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ],
-              ],
-            ),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(right: 6),
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: ativo
+              ? corCamda.withValues(alpha: 0.18)
+              : const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(
+            color: ativo ? corCamda : Colors.white.withValues(alpha: 0.10),
           ),
         ),
-      );
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              texto,
+              style: TextStyle(
+                color: ativo ? corCamda : const Color(0xFF8a877f),
+                fontSize: 12,
+                fontWeight: ativo ? FontWeight.bold : FontWeight.w500,
+              ),
+            ),
+            if (pendente) ...[
+              const SizedBox(width: 5),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: corConferenciaCiano,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+            if (destacada) ...[
+              const SizedBox(width: 5),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: corCamda,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 // ── Faixa do produto destacado ───────────────────────────────────────────────
@@ -1149,10 +1197,10 @@ class _ChipGalpao extends StatelessWidget {
 /// se são todos do mesmo produto — nem quantos ainda estão fora da tela por
 /// causa do filtro de rua.
 class _FaixaDestaqueProduto extends StatelessWidget {
-  final String        nome;
-  final int           posicoes;
-  final int           racks;
-  final VoidCallback  onLimpar;
+  final String nome;
+  final int posicoes;
+  final int racks;
+  final VoidCallback onLimpar;
 
   const _FaixaDestaqueProduto({
     required this.nome,
@@ -1169,8 +1217,8 @@ class _FaixaDestaqueProduto extends StatelessWidget {
     final resumo = posicoes == 0
         ? 'nenhuma posição'
         : racks == posicoes
-            ? pluralizar(posicoes, 'posição', 'posições')
-            : '${pluralizar(posicoes, 'posição', 'posições')} · '
+        ? pluralizar(posicoes, 'posição', 'posições')
+        : '${pluralizar(posicoes, 'posição', 'posições')} · '
               '${pluralizar(racks, 'rack')}';
 
     // Uma linha só: o nome estica e o resumo fica colado nele. A versão de
@@ -1181,9 +1229,9 @@ class _FaixaDestaqueProduto extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 5, 4, 5),
       decoration: BoxDecoration(
-        color:        corCamda.withValues(alpha: 0.12),
+        color: corCamda.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(9),
-        border:       Border.all(color: corCamda.withValues(alpha: 0.45)),
+        border: Border.all(color: corCamda.withValues(alpha: 0.45)),
       ),
       child: Row(
         children: [
@@ -1195,9 +1243,10 @@ class _FaixaDestaqueProduto extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                  color:      Colors.white,
-                  fontSize:   12,
-                  fontWeight: FontWeight.w600),
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           const SizedBox(width: 6),
@@ -1241,38 +1290,38 @@ class _FaixaDestaqueProduto extends StatelessWidget {
 /// parâmetros com o texto do galpão como padrão: o fluxo é um só, e um painel
 /// paralelo no barracão seria a mesma tela mantida em dois lugares.
 class PainelEnderecoGalpao extends StatefulWidget {
-  final ToqueGalpao                toque;
+  final ToqueGalpao toque;
   final Map<int, List<RackGalpao>> pilhas;
-  final List<Produto>              catalogo;
-  final List<LancamentoRecente>    recentes;
-  final bool                       carregandoCatalogo;
-  final VoidCallback               onFechar;
+  final List<Produto> catalogo;
+  final List<LancamentoRecente> recentes;
+  final bool carregandoCatalogo;
+  final VoidCallback onFechar;
   final void Function(Produto produto, double quantidade)? onLancar;
 
   /// Tira o palete do endereço. Chamado quando a quantidade nova é 0 — não
   /// há mais botão para isso. Null trava o 0 no teclado de quantidade.
-  final VoidCallback?              onEsvaziar;
+  final VoidCallback? onEsvaziar;
 
   /// Corrige a quantidade do rack aberto, em unidades. Null esconde o lápis
   /// ao lado do número (testes, uso só de leitura).
-  final ValueChanged<double>?      onAjustarQuantidade;
+  final ValueChanged<double>? onAjustarQuantidade;
 
   /// Códigos pendentes de conferência hoje: o rack cujo produto está aqui
   /// ganha a tarja ciana — quem tocou o cubo aceso precisa ver, no painel, que
   /// foi por isso que ele acendeu.
-  final Set<String>                codigosConferencia;
+  final Set<String> codigosConferencia;
 
   /// Produto aceso no mapa agora (busca), para o botão do painel saber se
   /// oferece ligar ou desligar o destaque.
-  final String?                    destacadoCodigo;
+  final String? destacadoCodigo;
 
   /// Ligar/desligar o destaque do produto deste rack no galpão inteiro.
   /// Null esconde o botão (Modo Conferência manda nas cores).
-  final ValueChanged<String>?      onAlternarDestaque;
+  final ValueChanged<String>? onAlternarDestaque;
 
   /// Saldos já conhecidos (sistema × endereçado), por código de produto —
   /// os mesmos que pintam os cubos.
-  final Map<String, SaldoProduto>  saldos;
+  final Map<String, SaldoProduto> saldos;
 
   /// Busca o saldo de um produto que não está em [saldos] — é o caso do
   /// produto escolhido para lançar, que pode nunca ter tido endereço. Null
@@ -1296,8 +1345,8 @@ class PainelEnderecoGalpao extends StatefulWidget {
     required this.toque,
     required this.pilhas,
     required this.onFechar,
-    this.catalogo           = const [],
-    this.recentes           = const [],
+    this.catalogo = const [],
+    this.recentes = const [],
     this.carregandoCatalogo = false,
     this.onLancar,
     this.onEsvaziar,
@@ -1305,7 +1354,7 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.codigosConferencia = const {},
     this.destacadoCodigo,
     this.onAlternarDestaque,
-    this.saldos             = const {},
+    this.saldos = const {},
     this.onConsultarSaldo,
     this.rotuloEndereco,
     this.subtitulo,
@@ -1318,7 +1367,7 @@ class PainelEnderecoGalpao extends StatefulWidget {
 
 class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   final _buscaCtrl = TextEditingController();
-  final _qtdCtrl   = TextEditingController();
+  final _qtdCtrl = TextEditingController();
 
   /// Nome do endereço aberto: o que a tela dona do painel passou, ou o do
   /// galpão. Fica num getter só para os cinco lugares que escrevem o endereço
@@ -1328,8 +1377,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
       widget.rotuloEndereco ??
       '${widget.toque.posicao} · N${widget.toque.ordem}';
 
-  List<Produto> _resultados  = const [];
-  Produto?      _produtoSel;
+  List<Produto> _resultados = const [];
+  Produto? _produtoSel;
 
   /// Saldo do produto em foco: o do rack, num endereço ocupado, ou o do
   /// produto escolhido para lançar numa vaga livre. Null enquanto não se sabe
@@ -1349,7 +1398,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   /// O rack sob o endereço tocado, ou null numa vaga livre.
   RackGalpao? get _rackDoToque {
-    final t     = widget.toque;
+    final t = widget.toque;
     final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
     return t.ocupado && t.ordem <= pilha.length ? pilha[t.ordem - 1] : null;
   }
@@ -1417,7 +1466,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   }
 
   void _lancar() {
-    final produto    = _produtoSel;
+    final produto = _produtoSel;
     final quantidade = _quantidadeDigitada;
     if (produto == null || quantidade == null) return;
     widget.onLancar?.call(produto, quantidade);
@@ -1431,16 +1480,16 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// aqui a chamada vai para [PainelEnderecoGalpao.onEsvaziar] — que é quem
   /// derruba os racks de cima e renumera a pilha.
   Future<void> _abrirAjuste(RackGalpao rack) async {
-    final t     = widget.toque;
+    final t = widget.toque;
     final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
-    final nova  = await showDialog<double>(
+    final nova = await showDialog<double>(
       context: context,
       builder: (_) => _DialogAjustarQuantidade(
-        rotulo:       _rotulo,
-        rack:         rack,
-        saldo:        _saldo,
+        rotulo: _rotulo,
+        rack: rack,
+        saldo: _saldo,
         podeEsvaziar: widget.onEsvaziar != null,
-        temAcima:     t.ordem < pilha.length,
+        temAcima: t.ordem < pilha.length,
       ),
     );
     if (!mounted || nova == null || nova == rack.quantidade) return;
@@ -1453,19 +1502,19 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   @override
   Widget build(BuildContext context) {
-    final t     = widget.toque;
-    final rua   = GalpaoConfig.ruaDe(t.posicao);
+    final t = widget.toque;
+    final rua = GalpaoConfig.ruaDe(t.posicao);
     final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
-    final rack  = t.ocupado && t.ordem <= pilha.length
+    final rack = t.ocupado && t.ordem <= pilha.length
         ? pilha[t.ordem - 1]
         : null;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
       decoration: BoxDecoration(
-        color:        const Color(0xF0141a22),
+        color: const Color(0xF0141a22),
         borderRadius: BorderRadius.circular(14),
-        border:       Border.all(color: const Color(0xFF232f3a)),
+        border: Border.all(color: const Color(0xFF232f3a)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1479,8 +1528,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
               Text(
                 _rotulo,
                 style: const TextStyle(
-                  color:      corCamda,
-                  fontSize:   22,
+                  color: corCamda,
+                  fontSize: 22,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -1493,9 +1542,11 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                         (rua == null
                             ? ''
                             : 'Rua ${rua.numero} · ${pilha.length} de '
-                              '${GalpaoConfig.niveisMax} na pilha'),
+                                  '${GalpaoConfig.niveisMax} na pilha'),
                     style: const TextStyle(
-                        color: Color(0xFF8a9aa8), fontSize: 12),
+                      color: Color(0xFF8a9aa8),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ),
@@ -1509,10 +1560,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             ],
           ),
           const SizedBox(height: 10),
-          if (rack != null)
-            _buildOcupado(rack)
-          else
-            _buildVazio(t),
+          if (rack != null) _buildOcupado(rack) else _buildVazio(t),
         ],
       ),
     );
@@ -1522,7 +1570,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   Widget _buildOcupado(RackGalpao rack) {
     final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
-    final blocoSaldo    = _blocoSaldo();
+    final blocoSaldo = _blocoSaldo();
     final botaoDestaque = _botaoDestaque(rack);
 
     return Column(
@@ -1535,20 +1583,25 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
               color: corConferenciaCiano.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                  color: corConferenciaCiano.withValues(alpha: 0.55)),
+                color: corConferenciaCiano.withValues(alpha: 0.55),
+              ),
             ),
             child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.fact_check_outlined,
-                    size: 13, color: corConferenciaCiano),
+                Icon(
+                  Icons.fact_check_outlined,
+                  size: 13,
+                  color: corConferenciaCiano,
+                ),
                 SizedBox(width: 6),
                 Text(
                   'Conferir hoje',
                   style: TextStyle(
-                      color: corConferenciaCiano,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600),
+                    color: corConferenciaCiano,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -1558,8 +1611,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         Text(
           rack.produtoNome.isEmpty ? rack.produtoCodigo : rack.produtoNome,
           style: const TextStyle(
-            color:      Colors.white,
-            fontSize:   13,
+            color: Colors.white,
+            fontSize: 13,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -1576,8 +1629,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                   : () => _abrirAjuste(rack),
               borderRadius: BorderRadius.circular(6),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 4, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -1585,8 +1637,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                     Text(
                       quantidadeEmUnidades(rack.quantidade),
                       style: const TextStyle(
-                        color:      Colors.white,
-                        fontSize:   18,
+                        color: Colors.white,
+                        fontSize: 18,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1594,8 +1646,11 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                       const SizedBox(width: 7),
                       const Padding(
                         padding: EdgeInsets.only(bottom: 3),
-                        child: Icon(Icons.edit_outlined,
-                            size: 15, color: corCamda),
+                        child: Icon(
+                          Icons.edit_outlined,
+                          size: 15,
+                          color: corCamda,
+                        ),
                       ),
                     ],
                   ],
@@ -1605,15 +1660,11 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             const Spacer(),
             Text(
               'cód. ${rack.produtoCodigo}',
-              style:
-                  const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
             ),
           ],
         ),
-        if (blocoSaldo != null) ...[
-          const SizedBox(height: 8),
-          blocoSaldo,
-        ],
+        if (blocoSaldo != null) ...[const SizedBox(height: 8), blocoSaldo],
         if (widget.onAlternarDestaque != null && botaoDestaque != null) ...[
           const SizedBox(height: 8),
           botaoDestaque,
@@ -1644,18 +1695,18 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final cor = saldo.falta
         ? corEnderecoDivergente
         : saldo.sobra
-            ? corEnderecoDivergentePositiva
-            : const Color(0xFF6fcf97);
+        ? corEnderecoDivergentePositiva
+        : const Color(0xFF6fcf97);
     final icone = saldo.falta
         ? Icons.report_problem_outlined
         : saldo.sobra
-            ? Icons.unfold_more
-            : Icons.check_circle_outline;
+        ? Icons.unfold_more
+        : Icons.check_circle_outline;
     final titulo = saldo.falta
         ? 'Faltam ${fmt(saldo.quantoFalta)} por endereçar'
         : saldo.sobra
-            ? 'Sobram ${fmt(saldo.quantoSobra)} endereçados'
-            : 'Tudo endereçado';
+        ? 'Sobram ${fmt(saldo.quantoSobra)} endereçados'
+        : 'Tudo endereçado';
 
     // Caixa colorida SÓ quando há divergência: é aviso, e aviso que aparece
     // sempre vira moldura. Saldo que fecha é uma linha de texto quieta, com o
@@ -1669,9 +1720,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           : EdgeInsets.zero,
       decoration: alarme
           ? BoxDecoration(
-              color:        cor.withValues(alpha: 0.14),
+              color: cor.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(7),
-              border:       Border.all(color: cor.withValues(alpha: 0.55)),
+              border: Border.all(color: cor.withValues(alpha: 0.55)),
             )
           : null,
       child: Row(
@@ -1689,9 +1740,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                       ? titulo
                       : '$titulo · sistema ${fmt(saldo.qtdSistema)}',
                   style: TextStyle(
-                      color:      cor,
-                      fontSize:   11,
-                      fontWeight: FontWeight.w600),
+                    color: cor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 if (alarme) ...[
                   const SizedBox(height: 2),
@@ -1701,7 +1753,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                     'Sistema ${formatarNumero(saldo.qtdSistema)} · '
                     'endereçado ${formatarNumero(saldo.enderecado)}',
                     style: const TextStyle(
-                        color: Color(0xFF8a9aa8), fontSize: 11),
+                      color: Color(0xFF8a9aa8),
+                      fontSize: 11,
+                    ),
                   ),
                 ],
                 // O sistema do produto soma mais de um código: dizer QUAIS é
@@ -1714,7 +1768,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                     child: Text(
                       'códigos somados · ${saldo.codigosSomados.join(' + ')}',
                       style: const TextStyle(
-                          color: Color(0xFF6b7a88), fontSize: 10),
+                        color: Color(0xFF6b7a88),
+                        fontSize: 10,
+                      ),
                     ),
                   ),
               ],
@@ -1734,7 +1790,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// — e o botão ficava ali em todo rack, cobrando espaço sem servir.
   Widget? _botaoDestaque(RackGalpao rack) {
     final quantas = _posicoesDoProduto(rack.produtoCodigo);
-    final aceso   = widget.destacadoCodigo == rack.produtoCodigo;
+    final aceso = widget.destacadoCodigo == rack.produtoCodigo;
     if (quantas <= 1 && !aceso) return null;
 
     return GestureDetector(
@@ -1747,9 +1803,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
               : Colors.white.withValues(alpha: 0.04),
           borderRadius: BorderRadius.circular(7),
           border: Border.all(
-            color: aceso
-                ? corCamda
-                : Colors.white.withValues(alpha: 0.12),
+            color: aceso ? corCamda : Colors.white.withValues(alpha: 0.12),
           ),
         ),
         child: Row(
@@ -1800,16 +1854,18 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
       children: [
         Row(
           children: [
-            const Icon(Icons.check_box_outline_blank,
-                size: 16, color: Color(0xFF6fcf97)),
+            const Icon(
+              Icons.check_box_outline_blank,
+              size: 16,
+              color: Color(0xFF6fcf97),
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 widget.textoVagaLivre ??
                     'Vaga livre — carga nova entra como N${t.ordem}, no topo '
-                    'da pilha.',
-                style:
-                    const TextStyle(color: Color(0xFF6fcf97), fontSize: 12),
+                        'da pilha.',
+                style: const TextStyle(color: Color(0xFF6fcf97), fontSize: 12),
               ),
             ),
           ],
@@ -1818,10 +1874,12 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         if (produto == null) ...[
           TextField(
             controller: _buscaCtrl,
-            onChanged:  _aoDigitarBusca,
+            onChanged: _aoDigitarBusca,
             style: const TextStyle(color: Colors.white, fontSize: 13),
             decoration: _decoracaoCampo(
-                'Buscar produto por nome ou código…', Icons.search),
+              'Buscar produto por nome ou código…',
+              Icons.search,
+            ),
           ),
           if (_resultados.isNotEmpty)
             Padding(
@@ -1834,11 +1892,14 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                       borderRadius: BorderRadius.circular(6),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 8),
+                          horizontal: 6,
+                          vertical: 8,
+                        ),
                         child: Row(
                           children: [
                             Container(
-                              width: 10, height: 10,
+                              width: 10,
+                              height: 10,
                               decoration: BoxDecoration(
                                 color: p.cor,
                                 borderRadius: BorderRadius.circular(2),
@@ -1851,13 +1912,17 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
-                                    color: Colors.white, fontSize: 12),
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
                               ),
                             ),
                             Text(
                               p.codigo,
                               style: const TextStyle(
-                                  color: Color(0xFF8a9aa8), fontSize: 10),
+                                color: Color(0xFF8a9aa8),
+                                fontSize: 10,
+                              ),
                             ),
                           ],
                         ),
@@ -1873,11 +1938,10 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                 widget.carregandoCatalogo
                     ? 'Carregando catálogo…'
                     : widget.catalogo.isEmpty
-                        ? 'Catálogo não carregado — sincronize no mapa da '
+                    ? 'Catálogo não carregado — sincronize no mapa da '
                           'loja (⚙️).'
-                        : 'Nenhum produto encontrado.',
-                style:
-                    const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                    : 'Nenhum produto encontrado.',
+                style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
               ),
             )
           else if (widget.recentes.isNotEmpty) ...[
@@ -1886,23 +1950,26 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
               child: Text(
                 'ÚLTIMOS LANÇADOS',
                 style: TextStyle(
-                  color:         Color(0xFF8a9aa8),
-                  fontSize:      10,
+                  color: Color(0xFF8a9aa8),
+                  fontSize: 10,
                   letterSpacing: 1.2,
                 ),
               ),
             ),
             Wrap(
-              spacing: 6, runSpacing: 6,
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 for (final r in widget.recentes)
                   InkWell(
-                    onTap: () => _selecionarProduto(r.produto,
-                        quantidade: r.quantidade),
+                    onTap: () =>
+                        _selecionarProduto(r.produto, quantidade: r.quantidade),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 6),
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFF161c22),
                         borderRadius: BorderRadius.circular(6),
@@ -1912,7 +1979,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Container(
-                            width: 8, height: 8,
+                            width: 8,
+                            height: 8,
                             decoration: BoxDecoration(
                               color: r.produto.cor,
                               borderRadius: BorderRadius.circular(2),
@@ -1926,7 +1994,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                  color: Colors.white, fontSize: 11),
+                                color: Colors.white,
+                                fontSize: 11,
+                              ),
                             ),
                           ),
                         ],
@@ -1939,8 +2009,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         ] else ...[
           // Produto escolhido: chip + quantidade + Lançar.
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             decoration: BoxDecoration(
               color: const Color(0xFF162416),
               borderRadius: BorderRadius.circular(6),
@@ -1949,7 +2018,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             child: Row(
               children: [
                 Container(
-                  width: 10, height: 10,
+                  width: 10,
+                  height: 10,
                   decoration: BoxDecoration(
                     color: produto.cor,
                     borderRadius: BorderRadius.circular(2),
@@ -1962,8 +2032,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color:      Color(0xFF6fcf97),
-                      fontSize:   12,
+                      color: Color(0xFF6fcf97),
+                      fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1975,22 +2045,21 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                     _saldo = null;
                     _saldoSeq++;
                   }),
-                  child: const Icon(Icons.close,
-                      size: 14, color: Color(0xFF8a9aa8)),
+                  child: const Icon(
+                    Icons.close,
+                    size: 14,
+                    color: Color(0xFF8a9aa8),
+                  ),
                 ),
               ],
             ),
           ),
-          if (blocoSaldo != null) ...[
-            const SizedBox(height: 8),
-            blocoSaldo,
-          ],
+          if (blocoSaldo != null) ...[const SizedBox(height: 8), blocoSaldo],
           const SizedBox(height: 8),
           TextField(
             controller: _qtdCtrl,
             onChanged: (_) => setState(() {}),
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
             ],
@@ -2018,12 +2087,12 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   InputDecoration _decoracaoCampo(String hint, IconData? icone) =>
       InputDecoration(
-        hintText:  hint,
+        hintText: hint,
         hintStyle: const TextStyle(color: Color(0x44ffffff), fontSize: 13),
         prefixIcon: icone == null
             ? null
             : Icon(icone, color: const Color(0xFF8a9aa8), size: 18),
-        filled:    true,
+        filled: true,
         fillColor: const Color(0xFF161c22),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
@@ -2035,11 +2104,12 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: Color(0xFF2e6b46), width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFF2e6b46), width: 1.5),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
         isDense: true,
       );
 }
@@ -2067,8 +2137,8 @@ class _DialogAjustarQuantidade extends StatefulWidget {
   /// Nome do endereço, já montado pelo painel (ver
   /// [PainelEnderecoGalpao.rotuloEndereco]) — o dialog não sabe de que prédio
   /// veio o rack, só como o endereço se chama.
-  final String        rotulo;
-  final RackGalpao    rack;
+  final String rotulo;
+  final RackGalpao rack;
   final SaldoProduto? saldo;
 
   /// 0 é aceito e sai daqui como pedido de esvaziar. Falso (uso só de
@@ -2084,7 +2154,7 @@ class _DialogAjustarQuantidade extends StatefulWidget {
     required this.rack,
     required this.saldo,
     this.podeEsvaziar = false,
-    this.temAcima     = false,
+    this.temAcima = false,
   });
 
   @override
@@ -2102,8 +2172,10 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
     super.initState();
     // Cursor selecionando tudo: o gesto seguinte é digitar o número certo por
     // inteiro, não emendar dígito no que já está lá.
-    _ctrl.selection =
-        TextSelection(baseOffset: 0, extentOffset: _ctrl.text.length);
+    _ctrl.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _ctrl.text.length,
+    );
   }
 
   @override
@@ -2134,25 +2206,27 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
     // Arredondado na casa da tolerância do saldo: a subtração de dois
     // doubles vindos de somas do banco produz "57.00000000000001", e o que
     // se oferece para digitar não pode ter cauda de ponto flutuante.
-    final alvo = ((widget.rack.quantidade - saldo.diferenca) * 1000)
-            .roundToDouble() /
+    final alvo =
+        ((widget.rack.quantidade - saldo.diferenca) * 1000).roundToDouble() /
         1000;
     return alvo > 0 ? alvo : null;
   }
 
   @override
   Widget build(BuildContext context) {
-    final rotulo    = widget.rotulo;
-    final sugestao  = _sugestao;
-    final digitada  = _digitada;
+    final rotulo = widget.rotulo;
+    final sugestao = _sugestao;
+    final digitada = _digitada;
 
     const corSaindo = Color(0xFFef5350);
     final esvaziando = _esvaziando;
 
     return AlertDialog(
       backgroundColor: const Color(0xFF141a22),
-      title: Text('Quantidade em $rotulo',
-          style: const TextStyle(color: Colors.white, fontSize: 16)),
+      title: Text(
+        'Quantidade em $rotulo',
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2165,18 +2239,18 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
           ),
           const SizedBox(height: 12),
           TextField(
-            controller:   _ctrl,
-            autofocus:    true,
-            onChanged:    (_) => setState(() {}),
+            controller: _ctrl,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
             ],
             style: const TextStyle(color: Colors.white, fontSize: 16),
             decoration: InputDecoration(
-              hintText:  'Unidades',
+              hintText: 'Unidades',
               hintStyle: const TextStyle(color: Color(0x44ffffff)),
-              filled:    true,
+              filled: true,
               fillColor: const Color(0xFF161c22),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
@@ -2189,10 +2263,14 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
                 borderSide: BorderSide(
-                    color: esvaziando ? corSaindo : corCamda, width: 1.5),
+                  color: esvaziando ? corSaindo : corCamda,
+                  width: 1.5,
+                ),
               ),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
               isDense: true,
             ),
           ),
@@ -2205,27 +2283,31 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
               decoration: BoxDecoration(
-                color:        corSaindo.withValues(alpha: 0.12),
+                color: corSaindo.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(color: corSaindo.withValues(alpha: 0.55)),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.remove_circle_outline,
-                      size: 14, color: corSaindo),
+                  const Icon(
+                    Icons.remove_circle_outline,
+                    size: 14,
+                    color: corSaindo,
+                  ),
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
                       widget.temAcima
                           ? '0 tira o palete de $rotulo. Os racks de cima '
-                            'descem um nível e a ordem é renumerada.'
+                                'descem um nível e a ordem é renumerada.'
                           : '0 tira o palete de $rotulo — o endereço fica '
-                            'livre.',
+                                'livre.',
                       style: const TextStyle(
-                          color: corSaindo,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600),
+                        color: corSaindo,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
@@ -2238,31 +2320,31 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
               onTap: () => setState(() {
                 _ctrl.text = formatarNumero(sugestao);
                 _ctrl.selection = TextSelection.collapsed(
-                    offset: _ctrl.text.length);
+                  offset: _ctrl.text.length,
+                );
               }),
               borderRadius: BorderRadius.circular(7),
               child: Container(
                 width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
                 decoration: BoxDecoration(
-                  color:        corCamda.withValues(alpha: 0.12),
+                  color: corCamda.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(7),
                   border: Border.all(color: corCamda.withValues(alpha: 0.55)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.auto_fix_high,
-                        size: 14, color: corCamda),
+                    const Icon(Icons.auto_fix_high, size: 14, color: corCamda),
                     const SizedBox(width: 7),
                     Expanded(
                       child: Text(
                         'Usar ${formatarNumero(sugestao)} — fecha com o '
                         'sistema',
                         style: const TextStyle(
-                            color: corCamda,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600),
+                          color: corCamda,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -2274,9 +2356,9 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
           Text(
             widget.podeEsvaziar
                 ? 'Estava com ${quantidadeEmUnidades(widget.rack.quantidade)}. '
-                  'Digite 0 para tirar o palete inteiro.'
+                      'Digite 0 para tirar o palete inteiro.'
                 : 'Estava com '
-                  '${quantidadeEmUnidades(widget.rack.quantidade)}.',
+                      '${quantidadeEmUnidades(widget.rack.quantidade)}.',
             style: const TextStyle(color: Color(0xFF6b7a88), fontSize: 11),
           ),
         ],
@@ -2287,13 +2369,15 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
           child: const Text('Cancelar'),
         ),
         TextButton(
-          onPressed:
-              digitada == null ? null : () => Navigator.pop(context, digitada),
+          onPressed: digitada == null
+              ? null
+              : () => Navigator.pop(context, digitada),
           child: Text(
             esvaziando ? 'Esvaziar' : 'Salvar',
             style: TextStyle(
-                color:      esvaziando ? corSaindo : corCamda,
-                fontWeight: FontWeight.w600),
+              color: esvaziando ? corSaindo : corCamda,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
@@ -2314,7 +2398,7 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
 /// competem: a cor de saldo cobre a cor da categoria, que é como se acha um
 /// produto no mapa de longe. Desligar devolve o galpão às categorias.
 class _ToggleSaldoGalpao extends StatelessWidget {
-  final bool         ativo;
+  final bool ativo;
   final VoidCallback onTap;
 
   const _ToggleSaldoGalpao({required this.ativo, required this.onTap});
@@ -2325,16 +2409,14 @@ class _ToggleSaldoGalpao extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 46,
-        width:  46,
+        width: 46,
         decoration: BoxDecoration(
           color: ativo
               ? corCamda.withValues(alpha: 0.18)
               : const Color(0xEE141518),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: ativo
-                ? corCamda
-                : Colors.white.withValues(alpha: 0.10),
+            color: ativo ? corCamda : Colors.white.withValues(alpha: 0.10),
           ),
         ),
         child: Icon(
@@ -2367,57 +2449,64 @@ class _FaixaSaldo extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color:        const Color(0xEE141518),
+        color: const Color(0xEE141518),
         borderRadius: BorderRadius.circular(9),
-        border:       Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
       child: Row(
         children: [
           // Ícone contornado, o mesmo do botão apagado: o botão da barra fica
           // sólido quando a leitura está ligada, e duas balanças sólidas na
           // tela ao mesmo tempo confundem qual delas é o interruptor.
-          const Icon(Icons.balance_outlined,
-              size: 13, color: Color(0xFF8a877f)),
+          const Icon(
+            Icons.balance_outlined,
+            size: 13,
+            color: Color(0xFF8a877f),
+          ),
           const SizedBox(width: 8),
           if (comFalta > 0)
             Flexible(
-                child: _legenda(
-                    corEnderecoDivergente, '$comFalta por endereçar')),
+              child: _legenda(corEnderecoDivergente, '$comFalta por endereçar'),
+            ),
           if (comFalta > 0 && comSobra > 0) const SizedBox(width: 12),
           if (comSobra > 0)
             Flexible(
-                child: _legenda(corEnderecoDivergentePositiva,
-                    '$comSobra acima do sistema')),
+              child: _legenda(
+                corEnderecoDivergentePositiva,
+                '$comSobra acima do sistema',
+              ),
+            ),
         ],
       ),
     );
   }
 
   Widget _legenda(Color cor, String texto) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8, height: 8,
-            decoration: BoxDecoration(
-              color: cor,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              texto,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
-            ),
-          ),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: cor,
+          borderRadius: BorderRadius.circular(2),
+        ),
+      ),
+      const SizedBox(width: 6),
+      Flexible(
+        child: Text(
+          texto,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+        ),
+      ),
+    ],
+  );
 }
 
 class _ToggleConferenciaGalpao extends StatelessWidget {
-  final bool         ativo;
+  final bool ativo;
   final VoidCallback onTap;
 
   const _ToggleConferenciaGalpao({required this.ativo, required this.onTap});
@@ -2428,7 +2517,7 @@ class _ToggleConferenciaGalpao extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 46,
-        width:  46,
+        width: 46,
         decoration: BoxDecoration(
           color: ativo
               ? corConferenciaCiano.withValues(alpha: 0.18)
@@ -2457,9 +2546,9 @@ class _ToggleConferenciaGalpao extends StatelessWidget {
 /// o total do dia é do banner da loja, e repeti-lo aqui só faria o usuário
 /// procurar no galpão o que está numa gôndola.
 class _BannerConferenciaGalpao extends StatelessWidget {
-  final bool                      carregando;
+  final bool carregando;
   final ModoConferenciaResultado? resultado;
-  final VoidCallback?             onRefresh;
+  final VoidCallback? onRefresh;
 
   const _BannerConferenciaGalpao({
     required this.carregando,
@@ -2469,57 +2558,62 @@ class _BannerConferenciaGalpao extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final r     = resultado;
+    final r = resultado;
     final vazio = !carregando && (r == null || r.galpaoVazioHoje);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color:        const Color(0xE60d2226),
-        border:       Border.all(
-            color: corConferenciaCiano.withValues(alpha: 0.4)),
+        color: const Color(0xE60d2226),
+        border: Border.all(color: corConferenciaCiano.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(children: [
-        Icon(
-          vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
-          color: corConferenciaCiano,
-          size:  15,
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            carregando
-                ? 'Carregando conferência do dia…'
-                : vazio
-                    ? 'Nenhum pendente com rack no galpão hoje 🎉'
-                    : 'Conferência do dia: '
-                      '${pluralizar(r!.totalProdutosGalpao, 'produto')} em '
-                      '${pluralizar(r.totalPosicoesGalpao, 'posição', 'posições')}',
-            // O banner fica sobre a cena: duas linhas é o teto, senão ele
-            // cobre os racks que acabou de acender.
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 12),
+      child: Row(
+        children: [
+          Icon(
+            vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
+            color: corConferenciaCiano,
+            size: 15,
           ),
-        ),
-        if (onRefresh != null) ...[
-          const SizedBox(width: 4),
-          IconButton(
-            icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
-            onPressed: onRefresh,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            tooltip: 'Atualizar',
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              carregando
+                  ? 'Carregando conferência do dia…'
+                  : vazio
+                  ? 'Nenhum pendente com rack no galpão hoje 🎉'
+                  : 'Conferência do dia: '
+                        '${pluralizar(r!.totalProdutosGalpao, 'produto')} em '
+                        '${pluralizar(r.totalPosicoesGalpao, 'posição', 'posições')}',
+              // O banner fica sobre a cena: duas linhas é o teto, senão ele
+              // cobre os racks que acabou de acender.
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
           ),
+          if (onRefresh != null) ...[
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(
+                Icons.refresh,
+                size: 16,
+                color: Color(0xFF8a9aa8),
+              ),
+              onPressed: onRefresh,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              tooltip: 'Atualizar',
+            ),
+          ],
         ],
-      ]),
+      ),
     );
   }
 }
 
 class _BotaoRedondo extends StatelessWidget {
-  final IconData     icone;
+  final IconData icone;
   final VoidCallback onTap;
 
   const _BotaoRedondo({required this.icone, required this.onTap});
@@ -2530,9 +2624,9 @@ class _BotaoRedondo extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 46,
-        width:  46,
+        width: 46,
         decoration: BoxDecoration(
-          color:        const Color(0xEE141518),
+          color: const Color(0xEE141518),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
         ),

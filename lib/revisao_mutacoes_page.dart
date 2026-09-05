@@ -19,8 +19,9 @@ import 'turso_service.dart';
 class RevisaoMutacoesPage extends StatefulWidget {
   /// Lista pronta (testes). Sem ela, a página consulta a outbox.
   final List<MutacaoOutbox>? mutacoesIniciais;
+  final Future<List<MutacaoOutbox>> Function()? carregar;
 
-  const RevisaoMutacoesPage({super.key, this.mutacoesIniciais});
+  const RevisaoMutacoesPage({super.key, this.mutacoesIniciais, this.carregar});
 
   @override
   State<RevisaoMutacoesPage> createState() => _RevisaoMutacoesPageState();
@@ -28,6 +29,7 @@ class RevisaoMutacoesPage extends StatefulWidget {
 
 class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
   List<MutacaoOutbox>? _mutacoes;
+  bool _erro = false;
 
   @override
   void initState() {
@@ -41,8 +43,14 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
   }
 
   Future<void> _carregar() async {
-    final lista = await TursoService().mutacoesParaRevisao();
-    if (mounted) setState(() => _mutacoes = lista);
+    setState(() => _erro = false);
+    try {
+      final lista =
+          await (widget.carregar ?? TursoService().mutacoesPendentes)();
+      if (mounted) setState(() => _mutacoes = lista);
+    } catch (_) {
+      if (mounted) setState(() => _erro = true);
+    }
   }
 
   @override
@@ -53,50 +61,67 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF141a22),
         foregroundColor: Colors.white,
-        title: const Text('Gravações para conferir',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        title: const Text(
+          'Gravações pendentes',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
       ),
-      body: mutacoes == null
+      body: _erro
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Não foi possível verificar as pendências.',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  TextButton(
+                    onPressed: _carregar,
+                    child: const Text('Tentar novamente'),
+                  ),
+                ],
+              ),
+            )
+          : mutacoes == null
           ? const Center(child: CircularProgressIndicator())
           : mutacoes.isEmpty
-              ? _vazio()
-              : ListView.separated(
-                  padding: const EdgeInsets.all(14),
-                  itemCount: mutacoes.length + 1,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (_, i) =>
-                      i == 0 ? _explicacao() : _cartao(mutacoes[i - 1]),
-                ),
+          ? _vazio()
+          : ListView.separated(
+              padding: const EdgeInsets.all(14),
+              itemCount: mutacoes.length + 1,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (_, i) =>
+                  i == 0 ? _explicacao() : _cartao(mutacoes[i - 1]),
+            ),
     );
   }
 
   Widget _vazio() => const Center(
-        child: Padding(
-          padding: EdgeInsets.all(28),
-          child: Text(
-            'Nada para conferir.\n\nTudo o que este aparelho gravou foi '
-            'confirmado pelo banco online ou reaplicado automaticamente.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 14, height: 1.5),
-          ),
-        ),
-      );
+    child: Padding(
+      padding: EdgeInsets.all(28),
+      child: Text(
+        'Nenhuma pendência registrada na proteção local.\n\n'
+        'Confira também o estado da sincronização na configuração.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 14, height: 1.5),
+      ),
+    ),
+  );
 
   Widget _explicacao() => Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1a2430),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF2a3a4a)),
-        ),
-        child: const Text(
-          'Estas gravações ficaram no aparelho e não foram reaplicadas '
-          'sozinhas — reaplicar poderia acertar o rack errado ou apagar o que '
-          'outra pessoa fez. Nenhuma foi descartada. Confira cada uma no mapa '
-          'e refaça o que ainda fizer sentido.',
-          style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 12.5, height: 1.45),
-        ),
-      );
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xFF1a2430),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: const Color(0xFF2a3a4a)),
+    ),
+    child: const Text(
+      'Estas alterações ainda não têm confirmação de envio. '
+      'Itens em conferência ou conflito exigem revisão no mapa; '
+      'nenhum registro é descartado por esta tela.',
+      style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 12.5, height: 1.45),
+    ),
+  );
 
   Widget _cartao(MutacaoOutbox m) {
     final conflito = m.estado == EstadoMutacao.conflito;
@@ -106,7 +131,8 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
         color: const Color(0xFF141a22),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-            color: conflito ? const Color(0xFF8b1a1a) : const Color(0xFF2a3a4a)),
+          color: conflito ? const Color(0xFF8b1a1a) : const Color(0xFF2a3a4a),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -115,16 +141,18 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
             children: [
               Expanded(
                 child: Text(
-                  m.produtoNome ?? m.produtoCodigo ?? _rotuloOperacao(m.operacao),
+                  m.produtoNome ??
+                      m.produtoCodigo ??
+                      _rotuloOperacao(m.operacao),
                   style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600),
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: conflito
                       ? const Color(0xFF8b1a1a)
@@ -132,7 +160,11 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  conflito ? 'conflito' : 'conferência',
+                  conflito
+                      ? 'conflito'
+                      : m.estado == EstadoMutacao.pendente
+                      ? 'aguardando envio'
+                      : 'conferência',
                   style: const TextStyle(color: Colors.white, fontSize: 11),
                 ),
               ),
@@ -140,11 +172,17 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
           ),
           const SizedBox(height: 8),
           _linha('Operação', _rotuloOperacao(m.operacao)),
+          if (m.alvo.chave['rack_uuid'] != null)
+            _linha(
+              'Identificador do rack',
+              m.alvo.chave['rack_uuid'].toString(),
+            ),
           if (m.produtoCodigo != null) _linha('Código', m.produtoCodigo!),
           if (m.posicao != null)
-            _linha('Posição', m.ordem != null
-                ? '${m.posicao} · N${m.ordem}'
-                : '${m.posicao}'),
+            _linha(
+              'Posição',
+              m.ordem != null ? '${m.posicao} · N${m.ordem}' : '${m.posicao}',
+            ),
           if (m.ordem != null) _linha('Ordem original', 'N${m.ordem}'),
           _linha('Quantidade anterior', _qtd(m.quantidadeAnterior)),
           _linha('Resultado pretendido', _qtd(m.quantidadePretendida)),
@@ -156,23 +194,26 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
   }
 
   Widget _linha(String rotulo, String valor) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 132,
-              child: Text(rotulo,
-                  style: const TextStyle(
-                      color: Color(0xFF6b7a88), fontSize: 12.5)),
-            ),
-            Expanded(
-              child: Text(valor,
-                  style: const TextStyle(color: Colors.white, fontSize: 12.5)),
-            ),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 132,
+          child: Text(
+            rotulo,
+            style: const TextStyle(color: Color(0xFF6b7a88), fontSize: 12.5),
+          ),
         ),
-      );
+        Expanded(
+          child: Text(
+            valor,
+            style: const TextStyle(color: Colors.white, fontSize: 12.5),
+          ),
+        ),
+      ],
+    ),
+  );
 
   static String _qtd(double? valor) {
     if (valor == null) return '—';
@@ -189,11 +230,11 @@ class _RevisaoMutacoesPageState extends State<RevisaoMutacoesPage> {
   }
 
   static String _rotuloOperacao(String operacao) => switch (operacao) {
-        'galpao.lancar'            => 'Lançamento no galpão',
-        'galpao.esvaziar'          => 'Esvaziar rack do galpão',
-        'galpao.ajustarQuantidade' => 'Ajuste de quantidade no galpão',
-        'layout.salvarGondola'     => 'Layout de gôndola',
-        'layout.salvarEstante'     => 'Layout de estante',
-        _                          => operacao,
-      };
+    'galpao.lancar' => 'Lançamento no galpão',
+    'galpao.esvaziar' => 'Esvaziar rack do galpão',
+    'galpao.ajustarQuantidade' => 'Ajuste de quantidade no galpão',
+    'layout.salvarGondola' => 'Layout de gôndola',
+    'layout.salvarEstante' => 'Layout de estante',
+    _ => operacao,
+  };
 }

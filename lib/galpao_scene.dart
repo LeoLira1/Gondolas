@@ -1,12 +1,20 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui show Image;
+
 import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 import 'package:flutter/material.dart';
 
 import 'galpao_config.dart';
+import 'rack_model.dart';
+export 'rack_model.dart';
 import 'galpao_saldo.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, ProjecaoCamera, luzCena, corEnderecoDivergente,
+    show
+        Vec3,
+        Camera,
+        ProjecaoCamera,
+        luzCena,
+        corEnderecoDivergente,
         corEnderecoDivergentePositiva;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
@@ -38,36 +46,14 @@ import 'textura_piso.dart';
 // um percurso linear. É intencional, não descuido: se um dia a grade deixar de
 // ser regular, este é o primeiro lugar a rever.
 
-/// Um rack ocupado numa posição do galpão.
-///
-/// [ordem] é a posição do rack DENTRO da pilha (1 = o de baixo) e é o que a
-/// tela mostra como nível. Não é identidade: esvaziar um rack faz os de cima
-/// descerem, e a ordem de todos eles muda. Ver a discussão em
-/// galpao_config.dart.
-class RackGalpao {
-  final int    posicao;        // 1–129
-  final int    ordem;          // 1–GalpaoConfig.niveisMax
-  final String produtoCodigo;
-  final String produtoNome;
-  final double quantidade;
-
-  const RackGalpao({
-    required this.posicao,
-    required this.ordem,
-    required this.produtoCodigo,
-    this.produtoNome = '',
-    this.quantidade  = 0,
-  });
-}
-
 /// Resultado de um toque na cena: o endereço tocado, com o que havia nele.
 ///
 /// [ordem] é a ordem na pilha (1 = chão) — nas pilhas cheias só há racks, e
 /// numa posição com vaga o toque no contorno devolve a PRÓXIMA ordem livre,
 /// que é onde uma carga nova entraria (produto novo sempre entra no topo).
 class ToqueGalpao {
-  final int  posicao;  // 1–129
-  final int  ordem;    // 1–GalpaoConfig.niveisMax
+  final int posicao; // 1–129
+  final int ordem; // 1–GalpaoConfig.niveisMax
   final bool ocupado;
 
   const ToqueGalpao({
@@ -110,14 +96,14 @@ class DescidaPilha {
 
 // ── Cores ────────────────────────────────────────────────────────────────────
 
-const Color corCamda        = Color(0xFFe87722);
-const Color _corFundo       = Color(0xFF0b0c0e);
-const Color _corPiso        = Color(0x0DFFFFFF);
-const Color _corPisoBorda   = Color(0x1AFFFFFF);
-const Color _corVazio       = Color(0x59FFFFFF);
-const Color _corRack        = Color(0xFF888888);
-const Color _corContorno    = Color(0x44000000);
-const Color _corRotuloRua   = Color(0x4DFFFFFF);
+const Color corCamda = Color(0xFFe87722);
+const Color _corFundo = Color(0xFF0b0c0e);
+const Color _corPiso = Color(0x0DFFFFFF);
+const Color _corPisoBorda = Color(0x1AFFFFFF);
+const Color _corVazio = Color(0x59FFFFFF);
+const Color _corRack = Color(0xFF888888);
+const Color _corContorno = Color(0x44000000);
+const Color _corRotuloRua = Color(0x4DFFFFFF);
 
 /// Lado, em METROS, da laje de concreto de assets/textures/galpao_concreto.png.
 ///
@@ -137,8 +123,8 @@ const Color _corDestaqueBorda = Color(0xFFffc98a);
 // aprender outra convenção. O apagado é o _corApagado de loja_scene.dart, e o
 // contorno da vaga livre fica bem mais fraco: no modo conferência a vaga não é
 // destino de nada, só referência de onde a fileira está.
-const Color _corApagado     = Color(0xFF2d2e31);
-const Color _corVazioFraco  = Color(0x1FFFFFFF);
+const Color _corApagado = Color(0xFF2d2e31);
+const Color _corVazioFraco = Color(0x1FFFFFFF);
 
 /// Cor de um rack na cena, na ordem de precedência que o galpão usa:
 /// Modo Conferência > destaque da busca > saldo do produto > cor do produto.
@@ -159,12 +145,12 @@ const Color _corVazioFraco  = Color(0x1FFFFFFF);
 /// casaria com ele e acenderia o galpão todo.
 Color corRackGalpao({
   required String produtoCodigo,
-  Map<String, Color> corPorProduto  = const {},
+  Map<String, Color> corPorProduto = const {},
   String? destacadoCodigo,
-  bool modoConferencia              = false,
-  Set<String> codigosConferencia    = const {},
-  bool mostrarSaldo                 = false,
-  Map<String, SaldoProduto> saldos  = const {},
+  bool modoConferencia = false,
+  Set<String> codigosConferencia = const {},
+  bool mostrarSaldo = false,
+  Map<String, SaldoProduto> saldos = const {},
 }) {
   if (modoConferencia) {
     return codigosConferencia.contains(produtoCodigo)
@@ -190,8 +176,8 @@ Color corRackGalpao({
 /// Os 3 tons de um cubo: topo cheio, uma lateral média e a outra escura.
 /// Sem textura e sem especular — o galpão quer leitura de posição, não
 /// aparência de rack.
-const double _tomTopo   = 1.00;
-const double _tomMedio  = 0.68;
+const double _tomTopo = 1.00;
+const double _tomMedio = 0.68;
 const double _tomEscuro = 0.46;
 
 // ── Ordem de desenho ─────────────────────────────────────────────────────────
@@ -231,8 +217,11 @@ List<PosicaoGalpao> ordemDeDesenho(RuaGalpao rua, double coordOlho) {
 ///
 /// A parte filtra antes de [visiveis]: o mapa desenha um bloco de cada vez, e
 /// uma rua da outra parte não entra na cena nem que o filtro a peça.
-List<RuaGalpao> ruasPorProfundidade(Vec3 olho,
-    {Set<int>? visiveis, int parte = 1}) {
+List<RuaGalpao> ruasPorProfundidade(
+  Vec3 olho, {
+  Set<int>? visiveis,
+  int parte = 1,
+}) {
   double distancia(RuaGalpao r) {
     final cx = r.eixo == EixoRua.z ? r.coordFixa : r.centro;
     final cz = r.eixo == EixoRua.z ? r.centro : r.coordFixa;
@@ -318,26 +307,26 @@ class GalpaoPainter extends CustomPainter {
 
   GalpaoPainter(
     this.camera, {
-    this.pilhas             = const {},
-    this.corPorProduto      = const {},
-    this.mostrarEtiquetas   = true,
+    this.pilhas = const {},
+    this.corPorProduto = const {},
+    this.mostrarEtiquetas = true,
     this.selecionado,
     this.destacadoCodigo,
     this.descida,
-    this.parte              = 1,
+    this.parte = 1,
     this.ruasVisiveis,
-    this.modoConferencia    = false,
+    this.modoConferencia = false,
     this.codigosConferencia = const {},
     this.contagemConferencia = const {},
-    this.mostrarSaldo       = false,
-    this.saldos             = const {},
+    this.mostrarSaldo = false,
+    this.saldos = const {},
     this.texturaPiso,
   });
 
   // Buffers reusados entre cubos: um cubo tem 8 cantos, e alocar duas listas
   // por cubo daria ~600 alocações por frame só para jogar fora.
-  final List<Offset> _cantos    = List<Offset>.filled(8, Offset.zero);
-  final List<bool>   _cantoOk   = List<bool>.filled(8, false);
+  final List<Offset> _cantos = List<Offset>.filled(8, Offset.zero);
+  final List<bool> _cantoOk = List<bool>.filled(8, false);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -353,43 +342,45 @@ class GalpaoPainter extends CustomPainter {
 
     final preenchimento = Paint()..style = PaintingStyle.fill;
     final contorno = Paint()
-      ..color       = _corContorno
-      ..style       = PaintingStyle.stroke
+      ..color = _corContorno
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 0.6;
     final contornoSel = Paint()
-      ..color       = corCamda
-      ..style       = PaintingStyle.stroke
+      ..color = corCamda
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
     final contornoDestaque = Paint()
-      ..color       = _corDestaqueBorda
-      ..style       = PaintingStyle.stroke
+      ..color = _corDestaqueBorda
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
     final vazio = Paint()
-      ..color       = modoConferencia ? _corVazioFraco : _corVazio
-      ..style       = PaintingStyle.stroke
+      ..color = modoConferencia ? _corVazioFraco : _corVazio
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
     final vazioSel = Paint()
-      ..color       = corCamda
-      ..style       = PaintingStyle.stroke
+      ..color = corCamda
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
     final sel = selecionado;
     final desc = descida;
     // Código vazio não destaca nada: a busca pode devolver um endereço cujo
     // rack foi gravado sem código, e casar '' com '' acenderia o galpão todo.
-    final codigoAceso =
-        (destacadoCodigo?.isEmpty ?? true) ? null : destacadoCodigo;
+    final codigoAceso = (destacadoCodigo?.isEmpty ?? true)
+        ? null
+        : destacadoCodigo;
 
     // Deslocamento vertical da descida em andamento, por rack.
     double dyDe(int numeroPosicao, int ordem) =>
-        desc != null &&
-                desc.posicao == numeroPosicao &&
-                ordem >= desc.aPartirDe
-            ? desc.dy
-            : 0.0;
+        desc != null && desc.posicao == numeroPosicao && ordem >= desc.aPartirDe
+        ? desc.dy
+        : 0.0;
 
-    for (final rua
-        in ruasPorProfundidade(proj.eye, visiveis: ruasVisiveis, parte: parte)) {
+    for (final rua in ruasPorProfundidade(
+      proj.eye,
+      visiveis: ruasVisiveis,
+      parte: parte,
+    )) {
       final coordOlho = rua.eixo == EixoRua.z ? proj.eye.z : proj.eye.x;
       for (final posicao in ordemDeDesenho(rua, coordOlho)) {
         final pilha = pilhas[posicao.numero] ?? const <RackGalpao>[];
@@ -398,7 +389,8 @@ class GalpaoPainter extends CustomPainter {
         // alto é o mais próximo dela.
         for (var k = 0; k < pilha.length; k++) {
           final rack = pilha[k];
-          final isSel = sel != null &&
+          final isSel =
+              sel != null &&
               sel.posicao == posicao.numero &&
               sel.ordem == k + 1;
           // Busca: o produto procurado acende no galpão inteiro. Vale para
@@ -407,19 +399,23 @@ class GalpaoPainter extends CustomPainter {
           // herbicida de uma olhada no mapa. No Modo Conferência a leitura de
           // rota tem precedência, como nas estantes.
           final cor = corRackGalpao(
-            produtoCodigo:      rack.produtoCodigo,
-            corPorProduto:      corPorProduto,
-            destacadoCodigo:    codigoAceso,
-            modoConferencia:    modoConferencia,
+            produtoCodigo: rack.produtoCodigo,
+            corPorProduto: corPorProduto,
+            destacadoCodigo: codigoAceso,
+            modoConferencia: modoConferencia,
             codigosConferencia: codigosConferencia,
-            mostrarSaldo:       mostrarSaldo,
-            saldos:             saldos,
+            mostrarSaldo: mostrarSaldo,
+            saldos: saldos,
           );
-          final destacadoAceso = !modoConferencia &&
+          final destacadoAceso =
+              !modoConferencia &&
               codigoAceso != null &&
               rack.produtoCodigo == codigoAceso;
           _desenharCubo(
-            canvas, proj, posicao, k + 1,
+            canvas,
+            proj,
+            posicao,
+            k + 1,
             // Seleção: clareia o cubo e troca o contorno pelo laranja CAMDA —
             // a cor do produto continua legível por baixo do destaque.
             cor: isSel ? Color.lerp(cor, Colors.white, 0.30)! : cor,
@@ -430,8 +426,8 @@ class GalpaoPainter extends CustomPainter {
             contorno: isSel
                 ? contornoSel
                 : destacadoAceso
-                    ? contornoDestaque
-                    : contorno,
+                ? contornoDestaque
+                : contorno,
             // Rack com outro em cima tem o topo escondido — não desenhar
             // também evita disputa de pintura entre as duas faces coladas.
             // Durante a descida o de cima está um pouco acima, mas continua
@@ -446,12 +442,18 @@ class GalpaoPainter extends CustomPainter {
         // pilha — rack flutuando com vazio embaixo não existe no galpão).
         if (pilha.length < GalpaoConfig.niveisMax) {
           final proxima = pilha.length + 1;
-          final isSel = sel != null &&
+          final isSel =
+              sel != null &&
               sel.posicao == posicao.numero &&
               sel.ordem == proxima;
-          _desenharVazio(canvas, proj, posicao, proxima,
-              isSel ? vazioSel : vazio,
-              dy: dyDe(posicao.numero, proxima));
+          _desenharVazio(
+            canvas,
+            proj,
+            posicao,
+            proxima,
+            isSel ? vazioSel : vazio,
+            dy: dyDe(posicao.numero, proxima),
+          );
         }
       }
     }
@@ -479,9 +481,13 @@ class GalpaoPainter extends CustomPainter {
     final z0 = lim.minZ - 1.0, z1 = lim.maxZ + 1.0;
 
     pintarPisoTexturado(
-      canvas, proj,
-      x0: x0, x1: x1, z0: z0, z1: z1,
-      textura:     texturaPiso,
+      canvas,
+      proj,
+      x0: x0,
+      x1: x1,
+      z0: z0,
+      z1: z1,
+      textura: texturaPiso,
       ladoTextura: _ladoLajeConcreto,
       corFallback: _corPiso,
     );
@@ -502,11 +508,12 @@ class GalpaoPainter extends CustomPainter {
       linha(x0, z, x1, z);
     }
     canvas.drawPath(
-        grade,
-        Paint()
-          ..color       = _corPiso
-          ..style       = PaintingStyle.stroke
-          ..strokeWidth = 0.8);
+      grade,
+      Paint()
+        ..color = _corPiso
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8,
+    );
 
     final borda = Path();
     final cantos = [
@@ -522,11 +529,12 @@ class GalpaoPainter extends CustomPainter {
       }
       borda.close();
       canvas.drawPath(
-          borda,
-          Paint()
-            ..color       = _corPisoBorda
-            ..style       = PaintingStyle.stroke
-            ..strokeWidth = 1.0);
+        borda,
+        Paint()
+          ..color = _corPisoBorda
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
     }
   }
 
@@ -537,7 +545,11 @@ class GalpaoPainter extends CustomPainter {
   /// descartado nesse caso (acontece só com a câmera dentro da pilha; o
   /// recorte no near plane fica com quem ordena faces, que aqui não existe).
   bool _projetarCantos(
-      ProjecaoCamera proj, PosicaoGalpao p, int ordem, {double dy = 0}) {
+    ProjecaoCamera proj,
+    PosicaoGalpao p,
+    int ordem, {
+    double dy = 0,
+  }) {
     final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
     final y0 = GalpaoConfig.yBase(ordem) + dy;
     final y1 = GalpaoConfig.yTopo(ordem) + dy;
@@ -561,28 +573,30 @@ class GalpaoPainter extends CustomPainter {
 
   // Índices dos cantos de cada face, no esquema de bits de _projetarCantos
   // (bit 0 = x, bit 1 = y, bit 2 = z).
-  static const List<int> _faceTopo   = [2, 3, 7, 6];
-  static const List<int> _faceXMais  = [1, 3, 7, 5];
+  static const List<int> _faceTopo = [2, 3, 7, 6];
+  static const List<int> _faceXMais = [1, 3, 7, 5];
   static const List<int> _faceXMenos = [0, 2, 6, 4];
-  static const List<int> _faceZMais  = [4, 5, 7, 6];
+  static const List<int> _faceZMais = [4, 5, 7, 6];
   static const List<int> _faceZMenos = [0, 1, 3, 2];
 
   /// As duas laterais visíveis de um cubo, ou uma só / nenhuma quando o olho
   /// está alinhado com ele. Nunca mais de 3 faces por cubo (topo + 2): as
   /// outras 3 não são desenhadas.
   (List<int>?, List<int>?) _lateraisVisiveis(
-      ProjecaoCamera proj, PosicaoGalpao p) {
+    ProjecaoCamera proj,
+    PosicaoGalpao p,
+  ) {
     final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
     final faceX = proj.eye.x > p.x + hx
         ? _faceXMais
         : proj.eye.x < p.x - hx
-            ? _faceXMenos
-            : null;
+        ? _faceXMenos
+        : null;
     final faceZ = proj.eye.z > p.z + hz
         ? _faceZMais
         : proj.eye.z < p.z - hz
-            ? _faceZMenos
-            : null;
+        ? _faceZMenos
+        : null;
     return (faceX, faceZ);
   }
 
@@ -593,11 +607,12 @@ class GalpaoPainter extends CustomPainter {
   double _tomLateral(List<int> face, List<int>? outra) {
     if (outra == null) return _tomMedio;
     double dot(List<int> f) {
-      if (identical(f, _faceXMais))  return luzCena.x;
+      if (identical(f, _faceXMais)) return luzCena.x;
       if (identical(f, _faceXMenos)) return -luzCena.x;
-      if (identical(f, _faceZMais))  return luzCena.z;
+      if (identical(f, _faceZMais)) return luzCena.z;
       return -luzCena.z;
     }
+
     return dot(face) >= dot(outra) ? _tomMedio : _tomEscuro;
   }
 
@@ -616,8 +631,7 @@ class GalpaoPainter extends CustomPainter {
     final (faceX, faceZ) = _lateraisVisiveis(proj, p);
 
     void pintar(List<int> face, double tom) {
-      final path = Path()
-        ..moveTo(_cantos[face[0]].dx, _cantos[face[0]].dy);
+      final path = Path()..moveTo(_cantos[face[0]].dx, _cantos[face[0]].dy);
       for (var i = 1; i < face.length; i++) {
         path.lineTo(_cantos[face[i]].dx, _cantos[face[i]].dy);
       }
@@ -634,8 +648,14 @@ class GalpaoPainter extends CustomPainter {
     if (desenharTopo) pintar(_faceTopo, _tomTopo);
   }
 
-  void _desenharVazio(Canvas canvas, ProjecaoCamera proj, PosicaoGalpao p,
-      int ordem, Paint traco, {double dy = 0}) {
+  void _desenharVazio(
+    Canvas canvas,
+    ProjecaoCamera proj,
+    PosicaoGalpao p,
+    int ordem,
+    Paint traco, {
+    double dy = 0,
+  }) {
     if (!_projetarCantos(proj, p, ordem, dy: dy)) return;
     final (faceX, faceZ) = _lateraisVisiveis(proj, p);
 
@@ -672,7 +692,11 @@ class GalpaoPainter extends CustomPainter {
 
   void _desenharEtiquetas(Canvas canvas, ProjecaoCamera proj) {
     final margem = Rect.fromLTWH(
-        -40, -40, proj.larguraPx + 80, proj.alturaPx + 80);
+      -40,
+      -40,
+      proj.larguraPx + 80,
+      proj.alturaPx + 80,
+    );
 
     for (final p in GalpaoConfig.posicoesDaParte(parte)) {
       if (ruasVisiveis != null && !ruasVisiveis!.contains(p.rua.numero)) {
@@ -692,8 +716,8 @@ class GalpaoPainter extends CustomPainter {
         text: TextSpan(
           text: '${p.numero}',
           style: TextStyle(
-            color:      corCamda,
-            fontSize:   fontSize,
+            color: corCamda,
+            fontSize: fontSize,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -732,9 +756,9 @@ class GalpaoPainter extends CustomPainter {
         text: TextSpan(
           text: 'RUA ${rua.numero}',
           style: TextStyle(
-            color:         _corRotuloRua,
-            fontSize:      fontSize,
-            fontWeight:    FontWeight.w600,
+            color: _corRotuloRua,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w600,
             letterSpacing: 1.4,
           ),
         ),
@@ -755,7 +779,11 @@ class GalpaoPainter extends CustomPainter {
   /// rack quando a câmera desce.
   void _desenharBadgesConferencia(Canvas canvas, ProjecaoCamera proj) {
     final margem = Rect.fromLTWH(
-        -60, -60, proj.larguraPx + 120, proj.alturaPx + 120);
+      -60,
+      -60,
+      proj.larguraPx + 120,
+      proj.alturaPx + 120,
+    );
 
     // Coletadas primeiro e pintadas da mais longe para a mais perto: com duas
     // posições vizinhas acesas, é a badge da frente que fica legível por cima.
@@ -764,14 +792,14 @@ class GalpaoPainter extends CustomPainter {
       final posicao = GalpaoConfig.porNumero(entry.key);
       if (posicao == null) continue;
       if (posicao.parte != parte) continue;
-      if (ruasVisiveis != null &&
-          !ruasVisiveis!.contains(posicao.rua.numero)) {
+      if (ruasVisiveis != null && !ruasVisiveis!.contains(posicao.rua.numero)) {
         continue;
       }
       final pilha = pilhas[entry.key] ?? const <RackGalpao>[];
       final altura = pilha.isEmpty ? 1 : pilha.length;
       final hit = proj.projetar(
-          Vec3(posicao.x, GalpaoConfig.yTopo(altura) + 0.45, posicao.z));
+        Vec3(posicao.x, GalpaoConfig.yTopo(altura) + 0.45, posicao.z),
+      );
       if (hit == null) continue;
       final (tela, cz) = hit;
       if (!margem.contains(tela)) continue;
@@ -787,8 +815,8 @@ class GalpaoPainter extends CustomPainter {
         text: TextSpan(
           text: alvo.texto,
           style: TextStyle(
-            color:      const Color(0xFF04232a),
-            fontSize:   fontSize,
+            color: const Color(0xFF04232a),
+            fontSize: fontSize,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -797,42 +825,47 @@ class GalpaoPainter extends CustomPainter {
 
       final rect = Rect.fromCenter(
         center: alvo.tela,
-        width:  tp.width  + fontSize,
+        width: tp.width + fontSize,
         height: tp.height + fontSize * 0.56,
       );
-      final rrect =
-          RRect.fromRectAndRadius(rect, Radius.circular(rect.height / 2));
+      final rrect = RRect.fromRectAndRadius(
+        rect,
+        Radius.circular(rect.height / 2),
+      );
       canvas.drawRRect(
-          rrect, Paint()..color = corConferenciaCiano.withValues(alpha: 0.94));
+        rrect,
+        Paint()..color = corConferenciaCiano.withValues(alpha: 0.94),
+      );
       canvas.drawRRect(
-          rrect,
-          Paint()
-            ..color       = const Color(0xFF0b3a42)
-            ..style       = PaintingStyle.stroke
-            ..strokeWidth = 1.2);
+        rrect,
+        Paint()
+          ..color = const Color(0xFF0b3a42)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
       tp.paint(canvas, alvo.tela - Offset(tp.width / 2, tp.height / 2));
     }
   }
 
   @override
   bool shouldRepaint(GalpaoPainter old) =>
-      old.modoConferencia     != modoConferencia ||
+      old.modoConferencia != modoConferencia ||
       !setEquals(old.codigosConferencia, codigosConferencia) ||
       !mapEquals(old.contagemConferencia, contagemConferencia) ||
-      old.camera.rotY         != camera.rotY     ||
-      old.camera.rotX         != camera.rotX     ||
-      old.camera.dist         != camera.dist     ||
-      old.camera.target.x     != camera.target.x ||
-      old.camera.target.z     != camera.target.z ||
-      old.mostrarEtiquetas    != mostrarEtiquetas ||
-      old.selecionado         != selecionado      ||
-      old.destacadoCodigo     != destacadoCodigo  ||
-      old.descida             != descida          ||
-      old.parte               != parte            ||
-      !setEquals(old.ruasVisiveis, ruasVisiveis)  ||
-      old.mostrarSaldo        != mostrarSaldo      ||
-      !identical(old.saldos, saldos)              ||
-      !identical(old.pilhas, pilhas)             ||
+      old.camera.rotY != camera.rotY ||
+      old.camera.rotX != camera.rotX ||
+      old.camera.dist != camera.dist ||
+      old.camera.target.x != camera.target.x ||
+      old.camera.target.z != camera.target.z ||
+      old.mostrarEtiquetas != mostrarEtiquetas ||
+      old.selecionado != selecionado ||
+      old.destacadoCodigo != destacadoCodigo ||
+      old.descida != descida ||
+      old.parte != parte ||
+      !setEquals(old.ruasVisiveis, ruasVisiveis) ||
+      old.mostrarSaldo != mostrarSaldo ||
+      !identical(old.saldos, saldos) ||
+      !identical(old.pilhas, pilhas) ||
       !identical(old.corPorProduto, corPorProduto) ||
       !identical(old.texturaPiso, texturaPiso);
 }
@@ -841,8 +874,8 @@ class GalpaoPainter extends CustomPainter {
 
 class GalpaoScene extends StatefulWidget {
   final Map<int, List<RackGalpao>> pilhas;
-  final Map<String, Color>         corPorProduto;
-  final bool                       mostrarEtiquetas;
+  final Map<String, Color> corPorProduto;
+  final bool mostrarEtiquetas;
 
   /// Endereço selecionado, destacado em laranja na cena.
   final ({int posicao, int ordem})? selecionado;
@@ -885,20 +918,20 @@ class GalpaoScene extends StatefulWidget {
 
   const GalpaoScene({
     super.key,
-    this.pilhas             = const {},
-    this.corPorProduto      = const {},
-    this.mostrarEtiquetas   = true,
+    this.pilhas = const {},
+    this.corPorProduto = const {},
+    this.mostrarEtiquetas = true,
     this.selecionado,
     this.destacadoCodigo,
     this.onTapEndereco,
     this.descida,
-    this.parte              = 1,
+    this.parte = 1,
     this.ruasVisiveis,
-    this.modoConferencia    = false,
+    this.modoConferencia = false,
     this.codigosConferencia = const {},
     this.contagemConferencia = const {},
-    this.mostrarSaldo       = false,
-    this.saldos             = const {},
+    this.mostrarSaldo = false,
+    this.saldos = const {},
   });
 
   /// Câmera isométrica que enquadra a [parte] pedida numa tela de [size].
@@ -924,7 +957,7 @@ class GalpaoScene extends StatefulWidget {
     // sem que o galpão apareça maior — sobra tarja preta em cima e embaixo.
     // 0,20 rad dá volume aos cubos sem jogar a planta na diagonal.
     const rotY = 0.20, rotX = 0.95;
-    final lim  = GalpaoConfig.limitesDaParte(parte);
+    final lim = GalpaoConfig.limitesDaParte(parte);
     final alvo = Vec3(
       (lim.minX + lim.maxX) / 2,
       GalpaoConfig.yTopo(GalpaoConfig.niveisMax) / 2,
@@ -933,13 +966,16 @@ class GalpaoScene extends StatefulWidget {
 
     // Base da câmera: depende só dos ângulos, não da distância.
     final cosX = math.cos(rotX);
-    final dir  = Vec3(math.sin(rotY) * cosX, math.sin(rotX),
-        math.cos(rotY) * cosX); // olho = alvo + dir · dist
-    final fwd   = (dir * -1).normalized;
+    final dir = Vec3(
+      math.sin(rotY) * cosX,
+      math.sin(rotX),
+      math.cos(rotY) * cosX,
+    ); // olho = alvo + dir · dist
+    final fwd = (dir * -1).normalized;
     final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up    = right.cross(fwd).normalized;
+    final up = right.cross(fwd).normalized;
 
-    final tanH   = math.tan(ProjecaoCamera.fovY / 2);
+    final tanH = math.tan(ProjecaoCamera.fovY / 2);
     final aspect = size.height <= 0 ? 1.0 : size.width / size.height;
 
     var dist = 8.0;
@@ -947,7 +983,7 @@ class GalpaoScene extends StatefulWidget {
       for (final cz in [lim.minZ, lim.maxZ]) {
         for (final cy in [0.0, GalpaoConfig.yTopo(GalpaoConfig.niveisMax)]) {
           final a = Vec3(cx, cy, cz) - alvo;
-          final aoFundo  = a.dot(fwd);
+          final aoFundo = a.dot(fwd);
           final precisaH = a.dot(right).abs() / (tanH * aspect) - aoFundo;
           final precisaV = a.dot(up).abs() / tanH - aoFundo;
           dist = math.max(dist, math.max(precisaH, precisaV));
@@ -994,7 +1030,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
   void initState() {
     super.initState();
     _descidaCtrl = AnimationController(
-      vsync:    this,
+      vsync: this,
       duration: const Duration(milliseconds: 250),
     )..addListener(() => setState(() {}));
     _reconstruirAlvos();
@@ -1006,7 +1042,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
 
   void _reconstruirAlvos() {
     final visiveis = widget.ruasVisiveis;
-    final daParte  = GalpaoConfig.posicoesDaParte(widget.parte);
+    final daParte = GalpaoConfig.posicoesDaParte(widget.parte);
     _alvos = visiveis == null
         ? daParte
         : [
@@ -1044,7 +1080,8 @@ class _GalpaoSceneState extends State<GalpaoScene>
   ({int posicao, int aPartirDe, double dy})? get _descidaDoFrame {
     final d = widget.descida;
     if (d == null || !_descidaCtrl.isAnimating) return null;
-    final dy = (1 - Curves.easeOutCubic.transform(_descidaCtrl.value)) *
+    final dy =
+        (1 - Curves.easeOutCubic.transform(_descidaCtrl.value)) *
         GalpaoConfig.passoNivel;
     return (posicao: d.posicao, aPartirDe: d.aPartirDaOrdem, dy: dy);
   }
@@ -1074,7 +1111,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
     final origem = gestureOrigin;
-    final c0     = _cameraAoIniciarGesto;
+    final c0 = _cameraAoIniciarGesto;
     if (origem == null || c0 == null) return;
 
     if (reanchorIfPointersChanged(d)) {
@@ -1089,20 +1126,19 @@ class _GalpaoSceneState extends State<GalpaoScene>
       // Dois dedos: orbita + zoom, como no mapa da loja.
       setState(() {
         _camera = Camera(
-          rotY:   c0.rotY - delta.dx * 0.006,
+          rotY: c0.rotY - delta.dx * 0.006,
           // O galpão é largo e baixo: descer demais a câmera esconde as ruas
           // do fundo atrás das da frente.
-          rotX:   (c0.rotX + delta.dy * 0.006).clamp(0.30, 1.45),
-          dist:   (c0.dist / d.scale).clamp(_distMin, _distMax),
+          rotX: (c0.rotX + delta.dy * 0.006).clamp(0.30, 1.45),
+          dist: (c0.dist / d.scale).clamp(_distMin, _distMax),
           target: c0.target,
         );
       });
     } else {
       // Um dedo: pan — o ponto do chão acompanha o dedo.
-      final rb  = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+      final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
       final hPx = rb?.size.height ?? 600.0;
-      final metrosPorPx =
-          2 * c0.dist * math.tan(ProjecaoCamera.fovY / 2) / hPx;
+      final metrosPorPx = 2 * c0.dist * math.tan(ProjecaoCamera.fovY / 2) / hPx;
       final inclinacao = math.max(math.sin(c0.rotX), 0.35);
 
       final dx = delta.dx * metrosPorPx;
@@ -1132,8 +1168,9 @@ class _GalpaoSceneState extends State<GalpaoScene>
     final rb = _painterKey.currentContext?.findRenderObject() as RenderBox?;
     final camera = _camera;
     if (rb == null || camera == null) return;
-    widget.onTapEndereco?.call(_hitTest(
-        camera, rb.globalToLocal(toqueGlobal), rb.size));
+    widget.onTapEndereco?.call(
+      _hitTest(camera, rb.globalToLocal(toqueGlobal), rb.size),
+    );
   }
 
   /// Endereço sob o toque, ou null se o raio não acerta cubo nem contorno.
@@ -1154,24 +1191,30 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// —, nunca a grade inteira: o que sumiu da tela não pode continuar
   /// recebendo toque.
   ToqueGalpao? _hitTest(Camera camera, Offset toque, Size size) {
-    final eye   = camera.position;
-    final fwd   = (camera.target - eye).normalized;
+    final eye = camera.position;
+    final fwd = (camera.target - eye).normalized;
     final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up    = right.cross(fwd).normalized;
-    final tanH   = math.tan(ProjecaoCamera.fovY / 2);
+    final up = right.cross(fwd).normalized;
+    final tanH = math.tan(ProjecaoCamera.fovY / 2);
     final aspect = size.width / size.height;
 
     final ndcX = 2 * toque.dx / size.width - 1;
     final ndcY = 1 - 2 * toque.dy / size.height;
-    final dir  = (right * (ndcX * tanH * aspect) + up * (ndcY * tanH) + fwd)
-        .normalized;
+    final dir =
+        (right * (ndcX * tanH * aspect) + up * (ndcY * tanH) + fwd).normalized;
 
     double? tDe(PosicaoGalpao p, int ordem) {
       final hx = p.tamanhoX / 2, hz = p.tamanhoZ / 2;
-      return _rayAabb(eye, dir,
-          x0: p.x - hx, x1: p.x + hx,
-          y0: GalpaoConfig.yBase(ordem), y1: GalpaoConfig.yTopo(ordem),
-          z0: p.z - hz, z1: p.z + hz);
+      return _rayAabb(
+        eye,
+        dir,
+        x0: p.x - hx,
+        x1: p.x + hx,
+        y0: GalpaoConfig.yBase(ordem),
+        y1: GalpaoConfig.yTopo(ordem),
+        z0: p.z - hz,
+        z1: p.z + hz,
+      );
     }
 
     ToqueGalpao? melhor;
@@ -1187,7 +1230,7 @@ class _GalpaoSceneState extends State<GalpaoScene>
       for (var k = 0; k < pilha.length; k++) {
         final t = tDe(p, k + 1);
         if (t != null && (tRack == null || t < tRack)) {
-          tRack     = t;
+          tRack = t;
           ordemRack = k + 1;
         }
       }
@@ -1205,7 +1248,10 @@ class _GalpaoSceneState extends State<GalpaoScene>
         melhor = tRack != null
             ? ToqueGalpao(posicao: p.numero, ordem: ordemRack, ocupado: true)
             : ToqueGalpao(
-                posicao: p.numero, ordem: pilha.length + 1, ocupado: false);
+                posicao: p.numero,
+                ordem: pilha.length + 1,
+                ocupado: false,
+              );
       }
     }
     return melhor;
@@ -1214,10 +1260,14 @@ class _GalpaoSceneState extends State<GalpaoScene>
   /// Distância até a entrada do raio na caixa alinhada aos eixos, ou null se
   /// não acerta (método dos slabs — mesmo helper das outras cenas).
   static double? _rayAabb(
-    Vec3 eye, Vec3 dir, {
-    required double x0, required double x1,
-    required double y0, required double y1,
-    required double z0, required double z1,
+    Vec3 eye,
+    Vec3 dir, {
+    required double x0,
+    required double x1,
+    required double y0,
+    required double y1,
+    required double z0,
+    required double z1,
   }) {
     var tMin = 0.05;
     var tMax = double.infinity;
@@ -1245,15 +1295,19 @@ class _GalpaoSceneState extends State<GalpaoScene>
         // Enquadra na primeira medida útil da tela. Atribuir aqui (e não num
         // post-frame com setState) evita um frame com a câmera no lugar
         // errado; é idempotente e não muda nada visível depois disso.
-        final camera = _camera ??=
-            GalpaoScene.enquadrar(constraints.biggest, parte: widget.parte);
+        final camera = _camera ??= GalpaoScene.enquadrar(
+          constraints.biggest,
+          parte: widget.parte,
+        );
 
         return Listener(
-          onPointerDown:   aoEncostarDedo,
-          onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryHitTest(pontoDoToque!); },
+          onPointerDown: aoEncostarDedo,
+          onPointerUp: (e) {
+            if (aoSoltarDedo(e)) _tryHitTest(pontoDoToque!);
+          },
           onPointerCancel: aoSoltarDedo,
           child: GestureDetector(
-            onScaleStart:  _onScaleStart,
+            onScaleStart: _onScaleStart,
             onScaleUpdate: _onScaleUpdate,
             // O builder existe só para o frame em que a textura termina de
             // carregar: ele repinta a cena com o concreto no lugar da cor
@@ -1264,20 +1318,20 @@ class _GalpaoSceneState extends State<GalpaoScene>
                 key: _painterKey,
                 painter: GalpaoPainter(
                   camera,
-                  pilhas:              widget.pilhas,
-                  corPorProduto:       widget.corPorProduto,
-                  mostrarEtiquetas:    widget.mostrarEtiquetas,
-                  selecionado:         widget.selecionado,
-                  destacadoCodigo:     widget.destacadoCodigo,
-                  descida:             _descidaDoFrame,
-                  parte:               widget.parte,
-                  ruasVisiveis:        widget.ruasVisiveis,
-                  modoConferencia:     widget.modoConferencia,
-                  codigosConferencia:  widget.codigosConferencia,
+                  pilhas: widget.pilhas,
+                  corPorProduto: widget.corPorProduto,
+                  mostrarEtiquetas: widget.mostrarEtiquetas,
+                  selecionado: widget.selecionado,
+                  destacadoCodigo: widget.destacadoCodigo,
+                  descida: _descidaDoFrame,
+                  parte: widget.parte,
+                  ruasVisiveis: widget.ruasVisiveis,
+                  modoConferencia: widget.modoConferencia,
+                  codigosConferencia: widget.codigosConferencia,
                   contagemConferencia: widget.contagemConferencia,
-                  mostrarSaldo:        widget.mostrarSaldo,
-                  saldos:              widget.saldos,
-                  texturaPiso:         textura,
+                  mostrarSaldo: widget.mostrarSaldo,
+                  saldos: widget.saldos,
+                  texturaPiso: textura,
                 ),
                 child: const SizedBox.expand(),
               ),

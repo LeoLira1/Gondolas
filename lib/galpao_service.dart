@@ -47,9 +47,13 @@ class GalpaoService {
   /// planta é o código (as larguras de corredor ainda são estimativas e vão
   /// ser remedidas), a tabela é só o espelho que os apps irmãos leem.
   Future<bool> garantirSeed({bool forcar = false}) async {
-    try { return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _garantirSeed(forcar: forcar)); }
-    on ReplicaNaoProntaParaEscrita { return false; }
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _garantirSeed(forcar: forcar),
+      );
+    } on ReplicaNaoProntaParaEscrita {
+      return false;
+    }
   }
 
   Future<bool> _garantirSeed({bool forcar = false}) async {
@@ -84,10 +88,10 @@ class GalpaoService {
         // assim é o que mantém a regra "nenhuma mutação fica de fora".
         mutacao = await TursoService().abrirMutacao(
           operacao: 'galpao.garantirSeed',
-          tabela:   'galpao_posicoes',
-          chave:    const {},
+          tabela: 'galpao_posicoes',
+          chave: const {},
           estadoAnterior: null,
-          estadoFinal:    null,
+          estadoFinal: null,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
         await tx.commit();
@@ -117,7 +121,7 @@ class GalpaoService {
     if (client == null) return {};
     try {
       final stmt = await client.prepare(
-        'SELECT posicao, ordem, produto_codigo, produto_nome, quantidade '
+        'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
         'FROM galpao_racks ORDER BY posicao, ordem',
       );
       final rows = await stmt.query() as List<dynamic>;
@@ -128,13 +132,18 @@ class GalpaoService {
         // Linha órfã (posição que não existe mais na planta) é ignorada, como
         // as cenas fazem com endereço fora da grade.
         if (GalpaoConfig.porNumero(posicao) == null) continue;
-        pilhas.putIfAbsent(posicao, () => <RackGalpao>[]).add(RackGalpao(
-              posicao:       posicao,
-              ordem:         r['ordem'] as int? ?? 1,
-              produtoCodigo: r['produto_codigo'] as String? ?? '',
-              produtoNome:   r['produto_nome']   as String? ?? '',
-              quantidade:    (r['quantidade'] as num?)?.toDouble() ?? 0,
-            ));
+        pilhas
+            .putIfAbsent(posicao, () => <RackGalpao>[])
+            .add(
+              RackGalpao(
+                rackUuid: r['rack_uuid'] as String?,
+                posicao: posicao,
+                ordem: r['ordem'] as int? ?? 1,
+                produtoCodigo: r['produto_codigo'] as String? ?? '',
+                produtoNome: r['produto_nome'] as String? ?? '',
+                quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+              ),
+            );
       }
       return pilhas;
     } catch (_) {
@@ -169,16 +178,14 @@ class GalpaoService {
 
       final mestre = await _lerMestre(client);
       final grupos = gruposDeCodigos(
-        codigos:            codigos,
+        codigos: codigos,
         produtoIdPorCodigo: await _lerVinculosDoMapa(client),
-        nomePorCodigo:      {
-          for (final e in mestre.entries) e.key: e.value.nome,
-        },
+        nomePorCodigo: {for (final e in mestre.entries) e.key: e.value.nome},
       );
       return montarSaldos(
-        codigos:             codigos,
-        grupos:              grupos,
-        sistemaPorCodigo:    {
+        codigos: codigos,
+        grupos: grupos,
+        sistemaPorCodigo: {
           for (final e in mestre.entries) e.key: e.value.qtdSistema,
         },
         enderecadoPorCodigo: await _lerEnderecado(client),
@@ -215,7 +222,8 @@ class GalpaoService {
   /// código sem vínculo no mapa só é achável pelo NOME — ler só os códigos
   /// com rack devolveria de novo meio saldo, que é o bug que isto conserta.
   Future<Map<String, ({String nome, double qtdSistema})>> _lerMestre(
-      LibsqlClient client) async {
+    LibsqlClient client,
+  ) async {
     final stmt = await client.prepare(
       'SELECT codigo, produto, qtd_sistema FROM estoque_mestre LIMIT 5000',
     );
@@ -226,7 +234,7 @@ class GalpaoService {
       final codigo = normalizarCodigo(r['codigo'] as String?);
       if (codigo == null) continue;
       mestre[codigo] = (
-        nome:       r['produto'] as String? ?? '',
+        nome: r['produto'] as String? ?? '',
         qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
       );
     }
@@ -284,19 +292,27 @@ class GalpaoService {
   /// recebida da tela: entre o toque e a gravação, outra pessoa pode ter
   /// lançado na mesma posição, e o que vale é o estado do banco.
   Future<List<RackGalpao>?> lancar({
-    required int    posicao,
+    required int posicao,
     required String produtoCodigo,
     required String produtoNome,
     required double quantidade,
   }) async {
-    try { return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _lancar(posicao: posicao, produtoCodigo: produtoCodigo,
-              produtoNome: produtoNome, quantidade: quantidade)); }
-    on ReplicaNaoProntaParaEscrita { return null; }
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _lancar(
+          posicao: posicao,
+          produtoCodigo: produtoCodigo,
+          produtoNome: produtoNome,
+          quantidade: quantidade,
+        ),
+      );
+    } on ReplicaNaoProntaParaEscrita {
+      return null;
+    }
   }
 
   Future<List<RackGalpao>?> _lancar({
-    required int    posicao,
+    required int posicao,
     required String produtoCodigo,
     required String produtoNome,
     required double quantidade,
@@ -320,36 +336,50 @@ class GalpaoService {
           return null;
         }
         final ordem = topo + 1;
+        final rackUuid = gerarUuidV4();
 
         await tx.execute(
           'INSERT INTO galpao_racks (posicao, ordem, produto_codigo, '
-          'produto_nome, quantidade, atualizado_em) VALUES (?, ?, ?, ?, ?, ?)',
+          'produto_nome, quantidade, atualizado_em, rack_uuid) VALUES (?, ?, ?, ?, ?, ?, ?)',
           positional: [
-            posicao, ordem, produtoCodigo, produtoNome, quantidade, agora,
+            posicao,
+            ordem,
+            produtoCodigo,
+            produtoNome,
+            quantidade,
+            agora,
+            rackUuid,
           ],
         );
         final pilha = await _lerPilha(tx, posicao);
         await _reescreverEspelho(tx, posicao, pilha, agora);
-        await _registrarLog(tx, posicao, ordem, produtoCodigo,
-            anterior: null, nova: quantidade, agora: agora);
+        await _registrarLog(
+          tx,
+          posicao,
+          ordem,
+          produtoCodigo,
+          anterior: null,
+          nova: quantidade,
+          agora: agora,
+        );
         // Intenção registrada ANTES do commit, e o carimbo do UUID DENTRO da
         // transação: assim o reconhecimento viaja nos mesmos frames da
         // mutação. `atualizado_em` fica fora do estado — muda sempre, e faria
         // toda comparação futura terminar em conflito.
         mutacao = await TursoService().abrirMutacao(
           operacao: 'galpao.lancar',
-          tabela:   'galpao_racks',
-          chave:    {'posicao': posicao, 'ordem': ordem},
+          tabela: 'galpao_racks',
+          chave: {'rack_uuid': rackUuid},
           estadoAnterior: null, // rack novo no topo da pilha
           estadoFinal: {
             'produto_codigo': produtoCodigo,
-            'produto_nome':   produtoNome,
-            'quantidade':     quantidade,
+            'produto_nome': produtoNome,
+            'quantidade': quantidade,
           },
           produtoCodigo: produtoCodigo,
-          produtoNome:   produtoNome,
-          posicao:       posicao,
-          ordem:         ordem,
+          produtoNome: produtoNome,
+          posicao: posicao,
+          ordem: ordem,
           quantidadePretendida: quantidade,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
@@ -379,22 +409,33 @@ class GalpaoService {
   /// novo. O espelho de estoque_localizado é reescrito pela mesma rotina do
   /// lançamento, então o saldo do produto acompanha na mesma transação.
   Future<List<RackGalpao>?> ajustarQuantidade({
-    required int    posicao,
-    required int    ordem,
+    required int posicao,
+    required int ordem,
     required double quantidade,
     String? origem,
+    String? rackUuid,
   }) async {
-    try { return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _ajustarQuantidade(posicao: posicao, ordem: ordem, quantidade: quantidade,
-              origem: origem)); }
-    on ReplicaNaoProntaParaEscrita { return null; }
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _ajustarQuantidade(
+          posicao: posicao,
+          ordem: ordem,
+          quantidade: quantidade,
+          origem: origem,
+          rackUuid: rackUuid,
+        ),
+      );
+    } on ReplicaNaoProntaParaEscrita {
+      return null;
+    }
   }
 
   Future<List<RackGalpao>?> _ajustarQuantidade({
-    required int    posicao,
-    required int    ordem,
+    required int posicao,
+    required int ordem,
     required double quantidade,
     String? origem,
+    String? rackUuid,
   }) async {
     if (quantidade <= 0) return null; // zerar é esvaziar, que é outra coisa
     final client = await _conexao();
@@ -406,15 +447,17 @@ class GalpaoService {
       final tx = await client.transaction();
       try {
         final antes = await tx.query(
-          'SELECT produto_codigo, produto_nome, quantidade FROM galpao_racks '
+          'SELECT rack_uuid, produto_codigo, produto_nome, quantidade FROM galpao_racks '
           'WHERE posicao = ? AND ordem = ? LIMIT 1',
           positional: [posicao, ordem],
         );
-        if (antes.isEmpty) {
+        if (antes.isEmpty ||
+            rackUuid == null ||
+            antes.first['rack_uuid'] != rackUuid) {
           await tx.rollback();
           return null;
         }
-        final codigo   = antes.first['produto_codigo'] as String? ?? '';
+        final codigo = antes.first['produto_codigo'] as String? ?? '';
         final qtdAntes = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
 
         await tx.execute(
@@ -425,26 +468,27 @@ class GalpaoService {
 
         final pilha = await _lerPilha(tx, posicao);
         await _reescreverEspelho(tx, posicao, pilha, agora);
-        await _registrarLog(tx, posicao, ordem, codigo,
-            anterior: qtdAntes, nova: quantidade, agora: agora,
-            origem: origem);
+        await _registrarLog(
+          tx,
+          posicao,
+          ordem,
+          codigo,
+          anterior: qtdAntes,
+          nova: quantidade,
+          agora: agora,
+          origem: origem,
+        );
         mutacao = await TursoService().abrirMutacao(
           operacao: 'galpao.ajustarQuantidade',
-          tabela:   'galpao_racks',
-          chave:    {'posicao': posicao, 'ordem': ordem},
-          estadoAnterior: {
-            'produto_codigo': codigo,
-            'quantidade':     qtdAntes,
-          },
-          estadoFinal: {
-            'produto_codigo': codigo,
-            'quantidade':     quantidade,
-          },
+          tabela: 'galpao_racks',
+          chave: {'rack_uuid': antes.first['rack_uuid']},
+          estadoAnterior: {'produto_codigo': codigo, 'quantidade': qtdAntes},
+          estadoFinal: {'produto_codigo': codigo, 'quantidade': quantidade},
           produtoCodigo: codigo,
-          produtoNome:   antes.first['produto_nome'] as String?,
-          posicao:       posicao,
-          ordem:         ordem,
-          quantidadeAnterior:   qtdAntes,
+          produtoNome: antes.first['produto_nome'] as String?,
+          posicao: posicao,
+          ordem: ordem,
+          quantidadeAnterior: qtdAntes,
           quantidadePretendida: quantidade,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
@@ -472,16 +516,27 @@ class GalpaoService {
     required int posicao,
     required int ordem,
     String? origem,
+    String? rackUuid,
   }) async {
-    try { return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _esvaziar(posicao: posicao, ordem: ordem, origem: origem)); }
-    on ReplicaNaoProntaParaEscrita { return null; }
+    try {
+      return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _esvaziar(
+          posicao: posicao,
+          ordem: ordem,
+          origem: origem,
+          rackUuid: rackUuid,
+        ),
+      );
+    } on ReplicaNaoProntaParaEscrita {
+      return null;
+    }
   }
 
   Future<List<RackGalpao>?> _esvaziar({
     required int posicao,
     required int ordem,
     String? origem,
+    String? rackUuid,
   }) async {
     final client = await _conexao();
     if (client == null) return null;
@@ -492,16 +547,18 @@ class GalpaoService {
       final tx = await client.transaction();
       try {
         final antes = await tx.query(
-          'SELECT produto_codigo, produto_nome, quantidade FROM galpao_racks '
+          'SELECT rack_uuid, produto_codigo, produto_nome, quantidade FROM galpao_racks '
           'WHERE posicao = ? AND ordem = ? LIMIT 1',
           positional: [posicao, ordem],
         );
-        if (antes.isEmpty) {
+        if (antes.isEmpty ||
+            rackUuid == null ||
+            antes.first['rack_uuid'] != rackUuid) {
           await tx.rollback();
           return null;
         }
-        final codigo    = antes.first['produto_codigo'] as String? ?? '';
-        final qtdAntes  = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
+        final codigo = antes.first['produto_codigo'] as String? ?? '';
+        final qtdAntes = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
 
         await tx.execute(
           'DELETE FROM galpao_racks WHERE posicao = ? AND ordem = ?',
@@ -526,22 +583,27 @@ class GalpaoService {
 
         final pilha = await _lerPilha(tx, posicao);
         await _reescreverEspelho(tx, posicao, pilha, agora);
-        await _registrarLog(tx, posicao, ordem, codigo,
-            anterior: qtdAntes, nova: 0, agora: agora, origem: origem);
+        await _registrarLog(
+          tx,
+          posicao,
+          ordem,
+          codigo,
+          anterior: qtdAntes,
+          nova: 0,
+          agora: agora,
+          origem: origem,
+        );
         mutacao = await TursoService().abrirMutacao(
           operacao: 'galpao.esvaziar',
-          tabela:   'galpao_racks',
-          chave:    {'posicao': posicao, 'ordem': ordem},
-          estadoAnterior: {
-            'produto_codigo': codigo,
-            'quantidade':     qtdAntes,
-          },
+          tabela: 'galpao_racks',
+          chave: {'rack_uuid': antes.first['rack_uuid']},
+          estadoAnterior: {'produto_codigo': codigo, 'quantidade': qtdAntes},
           estadoFinal: null, // o rack deixa de existir e a pilha desce
           produtoCodigo: codigo,
-          produtoNome:   antes.first['produto_nome'] as String?,
-          posicao:       posicao,
-          ordem:         ordem,
-          quantidadeAnterior:   qtdAntes,
+          produtoNome: antes.first['produto_nome'] as String?,
+          posicao: posicao,
+          ordem: ordem,
+          quantidadeAnterior: qtdAntes,
           quantidadePretendida: 0,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
@@ -564,18 +626,19 @@ class GalpaoService {
 
   Future<List<RackGalpao>> _lerPilha(Transaction tx, int posicao) async {
     final rows = await tx.query(
-      'SELECT posicao, ordem, produto_codigo, produto_nome, quantidade '
+      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
       'FROM galpao_racks WHERE posicao = ? ORDER BY ordem',
       positional: [posicao],
     );
     return [
       for (final r in rows)
         RackGalpao(
-          posicao:       r['posicao'] as int? ?? posicao,
-          ordem:         r['ordem']   as int? ?? 1,
+          rackUuid: r['rack_uuid'] as String?,
+          posicao: r['posicao'] as int? ?? posicao,
+          ordem: r['ordem'] as int? ?? 1,
           produtoCodigo: r['produto_codigo'] as String? ?? '',
-          produtoNome:   r['produto_nome']   as String? ?? '',
-          quantidade:    (r['quantidade'] as num?)?.toDouble() ?? 0,
+          produtoNome: r['produto_nome'] as String? ?? '',
+          quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
         ),
     ];
   }
@@ -584,7 +647,11 @@ class GalpaoService {
   /// resultante (ver a nota na doc da classe sobre por que é reescrita, e não
   /// atualização linha a linha).
   Future<void> _reescreverEspelho(
-      Transaction tx, int posicao, List<RackGalpao> pilha, String agora) async {
+    Transaction tx,
+    int posicao,
+    List<RackGalpao> pilha,
+    String agora,
+  ) async {
     await tx.execute(
       'DELETE FROM estoque_localizado WHERE local_tipo = ? AND local_num = ?',
       positional: [localTipoGalpao, posicao],
