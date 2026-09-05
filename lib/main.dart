@@ -1726,7 +1726,6 @@ class _GondolaPageState extends State<GondolaPage> {
 
     if (!conectado) {
       setState(() {
-        _produtos           = [];
         _carregandoProdutos = false;
         _recomputarCatalogoDerivado();
       });
@@ -1791,6 +1790,7 @@ class _GondolaPageState extends State<GondolaPage> {
   // ── Actions ────────────────────────────────────────────────────────────────
 
   void _trocarGondola(int delta) {
+    if (_salvando) return;
     final nova = (_gondolaAtual + delta).clamp(1, 12);
     setState(() {
       _gondolaAtual     = nova;
@@ -1801,7 +1801,7 @@ class _GondolaPageState extends State<GondolaPage> {
           !semeou && _dbConectado && !_caixas.containsKey(nova);
       _caixaSelecionada = null;
     });
-    if (_dbConectado) _carregarLayout(nova);
+    _carregarLayout(nova);
   }
 
   /// Preenche a gôndola a partir do cache do serviço, se ela já tiver sido
@@ -1962,6 +1962,7 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   void _limparGondola() => setState(() {
+    if (_salvando) return;
     _editadas.add(_gondolaAtual);
     _caixas.remove(_gondolaAtual);
   });
@@ -2053,9 +2054,15 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   Future<void> _salvarLayout() async {
+    if (_salvando) return;
+    if (!_dbConectado) {
+      await TursoService().init();
+      if (!mounted) return;
+      _dbConectado = TursoService().isConnected;
+    }
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Configure o banco em ⚙️ para salvar no Turso'),
+        content: Text('Gravação não confirmada. Confira a conexão e a configuração do banco.'),
         backgroundColor: Color(0xFF1a3040),
         duration: Duration(seconds: 3),
       ));
@@ -3202,7 +3209,6 @@ class _EstantePageState extends State<EstantePage> {
 
     if (!conectado) {
       setState(() {
-        _produtos           = [];
         _carregandoProdutos = false;
         _recomputarCatalogoDerivado();
       });
@@ -3260,6 +3266,7 @@ class _EstantePageState extends State<EstantePage> {
   int get _idxNavegacao => ordemNavegacaoEstantes.indexOf(_estanteAtual);
 
   void _trocarEstante(int delta) {
+    if (_salvando) return;
     final idx  = _idxNavegacao;
     final nova = idx == -1
         ? ordemNavegacaoEstantes.first
@@ -3277,7 +3284,7 @@ class _EstantePageState extends State<EstantePage> {
       _nivelSelecionado  = null;
       _slotSelecionado   = null;
     });
-    if (_dbConectado) _carregarLayout(nova);
+    _carregarLayout(nova);
   }
 
   /// Preenche a estante a partir do cache do serviço, se ela já tiver sido
@@ -3559,6 +3566,7 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   void _limparEstante() => setState(() {
+    if (_salvando) return;
     _editadas.add(_estanteAtual);
     _caixas.remove(_estanteAtual);
   });
@@ -3650,9 +3658,15 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   Future<void> _salvarLayout() async {
+    if (_salvando) return;
+    if (!_dbConectado) {
+      await TursoService().init();
+      if (!mounted) return;
+      _dbConectado = TursoService().isConnected;
+    }
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Configure o banco em ⚙️ para salvar no Turso'),
+        content: Text('Gravação não confirmada. Confira a conexão e a configuração do banco.'),
         backgroundColor: Color(0xFF1a3040),
         duration: Duration(seconds: 3),
       ));

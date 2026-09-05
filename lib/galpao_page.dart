@@ -266,7 +266,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 
   void _aoAtualizarDados() {
-    if (!mounted || !_persistindo) return;
+    if (!mounted || !_persistindo || _gravandoOnline) return;
     _carregarPilhas();
     unawaited(_carregarCatalogo());
     // Uma sincronização também traz as confirmações feitas no app de contagem:
@@ -277,10 +277,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 
   Future<void> _carregarPilhas() async {
+    if (_gravandoOnline) return;
+    final versao = _versaoPilhas;
     setState(() => _carregandoPilhas = true);
     unawaited(GalpaoService().garantirSeed());
     final pilhas = await GalpaoService().carregarPilhas();
-    if (!mounted) return;
+    if (!mounted || _gravandoOnline || versao != _versaoPilhas) return;
     setState(() {
       _pilhas
         ..clear()
@@ -519,68 +521,78 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// usado em pé, com carga chegando, e esperar a ida ao banco a cada rack
   /// travaria o ritmo. Se a gravação falhar, o estado local volta atrás e o
   /// aviso é explícito — nunca fica um rack "lançado" só na tela.
+  bool _gravandoOnline = false;
+  int _versaoPilhas = 0;
+
   Future<void> _onLancar(
     int posicao,
     Produto produto,
     double quantidade,
   ) async {
-    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-    final nova = pilhaAposLancar(
-      antes,
-      posicao: posicao,
-      produtoCodigo: produto.codigo,
-      produtoNome: produto.nome,
-      quantidade: quantidade,
-    );
-    if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
-    setState(() {
-      _pilhas[posicao] = nova;
-      // O saldo do produto acompanha o lançamento na hora: o cubo que acabou
-      // de entrar não pode continuar vermelho esperando a releitura do banco.
-      _saldos = saldosComDelta(
-        _saldos,
-        codigo: produto.codigo,
-        delta: quantidade,
+    if (_gravandoOnline) return;
+    _gravandoOnline = _persistindo;
+    _versaoPilhas++;
+    try {
+      final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+      final nova = pilhaAposLancar(
+        antes,
+        posicao: posicao,
+        produtoCodigo: produto.codigo,
+        produtoNome: produto.nome,
+        quantidade: quantidade,
       );
-      _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
-      _recentes.insert(
-        0,
-        LancamentoRecente(produto: produto, quantidade: quantidade),
-      );
-      if (_recentes.length > _maxRecentes) _recentes.removeLast();
-      // Fecha o painel: no fluxo de carga o próximo gesto é tocar a próxima
-      // vaga, e o produto recém-lançado está nos recentes.
-      _selecionado = null;
-    });
-    if (!_persistindo) return;
-
-    final gravada = await GalpaoService().lancar(
-      posicao: posicao,
-      produtoCodigo: produto.codigo,
-      produtoNome: produto.nome,
-      quantidade: quantidade,
-    );
-    if (!mounted) return;
-    if (gravada == null) {
+      if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
       setState(() {
-        _pilhas[posicao] = antes;
+        _pilhas[posicao] = nova;
+        // O saldo do produto acompanha o lançamento na hora: o cubo que acabou
+        // de entrar não pode continuar vermelho esperando a releitura do banco.
         _saldos = saldosComDelta(
           _saldos,
           codigo: produto.codigo,
-          delta: -quantidade,
+          delta: quantidade,
         );
+        _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
+        _recentes.insert(
+          0,
+          LancamentoRecente(produto: produto, quantidade: quantidade),
+        );
+        if (_recentes.length > _maxRecentes) _recentes.removeLast();
+        // Fecha o painel: no fluxo de carga o próximo gesto é tocar a próxima
+        // vaga, e o produto recém-lançado está nos recentes.
+        _selecionado = null;
       });
-      _avisar(
-        'Não deu para gravar o lançamento — confira a conexão com o '
-        'banco em ⚙️.',
+      if (!_persistindo) return;
+
+      final gravada = await GalpaoService().lancar(
+        posicao: posicao,
+        produtoCodigo: produto.codigo,
+        produtoNome: produto.nome,
+        quantidade: quantidade,
       );
-    } else {
-      // A pilha do banco manda: se outra pessoa lançou nesta posição no meio
-      // do caminho, o rack novo entrou num nível acima do previsto.
-      setState(() => _pilhas[posicao] = gravada);
-      // E o saldo do banco também: o delta otimista acima ignora o que outro
-      // aparelho lançou enquanto isso.
-      unawaited(_carregarSaldos());
+      if (!mounted) return;
+      if (gravada == null) {
+        setState(() {
+          _pilhas[posicao] = antes;
+          _saldos = saldosComDelta(
+            _saldos,
+            codigo: produto.codigo,
+            delta: -quantidade,
+          );
+        });
+        _avisar(
+          'Gravação não confirmada. Confira a conexão e tente novamente.',
+          tentarNovamente: () => _onLancar(posicao, produto, quantidade),
+        );
+      } else {
+        // A pilha do banco manda: se outra pessoa lançou nesta posição no meio
+        // do caminho, o rack novo entrou num nível acima do previsto.
+        setState(() => _pilhas[posicao] = gravada);
+        // E o saldo do banco também: o delta otimista acima ignora o que outro
+        // aparelho lançou enquanto isso.
+        unawaited(_carregarSaldos());
+      }
+    } finally {
+      _gravandoOnline = false;
     }
   }
 
@@ -592,94 +604,110 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// corrigir quer ver a tarja de saldo fechar na hora — é a confirmação de
   /// que o número agora bate com o sistema.
   Future<void> _onAjustar(int posicao, int ordem, double quantidade) async {
-    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-    final rack = ordem >= 1 && ordem <= antes.length ? antes[ordem - 1] : null;
-    if (rack == null || quantidade <= 0) return;
-    final delta = quantidade - rack.quantidade;
-    if (delta == 0) return;
+    if (_gravandoOnline) return;
+    _gravandoOnline = _persistindo;
+    _versaoPilhas++;
+    try {
+      final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+      final rack = ordem >= 1 && ordem <= antes.length
+          ? antes[ordem - 1]
+          : null;
+      if (rack == null || quantidade <= 0) return;
+      final delta = quantidade - rack.quantidade;
+      if (delta == 0) return;
 
-    setState(() {
-      _pilhas[posicao] = pilhaAposAjustar(antes, ordem, quantidade);
-      _saldos = saldosComDelta(
-        _saldos,
-        codigo: rack.produtoCodigo,
-        delta: delta,
-      );
-    });
-    if (!_persistindo) return;
-
-    final gravada = await GalpaoService().ajustarQuantidade(
-      rackUuid: rack.rackUuid,
-      posicao: posicao,
-      ordem: ordem,
-      quantidade: quantidade,
-    );
-    if (!mounted) return;
-    if (gravada == null) {
       setState(() {
-        _pilhas[posicao] = antes;
+        _pilhas[posicao] = pilhaAposAjustar(antes, ordem, quantidade);
         _saldos = saldosComDelta(
           _saldos,
           codigo: rack.produtoCodigo,
-          delta: -delta,
+          delta: delta,
         );
       });
-      _avisar(
-        'Não deu para gravar a quantidade — confira a conexão com o '
-        'banco em ⚙️.',
+      if (!_persistindo) return;
+
+      final gravada = await GalpaoService().ajustarQuantidade(
+        rackUuid: rack.rackUuid,
+        posicao: posicao,
+        ordem: ordem,
+        quantidade: quantidade,
       );
-    } else {
-      setState(() => _pilhas[posicao] = gravada);
-      unawaited(_carregarSaldos());
+      if (!mounted) return;
+      if (gravada == null) {
+        setState(() {
+          _pilhas[posicao] = antes;
+          _saldos = saldosComDelta(
+            _saldos,
+            codigo: rack.produtoCodigo,
+            delta: -delta,
+          );
+        });
+        _avisar(
+          'Não deu para gravar a quantidade — confira a conexão com o '
+          'banco em ⚙️.',
+        );
+      } else {
+        setState(() => _pilhas[posicao] = gravada);
+        unawaited(_carregarSaldos());
+      }
+    } finally {
+      _gravandoOnline = false;
     }
   }
 
   Future<void> _onEsvaziar(int posicao, int ordem) async {
-    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-    // O rack que sai: o que ele levava embora deixa de estar endereçado, e o
-    // saldo do produto tem de refletir isso no mesmo frame da descida.
-    final saindo = ordem >= 1 && ordem <= antes.length
-        ? antes[ordem - 1]
-        : null;
-    setState(() {
-      _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
-      if (saindo != null) {
-        _saldos = saldosComDelta(
-          _saldos,
-          codigo: saindo.produtoCodigo,
-          delta: -saindo.quantidade,
-        );
-      }
-      _descida = DescidaPilha(
-        posicao: posicao,
-        aPartirDaOrdem: ordem,
-        id: ++_descidaSeq,
-      );
-      _selecionado = null;
-    });
-    if (!_persistindo) return;
-
-    final gravada = await GalpaoService().esvaziar(
-      rackUuid: saindo?.rackUuid,
-      posicao: posicao,
-      ordem: ordem,
-    );
-    if (!mounted) return;
-    if (gravada == null) {
+    if (_gravandoOnline) return;
+    _gravandoOnline = _persistindo;
+    _versaoPilhas++;
+    try {
+      final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+      // O rack que sai: o que ele levava embora deixa de estar endereçado, e o
+      // saldo do produto tem de refletir isso no mesmo frame da descida.
+      final saindo = ordem >= 1 && ordem <= antes.length
+          ? antes[ordem - 1]
+          : null;
       setState(() {
-        _pilhas[posicao] = antes;
+        _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
         if (saindo != null) {
           _saldos = saldosComDelta(
             _saldos,
             codigo: saindo.produtoCodigo,
-            delta: saindo.quantidade,
+            delta: -saindo.quantidade,
           );
         }
+        _descida = DescidaPilha(
+          posicao: posicao,
+          aPartirDaOrdem: ordem,
+          id: ++_descidaSeq,
+        );
+        _selecionado = null;
       });
-      _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
-    } else {
-      setState(() => _pilhas[posicao] = gravada);
-      unawaited(_carregarSaldos());
+      if (!_persistindo) return;
+
+      final gravada = await GalpaoService().esvaziar(
+        rackUuid: saindo?.rackUuid,
+        posicao: posicao,
+        ordem: ordem,
+      );
+      if (!mounted) return;
+      if (gravada == null) {
+        setState(() {
+          _pilhas[posicao] = antes;
+          if (saindo != null) {
+            _saldos = saldosComDelta(
+              _saldos,
+              codigo: saindo.produtoCodigo,
+              delta: saindo.quantidade,
+            );
+          }
+        });
+        _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
+      } else {
+        setState(() => _pilhas[posicao] = gravada);
+        unawaited(_carregarSaldos());
+      }
+    } finally {
+      _gravandoOnline = false;
     }
   }
 
@@ -707,9 +735,18 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// que interessa a quem vai descarregar carga.
   int get _vagasLivres => GalpaoConfig.totalEnderecos - _racksOcupados;
 
-  void _avisar(String mensagem) {
+  void _avisar(String mensagem, {VoidCallback? tentarNovamente}) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(mensagem), behavior: SnackBarBehavior.floating),
+      SnackBar(
+        content: Text(mensagem),
+        behavior: SnackBarBehavior.floating,
+        action: tentarNovamente == null
+            ? null
+            : SnackBarAction(
+                label: 'Tentar novamente',
+                onPressed: tentarNovamente,
+              ),
+      ),
     );
   }
 

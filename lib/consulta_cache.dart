@@ -68,10 +68,11 @@ class ConsultaCache {
         Future<LinhasConsulta>(() async {
           final novo = await _consultas[chave]!();
           if (geracao != _geracao) return _valores[chave] ?? novo;
-          final mudou = jsonEncode(_valores[chave]) != jsonEncode(novo);
+          final anterior = _valores[chave];
+          final mudou = jsonEncode(anterior) != jsonEncode(novo);
           _valores[chave] = _copiar(novo);
           await _persistir(chave, novo);
-          if (mudou) aoAtualizar();
+          if (anterior != null && mudou) aoAtualizar();
           return novo;
         }).whenComplete(() {
           if (identical(_emAndamento[chave], futuro))

@@ -1012,7 +1012,6 @@ class TursoService {
     }
 
     LibsqlClient? client;
-    var conectouLocal = false;
 
     // O cache de consulta não é uma réplica. Toda escrita usa o remoto.
     // A conexão local antiga só é aberta pela recuperação explícita.
@@ -1025,60 +1024,20 @@ class TursoService {
     }
 
     try {
-      if (conectouLocal) {
-        // Replica local sem a base do remoto estabelecida (primeira abertura
-        // deste arquivo): NÃO escreve NADA localmente antes do primeiro pull.
-        // O connect() já trouxe o snapshot do banco — dá para ler tudo —, mas
-        // o protocolo de sync ainda considera a replica no frame 0; criar o
-        // esquema ou rodar migração agora deixaria frames locais na frente dos
-        // do servidor, e a partir daí todo sync falharia com
-        // InvalidPushFrameConflict (foi exatamente o que quebrou o cache local
-        // em produção). Só quando o arquivo já está em dia é que o esquema
-        // idempotente (inclui os índices) e as migrações rodam direto.
-        final precisaBase = await _replicaPrecisaBaixarBase(client);
-        if (!precisaBase) {
-          await _criarEsquema(client);
-          await _migrarEsquemaLabelsEstante3(client);
-          await _migrarPaletesCadastroDinamico(client);
-          await migrarGalpaoParaUnidades(client);
-        }
-        _client = client;
-        _connected = true;
-        _modoLocal = true;
-        _urlAtiva = url;
-        _tokenAtivo = token;
-        _cacheLocalAtivo = cacheLocal;
-        _basePendente = precisaBase;
-        _coordenador.definirEstado(
-          precisaBase ? EstadoReplica.basePendente : EstadoReplica.pronta,
-        );
-        if (precisaBase) {
-          try {
-            await _estabelecerBaseLocal(client, _timeoutBootstrap);
-            _ultimoErroSync = null;
-          } catch (e) {
-            // Sem rede agora: a replica continua legível (o arquivo veio do
-            // remoto no connect) e _basePendente segue true — o esquema, as
-            // migrações e a base entram no próximo Sincronizar, nunca antes.
-            _ultimoErroSync = descreverErroSync(e);
-          }
-        }
-      } else {
-        // Modo remoto (Web ou falha ao abrir o arquivo local): cria o esquema
-        // e conecta direto ao remoto, como antes.
-        await _criarEsquema(client);
-        await _migrarEsquemaLabelsEstante3(client);
-        await _migrarPaletesCadastroDinamico(client);
-        await migrarGalpaoParaUnidades(client);
-        _client = client;
-        _connected = true;
-        _modoLocal = false;
-        _basePendente = false;
-        _coordenador.definirEstado(EstadoReplica.pronta);
-        _urlAtiva = url;
-        _tokenAtivo = token;
-        _cacheLocalAtivo = cacheLocal;
-      }
+      // Modo remoto (Web ou falha ao abrir o arquivo local): cria o esquema
+      // e conecta direto ao remoto, como antes.
+      await _criarEsquema(client);
+      await _migrarEsquemaLabelsEstante3(client);
+      await _migrarPaletesCadastroDinamico(client);
+      await migrarGalpaoParaUnidades(client);
+      _client = client;
+      _connected = true;
+      _modoLocal = false;
+      _basePendente = false;
+      _coordenador.definirEstado(EstadoReplica.pronta);
+      _urlAtiva = url;
+      _tokenAtivo = token;
+      _cacheLocalAtivo = cacheLocal;
       // Fim do init: os paletes precisam estar em memória antes do primeiro
       // build do mapa e do carrossel (ordemNavegacaoEstantes consulta
       // PaleteRegistry().ativos). Numa replica sem base a tabela pode ainda
@@ -1108,7 +1067,6 @@ class TursoService {
   // Vale APENAS enquanto a base não está estabelecida. Com a base pronta,
   // reabrir usa _timeoutConexao (20s) e sincronizar usa _timeoutSync. Nenhum
   // uso rotineiro do app espera por este limite.
-  static const Duration _timeoutBootstrap = Duration(minutes: 3);
   static const Duration _timeoutSync = Duration(minutes: 3);
 
   Future<String> _caminhoCacheLocal() async {
@@ -1178,22 +1136,6 @@ class TursoService {
   /// frames ainda não" — que é o estado em que o connect() deixa uma replica
   /// recém-criada, mesmo com o arquivo já cheio de dados. Sem esse arquivo (ou
   /// com formato desconhecido), cai no teste antigo de banco vazio.
-  Future<bool> _replicaPrecisaBaixarBase(LibsqlClient client) async {
-    // Base já estabelecida para ESTE arquivo: nada a puxar, nem que o frame
-    // confirmado siga em 0 (acontece quando o servidor acabou de fazer
-    // checkpoint e a geração nova ainda não tem frames). Sem esta marca, toda
-    // abertura do app repetiria o sync — e, sem internet, esperaria os
-    // timeouts antes de mostrar o mapa.
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(_chavePorBanco(keyBaseLocalOk)) ?? false) return false;
-
-    final frame = await _frameDuravelAtual();
-    if (frame != null) return frame == 0;
-    return _bancoLocalVazio(client);
-  }
-
-  /// Geração + frame confirmados da replica local, ou null se o `-info` não
-  /// existe / não dá para ler.
   Future<EstadoDaReplica?> _estadoAtualDaReplica() async {
     try {
       final info = File('${await _caminhoCacheLocal()}-info');
@@ -1374,21 +1316,6 @@ class TursoService {
   }
 
   /// True se o arquivo local acabou de ser criado (nenhuma tabela ainda).
-  Future<bool> _bancoLocalVazio(LibsqlClient client) async {
-    try {
-      final stmt = await client.prepare(
-        "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'",
-      );
-      final rows = await stmt.query() as List<dynamic>;
-      final n = (rows.first as Map<String, dynamic>)['n'] as int? ?? 0;
-      return n == 0;
-    } catch (_) {
-      // Na dúvida, não força bootstrap — o esquema local é criado logo em
-      // seguida e a carga completa acontece no primeiro Sincronizar.
-      return false;
-    }
-  }
-
   Future<LibsqlClient?> _conectarRemoto(String url, String token) async {
     try {
       final client = LibsqlClient.remote(url, authToken: token);
