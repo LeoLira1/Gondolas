@@ -125,6 +125,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   bool                    _buscando       = false;
   bool                    _semResultados  = false;
   Timer?                  _debounce;
+  int _buscaVersao = 0;
 
   // Modo Conferência (Fase 3): transforma a lista de pendentes do dia numa
   // rota visual no mapa. _conferencia é null até a primeira carga.
@@ -150,6 +151,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    TursoService().dataRevision.addListener(_atualizarBuscaVisivel);
     // Bonecos caminhando pelo mapa (0 = desligado, 1 ou 2): quem escolhe a
     // quantidade é a tela de Configuração; aqui só carregamos o valor salvo e
     // deixamos o notifier de PreferenciasMapa reconstruir a cena.
@@ -189,6 +191,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    TursoService().dataRevision.removeListener(_atualizarBuscaVisivel);
     _debounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -218,7 +221,14 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
     _searchFocus.unfocus();
   }
 
+  void _atualizarBuscaVisivel() {
+    if (mounted && _searchCtrl.text.trim().length >= 2) {
+      _onSearchChanged(_searchCtrl.text);
+    }
+  }
+
   void _onSearchChanged(String q) {
+    final versao = ++_buscaVersao;
     _debounce?.cancel();
     if (q.trim().isEmpty) {
       setState(() {
@@ -229,10 +239,10 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       });
       return;
     }
-    setState(() { _buscando = true; _semResultados = false; });
+    setState(() { _buscando = _sugestoes.isEmpty; _semResultados = false; });
     _debounce = Timer(const Duration(milliseconds: 300), () async {
       final resultados = await TursoService().buscarProdutoGlobal(q.trim());
-      if (!mounted) return;
+      if (!mounted || versao != _buscaVersao) return;
       setState(() {
         _sugestoes     = resultados;
         _showSugestoes = resultados.isNotEmpty;

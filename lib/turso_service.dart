@@ -17,6 +17,7 @@ import 'galpao_config.dart';
 import 'galpao_migracao_unidades.dart';
 import 'layout_cache.dart';
 import 'consulta_cache.dart';
+import 'busca_local.dart';
 import 'models.dart';
 import 'palete_registry.dart';
 import 'replica_local.dart';
@@ -213,6 +214,35 @@ class TursoService {
       'consulta_v1_${idBanco(url)}_$chave',
       linhas,
     );
+    final prefixo = 'consulta_v1_${idBanco(url)}_';
+    if (chave == 'galpao') {
+      await _consultaCache.confirmar('${prefixo}busca_galpao', linhas);
+    } else if (chave.startsWith('gondola_')) {
+      final numero = int.tryParse(chave.substring('gondola_'.length));
+      if (numero != null)
+        await _consultaCache.atualizarParte(
+          '${prefixo}busca_gondolas',
+          (r) => r['gondola_num'] == numero,
+          linhas,
+        );
+    } else if (chave.startsWith('estante_')) {
+      final numero = int.tryParse(chave.substring('estante_'.length));
+      if (numero != null)
+        await _consultaCache.atualizarParte(
+          '${prefixo}busca_estantes',
+          (r) => r['estante_num'] == numero,
+          linhas
+              .where(
+                (r) =>
+                    !estantesRemovidas.contains(r['estante_num']) &&
+                    !_ehBaseNelloreRemovida(
+                      r['estante_num'] as int,
+                      r['nivel'] as int,
+                    ),
+              )
+              .toList(),
+        );
+    }
   }
 
   /// Na volta do aplicativo a consulta acontece atrás da cena já visível.
@@ -826,6 +856,9 @@ class TursoService {
   Future<void> marcarGravacaoLocal() async {
     if (!_modoLocal) {
       _consultaCache.invalidarConsultasEmAndamento();
+      _consultaCache.expirar(
+        'consulta_v1_${_identidadeAtiva}_busca_quantidades',
+      );
       return;
     }
     _gravacoesPendentes++;
@@ -2386,6 +2419,7 @@ class TursoService {
   /// faz a primeira abertura de uma cena custar o mesmo que as seguintes.
   Future<void> prewarm() async {
     if (!_connected) return;
+    await _precarregarBusca();
     await precarregarLayouts();
     await fetchProdutos();
   }
@@ -2527,11 +2561,26 @@ class TursoService {
 
   // Busca produto por nome (LIKE) em gôndola_layout E estante_layout,
   // retornando uma lista combinada (gôndolas primeiro).
+  Future<List<Map<String, dynamic>>> _quantidadesParaBusca() =>
+      consultarComCache(
+        'busca_quantidades',
+        'SELECT produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel, quantidade '
+            'FROM estoque_localizado',
+      );
+
+  Future<void> _precarregarBusca() async {
+    await Future.wait([
+      _buscarNasGondolas(''),
+      _buscarNasEstantes(''),
+      _buscarNoGalpao(''),
+      _quantidadesParaBusca(),
+    ]);
+  }
+
   Future<List<ProdutoEncontrado>> buscarProdutoGlobal(String termo) async {
-    if (!await _garantirConexao()) return [];
     final q = termo.trim();
     if (q.length < 2) return [];
-    final like = '%$q%';
+    final like = q;
 
     final resultados = await Future.wait([
       _buscarNasGondolas(like),
@@ -2554,14 +2603,15 @@ class TursoService {
   /// concluía que ele não estava na loja.
   Future<List<ProdutoEncontrado>> _buscarNoGalpao(String like) async {
     try {
-      final stmt = await _client!.prepare(
-        'SELECT posicao, ordem, produto_codigo, produto_nome, quantidade '
-        'FROM galpao_racks '
-        'WHERE produto_nome LIKE ? OR produto_codigo LIKE ? '
-        'ORDER BY produto_nome, posicao, ordem LIMIT 20',
+      final rows = filtrarBuscaLocal(
+        await consultarComCache(
+          'busca_galpao',
+          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+              'FROM galpao_racks ORDER BY produto_nome, posicao, ordem',
+        ),
+        like,
       );
-      final rows = await stmt.query(positional: [like, like]);
-      return (rows as List<dynamic>).map((dynamic row) {
+      return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         final posicao = r['posicao'] as int? ?? 0;
         final ordem = r['ordem'] as int? ?? 1;
@@ -2603,12 +2653,7 @@ class TursoService {
         .toList();
     if (codigos.isEmpty) return encontrados;
     try {
-      final placeholders = List.filled(codigos.length, '?').join(',');
-      final stmt = await _client!.prepare(
-        'SELECT produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel, quantidade '
-        'FROM estoque_localizado WHERE produto_codigo IN ($placeholders)',
-      );
-      final rows = await stmt.query(positional: codigos);
+      final rows = await _quantidadesParaBusca();
 
       // gôndola: 'g|codigo|num|face|andar' · estante: 'e|codigo|num|nivel' ·
       // galpão: 'x|codigo|posicao|ordem'.
@@ -2618,7 +2663,7 @@ class TursoService {
       // com o número faria a quantidade do galpão ser somada dentro da
       // estante de mesmo número.
       final somas = <String, double>{};
-      for (final dynamic row in rows as List<dynamic>) {
+      for (final dynamic row in rows) {
         final r = row as Map<String, dynamic>;
         final codigo = r['produto_codigo'] as String? ?? '';
         final tipo = r['local_tipo'] as String? ?? '';
@@ -2653,18 +2698,20 @@ class TursoService {
 
   Future<List<ProdutoEncontrado>> _buscarNasGondolas(String like) async {
     try {
-      final stmt = await _client!.prepare(
-        'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar, pos_x, pos_z '
-        'FROM gondola_layout WHERE produto_nome LIKE ? OR produto_codigo LIKE ? '
-        'ORDER BY produto_nome LIMIT 20',
+      final rows = filtrarBuscaLocal(
+        await consultarComCache(
+          'busca_gondolas',
+          'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar, pos_x, pos_z '
+              'FROM gondola_layout ORDER BY produto_nome',
+        ),
+        like,
       );
-      final rows = await stmt.query(positional: [like, like]);
       const andarNomes = ['Base', 'Meio', 'Topo'];
       // A face é derivada de pos_x/pos_z (sem coluna no banco); caixas do
       // mesmo produto no mesmo endereço G·F·A viram um resultado só.
       final vistos = <String>{};
       final encontrados = <ProdutoEncontrado>[];
-      for (final dynamic row in rows as List<dynamic>) {
+      for (final dynamic row in rows) {
         final r = row as Map<String, dynamic>;
         final a = ((r['andar'] as int?) ?? 0).clamp(0, 2);
         final posX = (r['pos_x'] as num?)?.toDouble() ?? 0;
@@ -2693,15 +2740,16 @@ class TursoService {
 
   Future<List<ProdutoEncontrado>> _buscarNasEstantes(String like) async {
     try {
-      final stmt = await _client!.prepare(
-        'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
-        'FROM estante_layout WHERE (produto_nome LIKE ? OR produto_codigo LIKE ?) '
-        'AND estante_num NOT IN ($_sqlEstantesRemovidas) '
-        'AND $_sqlSemBaseNellore '
-        'ORDER BY produto_nome LIMIT 20',
+      final rows = filtrarBuscaLocal(
+        await consultarComCache(
+          'busca_estantes',
+          'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
+              'FROM estante_layout WHERE estante_num NOT IN ($_sqlEstantesRemovidas) '
+              'AND $_sqlSemBaseNellore ORDER BY produto_nome',
+        ),
+        like,
       );
-      final rows = await stmt.query(positional: [like, like]);
-      return (rows as List<dynamic>).map((dynamic row) {
+      return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         final estanteNum = r['estante_num'] as int? ?? 0;
         final nivProduto = niveisProdutoPara(estanteNum);
