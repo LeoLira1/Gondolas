@@ -1,5 +1,5 @@
 import 'galpao_config.dart';
-import 'galpao_scene.dart' show RackGalpao;
+import 'rack_model.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Operações de pilha do galpão — as duas regras que não podem quebrar
@@ -19,7 +19,7 @@ import 'galpao_scene.dart' show RackGalpao;
 /// Pilha com um rack novo no topo, ou null se a pilha já está cheia.
 List<RackGalpao>? pilhaAposLancar(
   List<RackGalpao> pilha, {
-  required int    posicao,
+  required int posicao,
   required String produtoCodigo,
   required String produtoNome,
   required double quantidade,
@@ -28,11 +28,11 @@ List<RackGalpao>? pilhaAposLancar(
   return [
     ...pilha,
     RackGalpao(
-      posicao:       posicao,
-      ordem:         pilha.length + 1,
+      posicao: posicao,
+      ordem: pilha.length + 1,
       produtoCodigo: produtoCodigo,
-      produtoNome:   produtoNome,
-      quantidade:    quantidade,
+      produtoNome: produtoNome,
+      quantidade: quantidade,
     ),
   ];
 }
@@ -48,11 +48,12 @@ List<RackGalpao> pilhaAposEsvaziar(List<RackGalpao> pilha, int ordem) {
         r
       else if (r.ordem > ordem)
         RackGalpao(
-          posicao:       r.posicao,
-          ordem:         r.ordem - 1,
+          rackUuid: r.rackUuid,
+          posicao: r.posicao,
+          ordem: r.ordem - 1,
           produtoCodigo: r.produtoCodigo,
-          produtoNome:   r.produtoNome,
-          quantidade:    r.quantidade,
+          produtoNome: r.produtoNome,
+          quantidade: r.quantidade,
         ),
   ];
 }
@@ -81,11 +82,12 @@ List<RackGalpao> pilhaAposAjustar(
         r
       else
         RackGalpao(
-          posicao:       r.posicao,
-          ordem:         r.ordem,
+          rackUuid: r.rackUuid,
+          posicao: r.posicao,
+          ordem: r.ordem,
           produtoCodigo: r.produtoCodigo,
-          produtoNome:   r.produtoNome,
-          quantidade:    quantidade,
+          produtoNome: r.produtoNome,
+          quantidade: quantidade,
         ),
   ];
 }

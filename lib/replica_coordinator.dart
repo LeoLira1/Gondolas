@@ -20,10 +20,10 @@ class ReplicaNaoProntaParaEscrita implements Exception {
   String toString() => estado == EstadoReplica.basePendente
       ? 'É necessário conectar à internet e estabelecer a base local antes da primeira gravação.'
       : estado == EstadoReplica.sincronizando
-          ? 'A sincronização está em andamento; aguarde para gravar.'
-          : estado == EstadoReplica.recuperacaoNecessaria
-              ? 'A réplica precisa de recuperação; os dados locais foram preservados.'
-              : 'A réplica local não está pronta para gravação (${estado.name}).';
+      ? 'A sincronização está em andamento; aguarde para gravar.'
+      : estado == EstadoReplica.recuperacaoNecessaria
+      ? 'A réplica precisa de recuperação; os dados locais foram preservados.'
+      : 'A réplica local não está pronta para gravação (${estado.name}).';
 }
 
 /// Mutex FIFO compartilhado por escritas, sincronização e reconstrução.
@@ -72,9 +72,11 @@ class CoordenadorReplica {
 
   Future<T> executarEscrita<T>(Future<T> Function() acao) {
     if (_estado != EstadoReplica.pronta || _syncReservado) {
-      return Future<T>.error(ReplicaNaoProntaParaEscrita(
-        _syncReservado ? EstadoReplica.sincronizando : _estado,
-      ));
+      return Future<T>.error(
+        ReplicaNaoProntaParaEscrita(
+          _syncReservado ? EstadoReplica.sincronizando : _estado,
+        ),
+      );
     }
     return _enfileirar(acao);
   }
@@ -108,6 +110,16 @@ class CoordenadorReplica {
             : EstadoReplica.pronta;
       }
     });
+  }
+
+  Future<T> executarRecuperacao<T>(Future<T> Function() acao) {
+    if (_syncReservado) {
+      return Future<T>.error(
+        const ReplicaNaoProntaParaEscrita(EstadoReplica.sincronizando),
+      );
+    }
+    _syncReservado = true;
+    return _enfileirar(acao).whenComplete(() => _syncReservado = false);
   }
 
   Future<T> _enfileirar<T>(Future<T> Function() acao) {

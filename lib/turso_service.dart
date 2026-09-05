@@ -12,6 +12,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'galpao_config.dart';
 import 'galpao_migracao_unidades.dart';
 import 'layout_cache.dart';
@@ -20,6 +21,7 @@ import 'palete_registry.dart';
 import 'replica_local.dart';
 import 'replica_coordinator.dart';
 import 'outbox.dart';
+import 'rack_identity.dart';
 import 'outbox_store.dart';
 
 /// Cronometra uma etapa de banco e imprime o tempo no log, só em debug.
@@ -44,8 +46,8 @@ class TursoService {
   factory TursoService() => _instance;
   TursoService._internal();
 
-  static const String keyDbUrl      = 'turso_db_url';
-  static const String keyDbToken    = 'turso_db_token';
+  static const String keyDbUrl = 'turso_db_url';
+  static const String keyDbToken = 'turso_db_token';
   static const String keyCacheLocal = 'turso_cache_local';
   static const String keyUltimaSync = 'turso_ultima_sync';
   // Marca que a replica local ATUAL já puxou a base do remoto. Some junto com
@@ -73,13 +75,13 @@ class TursoService {
 
   static const Map<String, String> categoriaCores = {
     'Lubrificantes': '#2e7d4f',
-    'Calçados':      '#2c5fb0',
-    'Vestuário':     '#6b4a2b',
-    'Chapéus':       '#d9b46a',
-    'Lonas':         '#e87722',
-    'Defensivos':    '#8b1a1a',
-    'Sementes':      '#c8a000',
-    'Ferramentas':   '#4a4a8a',
+    'Calçados': '#2c5fb0',
+    'Vestuário': '#6b4a2b',
+    'Chapéus': '#d9b46a',
+    'Lonas': '#e87722',
+    'Defensivos': '#8b1a1a',
+    'Sementes': '#c8a000',
+    'Ferramentas': '#4a4a8a',
   };
 
   LibsqlClient? _client;
@@ -93,18 +95,18 @@ class TursoService {
   // funcionam sem internet; sincronizar() empurra/puxa as mudanças para o
   // Turso quando o usuário pedir. Indisponível no Flutter Web (sem
   // filesystem), onde o app segue conectando direto no remoto.
-  bool      _modoLocal           = false;
-  bool      _sincronizando       = false;
+  bool _modoLocal = false;
+  bool _sincronizando = false;
   // True enquanto a replica local ainda não puxou (pull) os frames que o
   // servidor já tem. Nesse estado NADA pode ser escrito no arquivo local: os
   // frames locais sairiam na frente dos do servidor e o push passaria a falhar
   // para sempre com InvalidPushFrameConflict. Ver _estabelecerBaseLocal.
-  bool      _basePendente        = false;
+  bool _basePendente = false;
   DateTime? _ultimaSincronizacao;
-  String?   _ultimoErroSync;
-  String?   _ultimoAvisoSync;
-  int       _gravacoesPendentes = 0;
-  int       _enviadasNoUltimoSync = 0;
+  String? _ultimoErroSync;
+  String? _ultimoAvisoSync;
+  int _gravacoesPendentes = 0;
+  int _enviadasNoUltimoSync = 0;
   final CoordenadorReplica _coordenador = CoordenadorReplica();
   String? _identidadeAtiva;
   // Sync nativo do libsql em andamento. Existe porque `Future.timeout` NÃO
@@ -126,7 +128,7 @@ class TursoService {
   // reexecutar os CREATE TABLEs a cada abertura de página.
   String? _urlAtiva;
   String? _tokenAtivo;
-  bool?   _cacheLocalAtivo;
+  bool? _cacheLocalAtivo;
   Future<void>? _initEmAndamento;
   bool _forcarReconexao = false;
   String? _motivoFalhaCacheLocal;
@@ -138,7 +140,7 @@ class TursoService {
   // garantia uma reconsulta inútil em toda sessão longa. O TTL continua valendo
   // no modo remoto, onde um app irmão pode mexer no estoque_mestre por fora.
   List<Produto>? _produtosCache;
-  DateTime?      _produtosCacheEm;
+  DateTime? _produtosCacheEm;
   static const Duration _produtosCacheTtl = Duration(minutes: 30);
   // Leitura do catálogo em andamento, para que chamadas simultâneas dividam a
   // mesma consulta em vez de disparar uma cada (ver fetchProdutos).
@@ -158,7 +160,7 @@ class TursoService {
   // Cache dos layouts por estrutura. Ver layout_cache.dart para o porquê de
   // morar aqui dentro. Invalidado pelos mesmos pontos que zeram _produtosCache,
   // mais os dois salvarLayout* (que gravam direto o que acabaram de persistir).
-  final CacheDeLayout<CaixaLayout>        _cacheGondola = CacheDeLayout();
+  final CacheDeLayout<CaixaLayout> _cacheGondola = CacheDeLayout();
   final CacheDeLayout<CaixaLayoutEstante> _cacheEstante = CacheDeLayout();
 
   /// Consultas efetivamente enviadas ao banco desde a abertura do app. Serve
@@ -205,7 +207,8 @@ class TursoService {
   /// `conectando` — mesmo com a replica local inteira. Garantir a conexão
   /// aqui é o que o caminho de escrita já fazia antes do coordenador existir.
   Future<T> garantirReplicaProntaParaEscrita<T>(
-      Future<T> Function() acao) async {
+    Future<T> Function() acao,
+  ) async {
     await _garantirConexao();
     try {
       return await _coordenador.executarEscrita(() async {
@@ -262,9 +265,10 @@ class TursoService {
     try {
       await _outbox.abrir(await _caminhoOutbox());
     } catch (_) {
-      // Sem outbox o app continua funcionando como antes dela; o que se perde
-      // é a capacidade de reaplicar depois de uma reconstrução. Derrubar a
-      // abertura do app por causa disso seria pior.
+      _ultimoErroSync =
+          'A proteção das gravações está indisponível. '
+          'As consultas continuam disponíveis; tente novamente antes de gravar.';
+      throw StateError(_ultimoErroSync!);
     }
   }
 
@@ -316,58 +320,67 @@ class TursoService {
     required Map<String, Object?> chave,
     required Map<String, Object?>? estadoAnterior,
     required Map<String, Object?>? estadoFinal,
+
     /// Colunas NOT NULL necessárias para RECRIAR a linha, que não entram na
     /// comparação de estado (`atualizado_em`, `criado_em`).
     Map<String, Object?> extrasParaInsercao = const {},
+    Map<String, Object?>? auditoria,
     String? produtoCodigo,
     String? produtoNome,
-    int?    posicao,
-    int?    ordem,
+    int? posicao,
+    int? ordem,
     double? quantidadeAnterior,
     double? quantidadePretendida,
   }) async {
     final mutacao = MutacaoOutbox(
-      uuid:      gerarUuidV4(),
-      operacao:  operacao,
-      alvo:      AlvoMutacao(tabela: tabela, chave: chave),
+      uuid: gerarUuidV4(),
+      auditoria: auditoria,
+      operacao: operacao,
+      alvo: AlvoMutacao(tabela: tabela, chave: chave),
       estadoAnterior: estadoAnterior,
-      estadoFinal:    estadoFinal,
+      estadoFinal: estadoFinal,
       extrasParaInsercao: extrasParaInsercao,
-      criadoEm:    DateTime.now(),
+      criadoEm: DateTime.now(),
       dispositivo: await _dispositivoAtual(),
-      produtoCodigo:        produtoCodigo,
-      produtoNome:          produtoNome,
-      posicao:              posicao,
-      ordem:                ordem,
-      quantidadeAnterior:   quantidadeAnterior,
+      produtoCodigo: produtoCodigo,
+      produtoNome: produtoNome,
+      posicao: posicao,
+      ordem: ordem,
+      quantidadeAnterior: quantidadeAnterior,
       quantidadePretendida: quantidadePretendida,
     );
     // Sempre, não só quando fechada: se a URL do banco mudou nesta sessão, o
     // caminho mudou junto e a store precisa rotacionar. Uma outbox presa no
     // banco anterior gravaria as mutações novas no arquivo errado — e julgaria
     // as antigas contra o servidor errado.
-    await _abrirOutbox();
-    try {
-      await _outbox.registrar(mutacao);
-    } catch (_) {
-      // Ver _abrirOutbox: falhar aqui não pode impedir a gravação em si.
+    // Escritas remotas já são transacionadas no servidor. Na Web não existe
+    // arquivo local; a outbox é obrigatória para commits na réplica.
+    if (_modoLocal) {
+      await _abrirOutbox();
+      try {
+        await _outbox.registrar(mutacao);
+      } catch (_) {
+        _ultimoErroSync =
+            'Não foi possível proteger esta alteração. '
+            'A gravação foi cancelada; tente novamente.';
+        rethrow;
+      }
     }
     return mutacao;
   }
 
   /// Carimba o UUID DENTRO da transação da mutação. É o que faz o
   /// reconhecimento viajar nos mesmos frames: ou os dois chegam, ou nenhum.
-  Future<void> carimbarMutacao(Transaction tx, MutacaoOutbox m) =>
-      tx.execute(
-        'INSERT OR REPLACE INTO app_mutacoes_aplicadas '
-        '(uuid, aplicada_em, operacao, dispositivo) VALUES (?, ?, ?, ?)',
-        positional: [
-          m.uuid,
-          DateTime.now().toIso8601String(),
-          m.operacao,
-          m.dispositivo,
-        ],
-      );
+  Future<void> carimbarMutacao(Transaction tx, MutacaoOutbox m) => tx.execute(
+    'INSERT OR REPLACE INTO app_mutacoes_aplicadas '
+    '(uuid, aplicada_em, operacao, dispositivo) VALUES (?, ?, ?, ?)',
+    positional: [
+      m.uuid,
+      DateTime.now().toIso8601String(),
+      m.operacao,
+      m.dispositivo,
+    ],
+  );
 
   /// A transação caiu antes do commit: nada foi gravado. O registro NÃO é
   /// apagado (a outbox não apaga nada), só sai da fila de reaplicação.
@@ -380,22 +393,19 @@ class TursoService {
   /// Quantas mutações o servidor ainda não confirmou, segundo a outbox.
   Future<int> mutacoesNaoConfirmadas() async {
     await _abrirOutbox();
-    try {
-      return await _outbox.quantidadeNaoConfirmada();
-    } catch (_) {
-      return 0;
-    }
+    return _outbox.quantidadeNaoConfirmada();
   }
 
   /// O que precisa de uma pessoa: conflito com o remoto, ou operação que a
   /// reconstrução não sabe reaplicar sozinha.
   Future<List<MutacaoOutbox>> mutacoesParaRevisao() async {
     await _abrirOutbox();
-    try {
-      return await _outbox.paraRevisao();
-    } catch (_) {
-      return const [];
-    }
+    return _outbox.paraRevisao();
+  }
+
+  Future<List<MutacaoOutbox>> mutacoesPendentes() async {
+    await _abrirOutbox();
+    return _outbox.naoConfirmadas();
   }
 
   /// Confirma no SERVIDOR as mutações que a outbox ainda tem em aberto.
@@ -408,6 +418,7 @@ class TursoService {
   /// Devolve quantas passaram a contar como confirmadas. Uma falha de rede não
   /// confirma nem desconfirma nada: os registros ficam onde estavam.
   Future<int> confirmarMutacoesNoRemoto() async {
+    if (kIsWeb) return 0;
     await _abrirOutbox();
     final List<MutacaoOutbox> abertas;
     try {
@@ -427,10 +438,12 @@ class TursoService {
       final lote = abertas.sublist(i, fim);
       try {
         final marcadores = List.filled(lote.length, '?').join(', ');
-        final linhas = await remoto.query(
-          'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid IN ($marcadores)',
-          positional: [for (final m in lote) m.uuid],
-        ).timeout(_timeoutConexao);
+        final linhas = await remoto
+            .query(
+              'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid IN ($marcadores)',
+              positional: [for (final m in lote) m.uuid],
+            )
+            .timeout(_timeoutConexao);
         final vistos = {for (final l in linhas) l['uuid'] as String?};
         for (final m in lote) {
           if (!vistos.contains(m.uuid)) continue;
@@ -460,33 +473,51 @@ class TursoService {
   /// - remoto diferente dos dois → conflito, para uma pessoa decidir.
   ///
   /// Nenhum registro é apagado em nenhum dos caminhos.
-  Future<int> reaplicarOutbox() async {
-    if (!await _garantirConexao()) return 0;
+  Future<int> reaplicarOutbox() => garantirReplicaProntaParaEscrita(() async {
+    await confirmarMutacoesNoRemoto();
+    return _reaplicarOutbox();
+  });
+
+  Future<int> _reaplicarOutbox() async {
+    if (!await _garantirConexao())
+      throw StateError('Sem conexão para recuperar.');
     await _abrirOutbox();
     final List<MutacaoOutbox> abertas;
     try {
       abertas = await _outbox.naoConfirmadas();
     } catch (_) {
-      return 0;
+      throw StateError('Não foi possível ler as alterações protegidas.');
     }
 
     var reaplicadas = 0;
+    final bloqueados = <String>{};
     for (final m in abertas) {
-      if (operacaoExigeRevisaoManual(m.operacao)) {
+      final alvo = '${m.alvo.tabela}:${canonico(m.alvo.chave)}';
+      final carimbo = await _client!.query(
+        'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid = ?',
+        positional: [m.uuid],
+      );
+      if (carimbo.isNotEmpty) continue; // ainda depende de confirmação remota
+      if (bloqueados.contains(alvo) || mutacaoExigeRevisaoManual(m)) {
+        bloqueados.add(alvo);
         await _outbox.marcar(m.uuid, EstadoMutacao.revisaoManual);
         continue;
       }
       try {
         final decisao = decidirReaplicacao(
-          remoto:      await _lerLinha(m.alvo),
-          anterior:    m.estadoAnterior,
+          remoto: await _lerLinha(m.alvo),
+          anterior: m.estadoAnterior,
           estadoFinal: m.estadoFinal,
-          colunas:     m.colunasComparadas,
+          colunas: m.colunasComparadas,
         );
         switch (decisao) {
           case DecisaoReaplicacao.jaAplicada:
-            await _outbox.marcar(m.uuid, EstadoMutacao.confirmada);
+            bloqueados.add(alvo);
+            // Igualdade de saldo não prova envio nem a existência do histórico.
+            // Só confirmarMutacoesNoRemoto pode confirmar o UUID.
+            await _outbox.marcar(m.uuid, EstadoMutacao.revisaoManual);
           case DecisaoReaplicacao.conflito:
+            bloqueados.add(alvo);
             await _outbox.marcar(m.uuid, EstadoMutacao.conflito);
           case DecisaoReaplicacao.aplicarFinal:
             try {
@@ -498,10 +529,12 @@ class TursoService {
               // (inventario_cicli, por exemplo) isso não basta — e o certo
               // então é mandar para conferência, não tentar de novo para
               // sempre em silêncio.
+              bloqueados.add(alvo);
               await _outbox.marcar(m.uuid, EstadoMutacao.conflito);
             }
         }
       } catch (_) {
+        bloqueados.add(alvo);
         // Erro ao ler ou aplicar não vira confirmação nem descarte: o registro
         // fica em aberto e a próxima passada tenta de novo.
       }
@@ -526,6 +559,29 @@ class TursoService {
     final tx = await _client!.transaction();
     try {
       final onde = m.alvo.chave.keys.map((c) => '$c = ?').join(' AND ');
+      final vistos = await tx.query(
+        'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid = ?',
+        positional: [m.uuid],
+      );
+      if (vistos.isNotEmpty) {
+        await tx.rollback();
+        return;
+      }
+      final linhas = await tx.query(
+        'SELECT * FROM ${m.alvo.tabela} WHERE $onde LIMIT 1',
+        positional: m.alvo.chave.values.toList(),
+      );
+      if (decidirReaplicacao(
+            remoto: linhas.isEmpty
+                ? null
+                : Map<String, Object?>.from(linhas.first),
+            anterior: m.estadoAnterior,
+            estadoFinal: m.estadoFinal,
+            colunas: m.colunasComparadas,
+          ) !=
+          DecisaoReaplicacao.aplicarFinal) {
+        throw StateError('O registro mudou durante a recuperação.');
+      }
       if (m.estadoFinal == null) {
         await tx.execute(
           'DELETE FROM ${m.alvo.tabela} WHERE $onde',
@@ -548,7 +604,9 @@ class TursoService {
           // `criado_em`. Sem elas o SQLite recusa o INSERT, e uma gravação
           // perfeitamente reaplicável terminaria como conflito.
           final extras = m.extrasParaInsercao.keys
-              .where((c) => !m.alvo.chave.containsKey(c) && !colunas.contains(c))
+              .where(
+                (c) => !m.alvo.chave.containsKey(c) && !colunas.contains(c),
+              )
               .toList();
           final todas = [...m.alvo.chave.keys, ...colunas, ...extras];
           await tx.execute(
@@ -561,6 +619,21 @@ class TursoService {
             ],
           );
         }
+      }
+      final auditoria = m.auditoria;
+      if (auditoria != null) {
+        const campos = [
+          'produto_codigo',
+          'endereco',
+          'qtd_anterior',
+          'qtd_nova',
+          'origem',
+          'registrado_em',
+        ];
+        await tx.execute(
+          'INSERT INTO contagens_log (${campos.join(', ')}) VALUES (?, ?, ?, ?, ?, ?)',
+          positional: [for (final campo in campos) auditoria[campo]],
+        );
       }
       await carimbarMutacao(tx, m);
       await tx.commit();
@@ -584,8 +657,10 @@ class TursoService {
     final atual = prefs.getString(keyDbUrl) ?? '';
     if (atual.isEmpty) return null;
     if (idBanco(atual) == idBanco(novaUrl)) return null;
-    final pendentes = prefs.getInt('${keyGravacoesPendentes}_${idBanco(atual)}')
-        ?? prefs.getInt(keyGravacoesPendentes) ?? 0;
+    final pendentes =
+        prefs.getInt('${keyGravacoesPendentes}_${idBanco(atual)}') ??
+        prefs.getInt(keyGravacoesPendentes) ??
+        0;
     if (pendentes <= 0) return null;
     final plural = pendentes == 1 ? 'gravação' : 'gravações';
     return '$pendentes $plural deste banco ainda não subiram. Sincronize '
@@ -649,9 +724,10 @@ class TursoService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final id = _identidadeAtiva;
-      await prefs.setInt(id == null
-          ? keyGravacoesPendentes
-          : '${keyGravacoesPendentes}_$id', _gravacoesPendentes);
+      await prefs.setInt(
+        id == null ? keyGravacoesPendentes : '${keyGravacoesPendentes}_$id',
+        _gravacoesPendentes,
+      );
     } catch (_) {
       // Perder a persistência do contador não pode derrubar a gravação que
       // acabou de dar certo: o valor em memória segue valendo nesta sessão.
@@ -666,9 +742,9 @@ class TursoService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final id = _identidadeAtiva;
-      await prefs.remove(id == null
-          ? keyGravacoesPendentes
-          : '${keyGravacoesPendentes}_$id');
+      await prefs.remove(
+        id == null ? keyGravacoesPendentes : '${keyGravacoesPendentes}_$id',
+      );
     } catch (_) {
       // Ver marcarGravacaoLocal.
     }
@@ -708,20 +784,22 @@ class TursoService {
     _coordenador.definirEstado(EstadoReplica.conectando);
     // Consumido já: uma reconexão forçada vale para ESTA passada, senão toda
     // abertura de página passaria a reconectar.
-    final forcado    = _forcarReconexao;
+    final forcado = _forcarReconexao;
     _forcarReconexao = false;
-    final prefs      = await SharedPreferences.getInstance();
-    final url        = prefs.getString(keyDbUrl)   ?? '';
-    final token      = prefs.getString(keyDbToken) ?? '';
+    final prefs = await SharedPreferences.getInstance();
+    final url = prefs.getString(keyDbUrl) ?? '';
+    final token = prefs.getString(keyDbToken) ?? '';
     final cacheLocal = !kIsWeb && (prefs.getBool(keyCacheLocal) ?? true);
     final identidade = idBanco(url);
     final anterior = prefs.getString(keyIdentidadeAtiva);
     if (anterior != null && anterior != identidade) {
       final pendentesAntigas =
           prefs.getInt('${keyGravacoesPendentes}_$anterior') ??
-              prefs.getInt(keyGravacoesPendentes) ?? 0;
+          prefs.getInt(keyGravacoesPendentes) ??
+          0;
       if (pendentesAntigas > 0) {
-        _ultimoErroSync = 'há gravações pendentes no banco anterior; '
+        _ultimoErroSync =
+            'há gravações pendentes no banco anterior; '
             'sincronize ou exporte antes de trocar a URL';
         _coordenador.definirEstado(EstadoReplica.recuperacaoNecessaria);
         return;
@@ -743,7 +821,9 @@ class TursoService {
       }
       if (pendentesLegadas != null) {
         await prefs.setInt(
-            _chavePorBanco(keyGravacoesPendentes), pendentesLegadas);
+          _chavePorBanco(keyGravacoesPendentes),
+          pendentesLegadas,
+        );
         await prefs.remove(keyGravacoesPendentes);
       }
     }
@@ -772,8 +852,9 @@ class TursoService {
     unawaited(_dispositivoAtual());
 
     final ultimaSyncIso = prefs.getString(_chavePorBanco(keyUltimaSync));
-    _ultimaSincronizacao =
-        ultimaSyncIso != null ? DateTime.tryParse(ultimaSyncIso) : null;
+    _ultimaSincronizacao = ultimaSyncIso != null
+        ? DateTime.tryParse(ultimaSyncIso)
+        : null;
     // As pendências sobrevivem ao fechamento do app: o arquivo da replica
     // continua com os frames que não subiram.
     _gravacoesPendentes =
@@ -789,18 +870,19 @@ class TursoService {
         token == _tokenAtivo &&
         cacheLocal == _cacheLocalAtivo) {
       _coordenador.definirEstado(
-          _basePendente ? EstadoReplica.basePendente : EstadoReplica.pronta);
+        _basePendente ? EstadoReplica.basePendente : EstadoReplica.pronta,
+      );
       return;
     }
 
     final clienteAntigo = _client;
 
-    _connected       = false;
-    _client          = null;
-    _urlAtiva        = null;
-    _tokenAtivo      = null;
+    _connected = false;
+    _client = null;
+    _urlAtiva = null;
+    _tokenAtivo = null;
     _cacheLocalAtivo = null;
-    _modoLocal       = false;
+    _modoLocal = false;
     _invalidarCachesDeLeitura();
 
     if (clienteAntigo != null) {
@@ -821,7 +903,7 @@ class TursoService {
     var conectouLocal = false;
 
     if (cacheLocal) {
-      client        = await _conectarComCacheLocal(url, token);
+      client = await _conectarComCacheLocal(url, token);
       conectouLocal = client != null;
     }
     // Sem cache local (Web, preferência desligada ou falha ao abrir o
@@ -850,16 +932,16 @@ class TursoService {
           await _migrarPaletesCadastroDinamico(client);
           await migrarGalpaoParaUnidades(client);
         }
-        _client          = client;
-        _connected       = true;
-        _modoLocal       = true;
-        _urlAtiva        = url;
-        _tokenAtivo      = token;
+        _client = client;
+        _connected = true;
+        _modoLocal = true;
+        _urlAtiva = url;
+        _tokenAtivo = token;
         _cacheLocalAtivo = cacheLocal;
-        _basePendente    = precisaBase;
-        _coordenador.definirEstado(precisaBase
-            ? EstadoReplica.basePendente
-            : EstadoReplica.pronta);
+        _basePendente = precisaBase;
+        _coordenador.definirEstado(
+          precisaBase ? EstadoReplica.basePendente : EstadoReplica.pronta,
+        );
         if (precisaBase) {
           try {
             await _estabelecerBaseLocal(client, _timeoutBootstrap);
@@ -878,13 +960,13 @@ class TursoService {
         await _migrarEsquemaLabelsEstante3(client);
         await _migrarPaletesCadastroDinamico(client);
         await migrarGalpaoParaUnidades(client);
-        _client          = client;
-        _connected       = true;
-        _modoLocal       = false;
-        _basePendente    = false;
+        _client = client;
+        _connected = true;
+        _modoLocal = false;
+        _basePendente = false;
         _coordenador.definirEstado(EstadoReplica.pronta);
-        _urlAtiva        = url;
-        _tokenAtivo      = token;
+        _urlAtiva = url;
+        _tokenAtivo = token;
         _cacheLocalAtivo = cacheLocal;
       }
       // Fim do init: os paletes precisam estar em memória antes do primeiro
@@ -895,7 +977,7 @@ class TursoService {
       await PaleteRegistry().carregar();
     } catch (_) {
       _connected = false;
-      _client    = null;
+      _client = null;
       _coordenador.definirEstado(EstadoReplica.erro);
     }
   }
@@ -903,7 +985,7 @@ class TursoService {
   // Limites de tempo: nenhuma etapa de conexão/sincronização pode segurar o
   // app indefinidamente — estourou, cai no fallback (remoto) ou falha o botão
   // de sincronizar com aviso, mantendo os dados locais intactos.
-  static const Duration _timeoutConexao   = Duration(seconds: 20);
+  static const Duration _timeoutConexao = Duration(seconds: 20);
   // Baixar a base pela primeira vez é outra ordem de grandeza: é o banco
   // INTEIRO vindo do Turso, não uma consulta. Medido em campo, 90s não bastou
   // nem em wi-fi — e estourar aqui não devolve um erro visível, devolve o
@@ -917,7 +999,7 @@ class TursoService {
   // reabrir usa _timeoutConexao (20s) e sincronizar usa _timeoutSync. Nenhum
   // uso rotineiro do app espera por este limite.
   static const Duration _timeoutBootstrap = Duration(minutes: 3);
-  static const Duration _timeoutSync      = Duration(minutes: 3);
+  static const Duration _timeoutSync = Duration(minutes: 3);
 
   Future<String> _caminhoCacheLocal() async {
     final dir = await getApplicationSupportDirectory();
@@ -936,8 +1018,11 @@ class TursoService {
     return novo.path;
   }
 
-  Future<LibsqlClient?> _conectarComCacheLocal(String url, String token,
-      {bool podeReconstruir = true}) async {
+  Future<LibsqlClient?> _conectarComCacheLocal(
+    String url,
+    String token, {
+    bool podeReconstruir = true,
+  }) async {
     LibsqlClient? client;
     // Fora do try: o catch precisa do valor para explicar um timeout.
     var limite = _timeoutConexao;
@@ -963,7 +1048,7 @@ class TursoService {
       final prefs = await SharedPreferences.getInstance();
       final baseJaPronta =
           (prefs.getBool(_chavePorBanco(keyBaseLocalOk)) ?? false) &&
-              await File(path).exists();
+          await File(path).exists();
       limite = baseJaPronta ? _timeoutConexao : _timeoutBootstrap;
       client = LibsqlClient.offline(path, syncUrl: url, authToken: token);
       await client.connect().timeout(limite);
@@ -986,10 +1071,10 @@ class TursoService {
       // modo remoto e deixar o cache local quebrado para sempre. Falha de rede
       // não entra aqui: aí o arquivo está bom e o fallback remoto é o certo.
       if (podeConsertarReplicaSozinho(
-            primeiraTentativa:   podeReconstruir,
-            recuperacaoTravada:  _coordenador.recuperacaoTravada,
-            gravacoesPendentes:  _gravacoesPendentes,
-            erroDeDivergencia:   erroDeReplicaDivergente(e),
+            primeiraTentativa: podeReconstruir,
+            recuperacaoTravada: _coordenador.recuperacaoTravada,
+            gravacoesPendentes: _gravacoesPendentes,
+            erroDeDivergencia: erroDeReplicaDivergente(e),
           ) &&
           await _apagarArquivosDaReplica()) {
         return _conectarComCacheLocal(url, token, podeReconstruir: false);
@@ -1005,7 +1090,9 @@ class TursoService {
   /// com InvalidPushFrameConflict — para sempre, porque o cliente sempre
   /// recomeça do mesmo frame.
   Future<void> _estabelecerBaseLocal(
-      LibsqlClient client, Duration limite) async {
+    LibsqlClient client,
+    Duration limite,
+  ) async {
     await _syncNativo(client).timeout(limite);
     // O sync do libsql devolve sucesso quando a requisição HTTP não completa
     // (falha de rede vira "0 frames sincronizados"). Se a replica continua no
@@ -1096,7 +1183,7 @@ class TursoService {
   Future<LibsqlClient?> _sondaRemota() async {
     final aberta = _sonda;
     if (aberta != null) return aberta;
-    final url   = _urlAtiva;
+    final url = _urlAtiva;
     final token = _tokenAtivo;
     if (url == null || token == null) return null;
     try {
@@ -1112,11 +1199,14 @@ class TursoService {
 
   /// Roda a consulta do carimbo (ver `sqlDoCarimbo`) num cliente. Null quando
   /// não deu para carimbar — rede, tabela ausente, formato inesperado.
-  Future<Map<String, AssinaturaTabela>?> _carimboDe(LibsqlClient? cliente) async {
+  Future<Map<String, AssinaturaTabela>?> _carimboDe(
+    LibsqlClient? cliente,
+  ) async {
     if (cliente == null) return null;
     try {
-      final stmt   = await cliente.prepare(sqlDoCarimbo());
-      final linhas = (await stmt.query().timeout(_timeoutConexao)) as List<dynamic>;
+      final stmt = await cliente.prepare(sqlDoCarimbo());
+      final linhas =
+          (await stmt.query().timeout(_timeoutConexao)) as List<dynamic>;
       if (linhas.isEmpty) return null;
       return carimboDaLinha(linhas.first as Map<String, dynamic>);
     } catch (_) {
@@ -1132,11 +1222,13 @@ class TursoService {
   /// BANCO (tabela que não existe naquele remoto, coluna nova) não é
   /// confundida com estar sem internet, que travaria todo Sincronizar.
   Future<
-      ({
-        ConferenciaDoCarimbo resultado,
-        List<String> tabelas,
-        bool bancoRespondeu,
-      })> _conferirCarimbos() async {
+    ({
+      ConferenciaDoCarimbo resultado,
+      List<String> tabelas,
+      bool bancoRespondeu,
+    })
+  >
+  _conferirCarimbos() async {
     final remoto = await _carimboDe(await _sondaRemota());
     if (remoto == null) {
       return (
@@ -1187,8 +1279,8 @@ class TursoService {
     try {
       final caminho = await _caminhoCacheLocal();
       final arquivo = File(caminho);
-      final nome    = arquivo.uri.pathSegments.last;
-      final pasta   = arquivo.parent;
+      final nome = arquivo.uri.pathSegments.last;
+      final pasta = arquivo.parent;
       if (await pasta.exists()) {
         await for (final item in pasta.list(followLinks: false)) {
           if (item is! File) continue;
@@ -1222,7 +1314,7 @@ class TursoService {
   /// pontos em que a base sob o app pode ter mudado por inteiro: reconexão,
   /// carga inicial, sincronização e limpeza do cache local.
   void _invalidarCachesDeLeitura() {
-    _produtosCache   = null;
+    _produtosCache = null;
     _produtosCacheEm = null;
     _cacheGondola.invalidarTudo();
     _cacheEstante.invalidarTudo();
@@ -1378,6 +1470,25 @@ class TursoService {
       )
     ''');
 
+    final migracaoRack = await client.transaction();
+    try {
+      final colunasRack = await migracaoRack.query(
+        'PRAGMA table_info(galpao_racks)',
+      );
+      if (!colunasRack.any((c) => c['name'] == 'rack_uuid')) {
+        await migracaoRack.execute(
+          'ALTER TABLE galpao_racks ADD COLUMN rack_uuid TEXT',
+        );
+      }
+      for (final sql in migracaoRackIdentidade) {
+        await migracaoRack.execute(sql);
+      }
+      await migracaoRack.commit();
+    } catch (_) {
+      await migracaoRack.rollback();
+      rethrow;
+    }
+
     // Endereços do BARRACÃO: uma linha por palete no chão (ver
     // barracao_config.dart). Uma tabela só, e não o par estrutura + ocupação
     // do galpão, porque aqui o palete É o endereço e leva um produto só — não
@@ -1453,7 +1564,9 @@ class TursoService {
     _ultimaSincronizacao = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-        _chavePorBanco(keyUltimaSync), _ultimaSincronizacao!.toIso8601String());
+      _chavePorBanco(keyUltimaSync),
+      _ultimaSincronizacao!.toIso8601String(),
+    );
   }
 
   /// Sincroniza o cache local com o banco online: envia as gravações feitas
@@ -1475,37 +1588,42 @@ class TursoService {
       return false;
     }
     final operacao = _coordenador.executarSincronizacao(_sincronizarExclusiva);
-    return operacao.timeout(_timeoutSync, onTimeout: () {
-      _ultimoErroSync = 'a sincronização continua em segundo plano; aguarde antes de tentar novamente';
-      return false;
-    }).catchError((Object e) {
-      // A trava pode ter subido entre a checagem acima e a reserva. Quem
-      // explica é o próprio estado da exceção, não um palpite.
-      final recusa = e as ReplicaNaoProntaParaEscrita;
-      _ultimoErroSync =
-          recusa.estado == EstadoReplica.recuperacaoNecessaria
+    return operacao
+        .timeout(
+          _timeoutSync,
+          onTimeout: () {
+            _ultimoErroSync = 'a sincronização continua em segundo plano; aguarde antes de tentar novamente';
+            return false;
+          },
+        )
+        .catchError((Object e) {
+          // A trava pode ter subido entre a checagem acima e a reserva. Quem
+          // explica é o próprio estado da exceção, não um palpite.
+          final recusa = e as ReplicaNaoProntaParaEscrita;
+          _ultimoErroSync = recusa.estado == EstadoReplica.recuperacaoNecessaria
               ? _erroRecuperacao
               : recusa.toString();
-      return false;
-    }, test: (e) => e is ReplicaNaoProntaParaEscrita);
+          return false;
+        }, test: (e) => e is ReplicaNaoProntaParaEscrita);
   }
 
   static const String _erroRecuperacao =
       'a réplica divergiu do banco e os dados locais foram preservados; '
-      'use "Limpar cache local" em ⚙️ para recuperar';
+      'use "Revisar recuperação" em ⚙️ para recuperar';
 
   Future<bool> _sincronizarExclusiva() async {
     if (!await _garantirConexao()) {
       final prefs = await SharedPreferences.getInstance();
-      final configurado = (prefs.getString(keyDbUrl) ?? '').isNotEmpty &&
+      final configurado =
+          (prefs.getString(keyDbUrl) ?? '').isNotEmpty &&
           (prefs.getString(keyDbToken) ?? '').isNotEmpty;
       _ultimoErroSync = configurado
           ? 'sem conexão com o banco — verifique a internet'
           : 'configure URL e token do banco em ⚙️';
       return false;
     }
-    _sincronizando        = true;
-    _ultimoAvisoSync      = null;
+    _sincronizando = true;
+    _ultimoAvisoSync = null;
     // Zerado no começo: o número mostrado no fim tem de ser o DESTA rodada.
     // Sem isso, um sync remoto (que não empurra nada) herdaria a contagem do
     // sync local anterior e diria "3 gravações enviadas" sem ter enviado uma.
@@ -1552,7 +1670,8 @@ class TursoService {
         // ramo NUNCA tocava a rede — só recarregava caches e devolvia sucesso.
         // Era o "Sincronizado ✓" instantâneo e vazio, com ou sem internet.
         // O que dá para conferir aqui é o que importa: o banco online responde?
-        if (!await _clienteRespondendo()) return const SincronizacaoNaoConfirmada();
+        if (!await _clienteRespondendo())
+          return const SincronizacaoNaoConfirmada();
       }
       // O sync pode ter trazido paletes cadastrados em outro dispositivo.
       await PaleteRegistry().carregar();
@@ -1604,9 +1723,11 @@ class TursoService {
     if (_carimboAcusaAtraso(conferencia.resultado)) {
       // Um pull que veio pela metade costuma completar na tentativa seguinte,
       // e um push preso sobe nela. Só depois disso a diferença vira erro.
-      debugPrint('[turso] carimbo diferente em '
-          '${conferencia.tabelas.join(", ")} '
-          '(${conferencia.resultado.name}) — tentando de novo');
+      debugPrint(
+        '[turso] carimbo diferente em '
+        '${conferencia.tabelas.join(", ")} '
+        '(${conferencia.resultado.name}) — tentando de novo',
+      );
       await _syncNativo(_client!);
       conferencia = await _conferirCarimbos();
       if (_carimboAcusaAtraso(conferencia.resultado)) {
@@ -1619,16 +1740,19 @@ class TursoService {
       // Carimbos iguais: está tudo lá. Se ainda havia pendência contada, ela
       // era de uma gravação que não mudou nada (DELETE de zero linha, UPDATE
       // sem efeito) — some no _zerarGravacoesPendentes logo abaixo.
-      debugPrint('[turso] carimbos iguais com $_gravacoesPendentes '
-          'pendente(s) contada(s): contador velho, zerando');
+      debugPrint(
+        '[turso] carimbos iguais com $_gravacoesPendentes '
+        'pendente(s) contada(s): contador velho, zerando',
+      );
     }
 
     // O número do snackbar só vale se frames REALMENTE subiram. Contador velho
     // (pendência de gravação que não mudou nada) diria "1 enviada" sem ter
     // enviado — de novo o app se gabando de trabalho que não fez. Na dúvida,
     // fica no "Sincronizado ✓" sem número.
-    _enviadasNoUltimoSync =
-        peloFrame == ResultadoDoSync.confirmado ? _gravacoesPendentes : 0;
+    _enviadasNoUltimoSync = peloFrame == ResultadoDoSync.confirmado
+        ? _gravacoesPendentes
+        : 0;
     await _zerarGravacoesPendentes();
     return null;
   }
@@ -1640,38 +1764,113 @@ class TursoService {
       conferencia != ConferenciaDoCarimbo.iguais &&
       conferencia != ConferenciaDoCarimbo.indeterminada;
 
-  /// Apaga o arquivo de cache local (embedded replica) e reseta a conexão,
-  /// forçando o próximo init() a rebaixar tudo do zero do Turso. É a única
-  /// saída quando o replica local diverge do remoto de um jeito que o push
-  /// não consegue mais reconciliar sozinho (ex: InvalidPushFrameConflict) —
-  /// gravações feitas offline e ainda não sincronizadas são perdidas.
-  Future<bool> limparCacheLocal() async {
-    final clienteAntigo = _client;
+  /// Confere rede e proteção antes de permitir reconstruir a réplica.
+  /// Falhas preservam o cache. A checagem é repetida sob exclusão mútua.
+  Future<void> verificarProtecaoParaRecuperar() async {
+    if (!await _remotoAlcancavel()) {
+      throw StateError(
+        'Conecte à internet antes de recuperar. O cache foi preservado.',
+      );
+    }
+    final abertas = await mutacoesPendentes();
+    if (_gravacoesPendentes > abertas.length) {
+      throw StateError(
+        'Há gravações locais sem proteção comprovada. '
+        'O cache foi preservado; confira essas alterações antes de recuperar.',
+      );
+    }
+    if (_client != null) {
+      final carimbos = await _client!.query(
+        'SELECT uuid FROM app_mutacoes_aplicadas',
+      );
+      final vistosLocalmente = {for (final linha in carimbos) linha['uuid']};
+      for (final m in abertas) {
+        if (!vistosLocalmente.contains(m.uuid)) {
+          await _outbox.marcar(m.uuid, EstadoMutacao.revisaoManual);
+        }
+      }
+      final registradas = await _outbox.todosUuids();
+      // Apenas carimbos ainda ausentes do servidor precisam de proteção local.
+      final remoto = await _sondaRemota();
+      if (remoto == null)
+        throw StateError('Conecte à internet antes de recuperar.');
+      for (final linha in carimbos) {
+        final uuid = linha['uuid'];
+        if (registradas.contains(uuid)) continue;
+        final enviadas = await remoto
+            .query(
+              'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid = ?',
+              positional: [uuid],
+            )
+            .timeout(_timeoutConexao);
+        if (enviadas.isEmpty) {
+          throw StateError(
+            'Uma gravação local não está protegida. O cache foi preservado.',
+          );
+        }
+      }
+    }
+  }
 
-    _connected       = false;
-    _client          = null;
-    _urlAtiva        = null;
-    _tokenAtivo      = null;
-    _cacheLocalAtivo = null;
-    _modoLocal       = false;
-    _basePendente    = false;
-    _ultimoErroSync  = null;
-    _ultimoAvisoSync = null;
-    _invalidarCachesDeLeitura();
+  Future<bool> limparCacheLocal() => _coordenador.executarRecuperacao(() async {
+    await _aguardarSyncNativo();
+    await verificarProtecaoParaRecuperar();
+    return _limparCacheLocal();
+  });
+
+  Future<bool> _limparCacheLocal() async {
+    final clienteAntigo = _client;
 
     if (clienteAntigo != null) {
       try {
         await clienteAntigo.dispose();
-      } catch (_) {}
+      } catch (_) {
+        throw StateError(
+          'Não foi possível fechar o cache com segurança. Recuperação cancelada.',
+        );
+      }
     }
 
+    _connected = false;
+    _client = null;
+    _urlAtiva = null;
+    _tokenAtivo = null;
+    _cacheLocalAtivo = null;
+    _modoLocal = false;
+    _basePendente = false;
+    _ultimoErroSync = null;
+    _ultimoAvisoSync = null;
+    _invalidarCachesDeLeitura();
+
+    // Cópia fechada e independente, incluindo os sidecars, antes da exclusão.
+    // Falha ao copiar interrompe a recuperação e mantém os originais.
+    final caminho = await _caminhoCacheLocal();
+    final arquivo = File(caminho);
+    final pastaBackup = Directory(
+      '${arquivo.parent.path}/recuperacao_'
+      '${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await pastaBackup.create();
+    final nome = arquivo.uri.pathSegments.last;
+    await for (final item in arquivo.parent.list(followLinks: false)) {
+      if (item is File && item.uri.pathSegments.last.startsWith(nome)) {
+        final copia = await item.copy(
+          '${pastaBackup.path}/${item.uri.pathSegments.last}',
+        );
+        if (await copia.length() != await item.length()) {
+          throw StateError(
+            'Não foi possível preservar o cache. Recuperação cancelada.',
+          );
+        }
+      }
+    }
     if (!await _apagarArquivosDaReplica()) return false;
 
     _ultimaSincronizacao = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(keyUltimaSync);
-    // Aqui, e só aqui: o usuário pediu para apagar sabendo que perde o que não
-    // subiu. É esta a recuperação explícita que a marca em disco espera.
+    // A proteção foi verificada e o cache anterior foi copiado. Só agora
+    // a reconstrução explícita pode remover a marca de divergência.
     await prefs.remove(_chavePorBanco(keyRecuperacaoNecessaria));
     _coordenador.concluirRecuperacao();
     // A outbox NÃO foi apagada junto (ela mora noutro arquivo, é esse o
@@ -1704,9 +1903,9 @@ class TursoService {
       final stmtCheck = await client.prepare(
         'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
       );
-      final jaAplicada =
-          (await stmtCheck.query(positional: [_migracaoEstante3]))
-              as List<dynamic>;
+      final jaAplicada = (await stmtCheck.query(
+        positional: [_migracaoEstante3],
+      )) as List<dynamic>;
       if (jaAplicada.isNotEmpty) return;
 
       final stmtUpdate = await client.prepare(
@@ -1717,10 +1916,9 @@ class TursoService {
       final stmtInsert = await client.prepare(
         'INSERT INTO app_migrations (nome, aplicada_em) VALUES (?, ?)',
       );
-      await stmtInsert.query(positional: [
-        _migracaoEstante3,
-        DateTime.now().toIso8601String(),
-      ]);
+      await stmtInsert.query(
+        positional: [_migracaoEstante3, DateTime.now().toIso8601String()],
+      );
     } catch (_) {
       // Se a migração falhar, não derruba a conexão — só tenta de novo no
       // próximo init().
@@ -1738,18 +1936,17 @@ class TursoService {
       final stmtCheck = await client.prepare(
         'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
       );
-      final jaAplicada =
-          (await stmtCheck.query(positional: [_migracaoPaletes]))
-              as List<dynamic>;
+      final jaAplicada = (await stmtCheck.query(
+        positional: [_migracaoPaletes],
+      )) as List<dynamic>;
       if (jaAplicada.isNotEmpty) return;
 
       final stmtInsert = await client.prepare(
         'INSERT INTO app_migrations (nome, aplicada_em) VALUES (?, ?)',
       );
-      await stmtInsert.query(positional: [
-        _migracaoPaletes,
-        DateTime.now().toIso8601String(),
-      ]);
+      await stmtInsert.query(
+        positional: [_migracaoPaletes, DateTime.now().toIso8601String()],
+      );
     } catch (_) {
       // Se a migração falhar, não derruba a conexão — só tenta de novo no
       // próximo init().
@@ -1809,7 +2006,7 @@ class TursoService {
     if (!forceRefresh && !_catalogoLidoDoBanco && _produtosCache == null) {
       final doDisco = await _lerCatalogoDoDisco();
       if (doDisco != null && doDisco.isNotEmpty) {
-        _produtosCache   = doDisco;
+        _produtosCache = doDisco;
         _produtosCacheEm = DateTime.now();
         // Devolve agora e confere com o banco atrás: quem abriu o app já pode
         // buscar produto enquanto as 5000 linhas viajam.
@@ -1826,7 +2023,7 @@ class TursoService {
   Future<void> _revalidarCatalogo() async {
     try {
       final anterior = _produtosCache;
-      final atual    = await _consultarCatalogo();
+      final atual = await _consultarCatalogo();
       if (anterior != null && !catalogosIguais(anterior, atual)) {
         dataRevision.value++;
       }
@@ -1859,20 +2056,19 @@ class TursoService {
         );
         final rows = await stmt.query();
         return (rows as List<dynamic>).map((dynamic row) {
-          final r      = row as Map<String, dynamic>;
-          final cat    = r['categoria'] as String? ?? '';
+          final r = row as Map<String, dynamic>;
+          final cat = r['categoria'] as String? ?? '';
           final corHex = categoriaCores[cat] ?? '#888888';
           return Produto(
-            codigo:    r['codigo']  as String? ?? '',
-            nome:      r['produto'] as String? ?? '',
+            codigo: r['codigo'] as String? ?? '',
+            nome: r['produto'] as String? ?? '',
             categoria: cat,
-            corHex:    corHex,
+            corHex: corHex,
           );
-        }).toList()
-          ..sort((a, b) => a.nome.compareTo(b.nome));
+        }).toList()..sort((a, b) => a.nome.compareTo(b.nome));
       });
-      _produtosCache       = produtos;
-      _produtosCacheEm     = DateTime.now();
+      _produtosCache = produtos;
+      _produtosCacheEm = DateTime.now();
       _catalogoLidoDoBanco = true;
       // Só grava quando mudou: reescrever ~300 KB a cada leitura idêntica
       // gastaria disco (e bateria) sem trocar um byte de conteúdo.
@@ -1917,10 +2113,10 @@ class TursoService {
         for (final dynamic item in itens)
           if (item is List && item.length == 3)
             Produto(
-              codigo:    item[0] as String? ?? '',
-              nome:      item[1] as String? ?? '',
+              codigo: item[0] as String? ?? '',
+              nome: item[1] as String? ?? '',
               categoria: item[2] as String? ?? '',
-              corHex:    categoriaCores[item[2] as String? ?? ''] ?? '#888888',
+              corHex: categoriaCores[item[2] as String? ?? ''] ?? '#888888',
             ),
       ];
     } catch (_) {
@@ -1938,15 +2134,15 @@ class TursoService {
       // quer aqui é justamente uma leitura curta na abertura.
       final dados = jsonEncode({
         'versao': _versaoCatalogoEmDisco,
-        'url':    _urlConfigurada ?? '',
-        'itens':  [
+        'url': _urlConfigurada ?? '',
+        'itens': [
           for (final p in produtos) [p.codigo, p.nome, p.categoria],
         ],
       });
       // Grava num temporário e renomeia: o rename é atômico, então uma queda
       // no meio da escrita não deixa meio catálogo no lugar do inteiro.
       final caminho = await _caminhoCatalogo();
-      final temp    = File('$caminho.tmp');
+      final temp = File('$caminho.tmp');
       await temp.writeAsString(dados, flush: true);
       await temp.rename(caminho);
     } catch (_) {
@@ -1957,13 +2153,13 @@ class TursoService {
 
   CaixaLayout _caixaLayoutDaLinha(Map<String, dynamic> r, int gondolaNum) =>
       CaixaLayout(
-        gondolaNum:    r['gondola_num']    as int?    ?? gondolaNum,
-        andar:         r['andar']          as int?    ?? 0,
+        gondolaNum: r['gondola_num'] as int? ?? gondolaNum,
+        andar: r['andar'] as int? ?? 0,
         produtoCodigo: r['produto_codigo'] as String? ?? '',
-        produtoNome:   r['produto_nome']   as String? ?? '',
-        posX:          (r['pos_x']  as num?)?.toDouble() ?? 0,
-        posZ:          (r['pos_z']  as num?)?.toDouble() ?? 0,
-        corHex:        r['cor_hex']        as String? ?? '#888888',
+        produtoNome: r['produto_nome'] as String? ?? '',
+        posX: (r['pos_x'] as num?)?.toDouble() ?? 0,
+        posZ: (r['pos_z'] as num?)?.toDouble() ?? 0,
+        corHex: r['cor_hex'] as String? ?? '#888888',
       );
 
   static const String _colunasLayoutGondola =
@@ -1993,8 +2189,10 @@ class TursoService {
         );
         final rows = await stmt.query(positional: [gondolaNum]);
         return (rows as List<dynamic>)
-            .map((dynamic row) =>
-                _caixaLayoutDaLinha(row as Map<String, dynamic>, gondolaNum))
+            .map(
+              (dynamic row) =>
+                  _caixaLayoutDaLinha(row as Map<String, dynamic>, gondolaNum),
+            )
             .toList();
       });
       _cacheGondola.gravar(gondolaNum, itens);
@@ -2025,7 +2223,8 @@ class TursoService {
   Future<bool> salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
     try {
       return await garantirReplicaProntaParaEscrita(
-          () => _salvarLayout(gondolaNum, itens));
+        () => _salvarLayout(gondolaNum, itens),
+      );
     } on ReplicaNaoProntaParaEscrita {
       return false;
     }
@@ -2079,17 +2278,17 @@ class TursoService {
       }
       mutacao = await abrirMutacao(
         operacao: 'layout.salvarGondola',
-        tabela:   'gondola_layout',
-        chave:    {'gondola_num': gondolaNum},
+        tabela: 'gondola_layout',
+        chave: {'gondola_num': gondolaNum},
         estadoAnterior: {'itens': _resumoLayout(antes)},
         estadoFinal: {
           'itens': _resumoLayout([
             for (final i in itens)
               {
-                'andar':          i.andar,
+                'andar': i.andar,
                 'produto_codigo': i.produtoCodigo,
-                'pos_x':          i.posX,
-                'pos_z':          i.posZ,
+                'pos_x': i.posX,
+                'pos_z': i.posZ,
               },
           ]),
         },
@@ -2111,16 +2310,17 @@ class TursoService {
   }
 
   CaixaLayoutEstante _caixaLayoutEstanteDaLinha(
-          Map<String, dynamic> r, int estanteNum) =>
-      CaixaLayoutEstante(
-        estanteNum:    r['estante_num']    as int?    ?? estanteNum,
-        coluna:        r['coluna']         as int?    ?? 0,
-        nivel:         r['nivel']          as int?    ?? 0,
-        slot:          r['slot']           as int?    ?? 0,
-        produtoCodigo: r['produto_codigo'] as String? ?? '',
-        produtoNome:   r['produto_nome']   as String? ?? '',
-        corHex:        r['cor_hex']        as String? ?? '#888888',
-      );
+    Map<String, dynamic> r,
+    int estanteNum,
+  ) => CaixaLayoutEstante(
+    estanteNum: r['estante_num'] as int? ?? estanteNum,
+    coluna: r['coluna'] as int? ?? 0,
+    nivel: r['nivel'] as int? ?? 0,
+    slot: r['slot'] as int? ?? 0,
+    produtoCodigo: r['produto_codigo'] as String? ?? '',
+    produtoNome: r['produto_nome'] as String? ?? '',
+    corHex: r['cor_hex'] as String? ?? '#888888',
+  );
 
   static const String _colunasLayoutEstante =
       'estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex';
@@ -2137,20 +2337,26 @@ class TursoService {
     if (!forceRefresh && cache != null && _modoLocal) return cache;
     if (!await _garantirConexao()) return cache ?? [];
     try {
-      final itens =
-          await cronometrar('fetchLayoutEstante($estanteNum)', () async {
-        consultasEmitidas++;
-        final stmt = await _client!.prepare(
-          'SELECT $_colunasLayoutEstante '
-          'FROM estante_layout WHERE estante_num = ? ORDER BY id',
-        );
-        final rows = await stmt.query(positional: [estanteNum]);
-        return (rows as List<dynamic>)
-            .map((dynamic row) => _caixaLayoutEstanteDaLinha(
-                row as Map<String, dynamic>, estanteNum))
-            .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
-            .toList();
-      });
+      final itens = await cronometrar(
+        'fetchLayoutEstante($estanteNum)',
+        () async {
+          consultasEmitidas++;
+          final stmt = await _client!.prepare(
+            'SELECT $_colunasLayoutEstante '
+            'FROM estante_layout WHERE estante_num = ? ORDER BY id',
+          );
+          final rows = await stmt.query(positional: [estanteNum]);
+          return (rows as List<dynamic>)
+              .map(
+                (dynamic row) => _caixaLayoutEstanteDaLinha(
+                  row as Map<String, dynamic>,
+                  estanteNum,
+                ),
+              )
+              .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
+              .toList();
+        },
+      );
       _cacheEstante.gravar(estanteNum, itens);
       return itens;
     } catch (_) {
@@ -2215,9 +2421,7 @@ class TursoService {
           // Mesmo filtro de fetchLayoutEstante: sem ele uma leitura do cache
           // discordaria de uma consulta fresca da mesma estante.
           if (_ehBaseNelloreRemovida(caixa.estanteNum, caixa.nivel)) continue;
-          porEstante
-              .putIfAbsent(num_, () => <CaixaLayoutEstante>[])
-              .add(caixa);
+          porEstante.putIfAbsent(num_, () => <CaixaLayoutEstante>[]).add(caixa);
         }
         porEstante.forEach((n, itens) {
           if (_cacheEstante.ler(n) == null) _cacheEstante.gravar(n, itens);
@@ -2240,17 +2444,22 @@ class TursoService {
   }
 
   Future<bool> salvarLayoutEstante(
-      int estanteNum, List<CaixaLayoutEstante> itens) async {
+    int estanteNum,
+    List<CaixaLayoutEstante> itens,
+  ) async {
     try {
       return await garantirReplicaProntaParaEscrita(
-          () => _salvarLayoutEstante(estanteNum, itens));
+        () => _salvarLayoutEstante(estanteNum, itens),
+      );
     } on ReplicaNaoProntaParaEscrita {
       return false;
     }
   }
 
   Future<bool> _salvarLayoutEstante(
-      int estanteNum, List<CaixaLayoutEstante> itens) async {
+    int estanteNum,
+    List<CaixaLayoutEstante> itens,
+  ) async {
     if (!await _garantirConexao()) return false;
     final tx = await _client!.transaction();
     MutacaoOutbox? mutacao;
@@ -2293,16 +2502,16 @@ class TursoService {
       }
       mutacao = await abrirMutacao(
         operacao: 'layout.salvarEstante',
-        tabela:   'estante_layout',
-        chave:    {'estante_num': estanteNum},
+        tabela: 'estante_layout',
+        chave: {'estante_num': estanteNum},
         estadoAnterior: {'itens': _resumoLayout(antes)},
         estadoFinal: {
           'itens': _resumoLayout([
             for (final i in itens)
               {
-                'coluna':         i.coluna,
-                'nivel':          i.nivel,
-                'slot':           i.slot,
+                'coluna': i.coluna,
+                'nivel': i.nivel,
+                'slot': i.slot,
                 'produto_codigo': i.produtoCodigo,
               },
           ]),
@@ -2341,13 +2550,13 @@ class TursoService {
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;
       return CaixaLayoutEstante(
-        estanteNum:    r['estante_num']    as int?    ?? 0,
-        coluna:        r['coluna']         as int?    ?? 0,
-        nivel:         r['nivel']          as int?    ?? 0,
-        slot:          r['slot']           as int?    ?? 0,
+        estanteNum: r['estante_num'] as int? ?? 0,
+        coluna: r['coluna'] as int? ?? 0,
+        nivel: r['nivel'] as int? ?? 0,
+        slot: r['slot'] as int? ?? 0,
         produtoCodigo: r['produto_codigo'] as String? ?? produtoCodigo,
-        produtoNome:   r['produto_nome']   as String? ?? '',
-        corHex:        r['cor_hex']        as String? ?? '#888888',
+        produtoNome: r['produto_nome'] as String? ?? '',
+        corHex: r['cor_hex'] as String? ?? '#888888',
       );
     } catch (_) {
       return null;
@@ -2367,8 +2576,11 @@ class TursoService {
       _buscarNasEstantes(like),
       _buscarNoGalpao(like),
     ]);
-    return _anexarQuantidades(
-        [...resultados[0], ...resultados[1], ...resultados[2]]);
+    return _anexarQuantidades([
+      ...resultados[0],
+      ...resultados[1],
+      ...resultados[2],
+    ]);
   }
 
   /// Produtos do galpão que casam com a busca. Lê galpao_racks (a ocupação),
@@ -2388,24 +2600,24 @@ class TursoService {
       );
       final rows = await stmt.query(positional: [like, like]);
       return (rows as List<dynamic>).map((dynamic row) {
-        final r       = row as Map<String, dynamic>;
+        final r = row as Map<String, dynamic>;
         final posicao = r['posicao'] as int? ?? 0;
-        final ordem   = r['ordem']   as int? ?? 1;
-        final rua     = GalpaoConfig.ruaDe(posicao);
+        final ordem = r['ordem'] as int? ?? 1;
+        final rua = GalpaoConfig.ruaDe(posicao);
         return ProdutoEncontrado(
-          nome:           r['produto_nome']   as String? ?? '',
-          tipo:           localTipoGalpao,
-          numero:         posicao,
+          nome: r['produto_nome'] as String? ?? '',
+          tipo: localTipoGalpao,
+          numero: posicao,
           // O endereço do galpão é '<número> · N<nível>'; a rua é derivada e
           // entra só para orientar quem vai buscar.
           nivelDescricao: rua == null
               ? 'N$ordem'
               : 'Rua ${rua.numero} · N$ordem',
-          produtoCodigo:  r['produto_codigo'] as String? ?? '',
-          nivel:          ordem,
+          produtoCodigo: r['produto_codigo'] as String? ?? '',
+          nivel: ordem,
           // A quantidade vem da própria linha do rack — não precisa esperar
           // o espelho em estoque_localizado.
-          quantidade:     (r['quantidade'] as num?)?.toDouble(),
+          quantidade: (r['quantidade'] as num?)?.toDouble(),
         );
       }).toList();
     } catch (_) {
@@ -2419,7 +2631,8 @@ class TursoService {
   /// local: gôndola casa pelo endereço exato (face + andar); estante soma as
   /// colunas do nível, já que a busca agrupa por estante + nível.
   Future<List<ProdutoEncontrado>> _anexarQuantidades(
-      List<ProdutoEncontrado> encontrados) async {
+    List<ProdutoEncontrado> encontrados,
+  ) async {
     if (encontrados.isEmpty) return encontrados;
     final codigos = encontrados
         .map((p) => p.produtoCodigo)
@@ -2444,17 +2657,17 @@ class TursoService {
       // estante de mesmo número.
       final somas = <String, double>{};
       for (final dynamic row in rows as List<dynamic>) {
-        final r        = row as Map<String, dynamic>;
-        final codigo   = r['produto_codigo'] as String? ?? '';
-        final tipo     = r['local_tipo']     as String? ?? '';
-        final localNum = r['local_num']      as int?    ?? 0;
-        final fc       = r['face_ou_coluna'] as int?    ?? 0;
-        final an       = r['andar_ou_nivel'] as int?    ?? 0;
-        final qtd      = (r['quantidade'] as num?)?.toDouble() ?? 0;
+        final r = row as Map<String, dynamic>;
+        final codigo = r['produto_codigo'] as String? ?? '';
+        final tipo = r['local_tipo'] as String? ?? '';
+        final localNum = r['local_num'] as int? ?? 0;
+        final fc = r['face_ou_coluna'] as int? ?? 0;
+        final an = r['andar_ou_nivel'] as int? ?? 0;
+        final qtd = (r['quantidade'] as num?)?.toDouble() ?? 0;
         // Estante: mesmo clamp de nível usado em _buscarNasEstantes, pra
         // chave casar com o resultado exibido.
         final chave = switch (tipo) {
-          'gondola'      => 'g|$codigo|$localNum|$fc|$an',
+          'gondola' => 'g|$codigo|$localNum|$fc|$an',
           localTipoGalpao => 'x|$codigo|$localNum|$an',
           _ =>
             'e|$codigo|$localNum|${an.clamp(0, niveisProdutoPara(localNum) - 1)}',
@@ -2487,26 +2700,28 @@ class TursoService {
       const andarNomes = ['Base', 'Meio', 'Topo'];
       // A face é derivada de pos_x/pos_z (sem coluna no banco); caixas do
       // mesmo produto no mesmo endereço G·F·A viram um resultado só.
-      final vistos     = <String>{};
+      final vistos = <String>{};
       final encontrados = <ProdutoEncontrado>[];
       for (final dynamic row in rows as List<dynamic>) {
-        final r    = row as Map<String, dynamic>;
-        final a    = ((r['andar'] as int?) ?? 0).clamp(0, 2);
+        final r = row as Map<String, dynamic>;
+        final a = ((r['andar'] as int?) ?? 0).clamp(0, 2);
         final posX = (r['pos_x'] as num?)?.toDouble() ?? 0;
         final posZ = (r['pos_z'] as num?)?.toDouble() ?? 0;
         final face = faceFromPos(posX, posZ);
-        final codigo  = r['produto_codigo'] as String? ?? '';
-        final gondola = r['gondola_num']    as int?    ?? 0;
+        final codigo = r['produto_codigo'] as String? ?? '';
+        final gondola = r['gondola_num'] as int? ?? 0;
         if (!vistos.add('$codigo|$gondola|$a|$face')) continue;
-        encontrados.add(ProdutoEncontrado(
-          nome:           r['produto_nome'] as String? ?? '',
-          tipo:           'gondola',
-          numero:         gondola,
-          nivelDescricao: 'Face $face · Andar ${andarNomes[a]}',
-          produtoCodigo:  codigo,
-          face:           face,
-          andar:          a,
-        ));
+        encontrados.add(
+          ProdutoEncontrado(
+            nome: r['produto_nome'] as String? ?? '',
+            tipo: 'gondola',
+            numero: gondola,
+            nivelDescricao: 'Face $face · Andar ${andarNomes[a]}',
+            produtoCodigo: codigo,
+            face: face,
+            andar: a,
+          ),
+        );
       }
       return encontrados;
     } catch (_) {
@@ -2525,7 +2740,7 @@ class TursoService {
       );
       final rows = await stmt.query(positional: [like, like]);
       return (rows as List<dynamic>).map((dynamic row) {
-        final r          = row as Map<String, dynamic>;
+        final r = row as Map<String, dynamic>;
         final estanteNum = r['estante_num'] as int? ?? 0;
         final nivProduto = niveisProdutoPara(estanteNum);
         final n = ((r['nivel'] as int?) ?? 0).clamp(0, nivProduto - 1);
@@ -2537,12 +2752,12 @@ class TursoService {
             ? 'Posições ${n * colunasPalete + 1}–${n * colunasPalete + colunasPalete}'
             : 'Nível ${n + 1}';
         return ProdutoEncontrado(
-          nome:           r['produto_nome']   as String? ?? '',
-          tipo:           'estante',
-          numero:         estanteNum,
+          nome: r['produto_nome'] as String? ?? '',
+          tipo: 'estante',
+          numero: estanteNum,
           nivelDescricao: descricao,
-          produtoCodigo:  r['produto_codigo'] as String? ?? '',
-          nivel:          n,
+          produtoCodigo: r['produto_codigo'] as String? ?? '',
+          nivel: n,
         );
       }).toList();
     } catch (_) {
@@ -2562,13 +2777,13 @@ class TursoService {
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;
       return CaixaLayout(
-        gondolaNum:    r['gondola_num']    as int?    ?? 0,
-        andar:         r['andar']          as int?    ?? 0,
+        gondolaNum: r['gondola_num'] as int? ?? 0,
+        andar: r['andar'] as int? ?? 0,
         produtoCodigo: r['produto_codigo'] as String? ?? produtoCodigo,
-        produtoNome:   r['produto_nome']   as String? ?? '',
-        posX:          (r['pos_x']  as num?)?.toDouble() ?? 0,
-        posZ:          (r['pos_z']  as num?)?.toDouble() ?? 0,
-        corHex:        r['cor_hex']        as String? ?? '#888888',
+        produtoNome: r['produto_nome'] as String? ?? '',
+        posX: (r['pos_x'] as num?)?.toDouble() ?? 0,
+        posZ: (r['pos_z'] as num?)?.toDouble() ?? 0,
+        corHex: r['cor_hex'] as String? ?? '#888888',
       );
     } catch (_) {
       return null;
