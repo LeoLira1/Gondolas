@@ -1968,6 +1968,7 @@ class _GondolaPageState extends State<GondolaPage> {
   });
 
   void _limparPorProduto(String produtoId) {
+    if (_salvando) return;
     setState(() {
       _editadas.add(_gondolaAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
@@ -2286,12 +2287,14 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   Future<void> _abrirConfiguracoes() async {
+    if (_salvando) return;
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
     );
     // Reset after possible credential change
     setState(() {
+      _editadas.clear();
       _caixas.clear();
       _produtoSelecionadoId = null;
       _produtoChip          = null;
@@ -3572,6 +3575,7 @@ class _EstantePageState extends State<EstantePage> {
   });
 
   void _limparEstantePorProduto(String produtoId) {
+    if (_salvando) return;
     setState(() {
       _editadas.add(_estanteAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
@@ -3865,11 +3869,13 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   Future<void> _abrirConfiguracoes() async {
+    if (_salvando) return;
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
     );
     setState(() {
+      _editadas.clear();
       _caixas.clear();
       _produtoSelecionadoId = null;
       _produtoChip          = null;

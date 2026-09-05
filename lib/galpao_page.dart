@@ -758,6 +758,24 @@ class _GalpaoPageState extends State<GalpaoPage> {
     final resumoSaldo = _resumoSaldo;
 
     return Scaffold(
+      bottomNavigationBar: _gravandoOnline
+          ? const SafeArea(
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 12),
+                    Text('Gravando no banco online…'),
+                  ],
+                ),
+              ),
+            )
+          : null,
       backgroundColor: const Color(0xFF0b0c0e),
       body: Stack(
         children: [

@@ -379,7 +379,7 @@ void main() {
     testWidgets('últimos lançados aparecem como atalho com a quantidade',
         (tester) async {
       await tester.pumpWidget(const MaterialApp(
-          home: GalpaoPage(catalogoInicial: _catalogoTeste)));
+          home: GalpaoPage(catalogoInicial: _catalogoTeste, pilhasIniciais: {})));
 
       // Primeiro lançamento, pelo caminho longo.
       await tester.tapAt(centroNaTela(tester, 1, 1));
