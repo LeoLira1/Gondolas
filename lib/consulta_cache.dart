@@ -89,6 +89,35 @@ class ConsultaCache {
     await _persistir(chave, linhas);
   }
 
+  /// Atualiza uma estrutura confirmada sem apagar posições de outras estruturas.
+  /// Se a cópia completa ainda não existe, não cria um índice parcial.
+  Future<void> atualizarParte(
+    String chave,
+    bool Function(Map<String, dynamic>) pertence,
+    LinhasConsulta novas,
+  ) async {
+    if (!_valores.containsKey(chave)) {
+      try {
+        final texto = await lerDisco(chave);
+        if (texto == null) return;
+        _valores.putIfAbsent(
+          chave,
+          () => (jsonDecode(texto) as List)
+              .map((r) => Map<String, dynamic>.from(r as Map))
+              .toList(),
+        );
+      } catch (_) {
+        return;
+      }
+    }
+    await confirmar(chave, [
+      ..._valores[chave]!.where((r) => !pertence(r)),
+      ...novas,
+    ]);
+  }
+
+  void expirar(String chave) => _ultimaTentativa.remove(chave);
+
   void invalidarConsultasEmAndamento() => _geracao++;
 
   Future<void> atualizar() async {
