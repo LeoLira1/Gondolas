@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:libsql_dart/libsql_dart.dart';
 // `client.transaction()` devolve um Transaction que o pacote NÃO reexporta no
 // seu libsql_dart.dart (o tipo vaza da API pública sem estar acessível). Sem
@@ -94,12 +96,19 @@ class GalpaoService {
           estadoFinal: null,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
-        await tx.commit();
+        final cacheRows = await tx.query(
+          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+          'FROM galpao_racks ORDER BY posicao, ordem',
+        );
+        await TursoService().confirmarCommit(tx, mutacao);
+        await TursoService().guardarConsulta('galpao', cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
       } catch (e) {
-        await tx.rollback();
+        try {
+          await tx.rollback();
+        } catch (_) {}
         // Rollback: nada foi gravado. O registro não é apagado — a outbox não
         // apaga nada —, só sai da fila de reaplicação.
         if (mutacao != null) await TursoService().abortarMutacao(mutacao);
@@ -117,14 +126,12 @@ class GalpaoService {
   /// Uma consulta só (são no máximo 516 linhas) — percorrer posição a posição
   /// custaria 129 idas ao banco para pintar um frame.
   Future<Map<int, List<RackGalpao>>> carregarPilhas() async {
-    final client = await _conexao();
-    if (client == null) return {};
     try {
-      final stmt = await client.prepare(
+      final rows = await TursoService().consultarComCache(
+        'galpao',
         'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-        'FROM galpao_racks ORDER BY posicao, ordem',
+            'FROM galpao_racks ORDER BY posicao, ordem',
       );
-      final rows = await stmt.query() as List<dynamic>;
       final pilhas = <int, List<RackGalpao>>{};
       for (final dynamic row in rows) {
         final r = row as Map<String, dynamic>;
@@ -306,7 +313,7 @@ class GalpaoService {
           quantidade: quantidade,
         ),
       );
-    } on ReplicaNaoProntaParaEscrita {
+    } catch (_) {
       return null;
     }
   }
@@ -319,12 +326,30 @@ class GalpaoService {
   }) async {
     final client = await _conexao();
     if (client == null) return null;
+    final chavePedido = jsonEncode([
+      'galpao.lancar',
+      posicao,
+      produtoCodigo,
+      produtoNome,
+      quantidade,
+    ]);
+    final rackUuid = await TursoService().pedidoOnline(chavePedido);
     final agora = DateTime.now().toIso8601String();
     // Fora do try: o catch precisa saber se já houve registro para desfazer.
     MutacaoOutbox? mutacao;
     try {
       final tx = await client.transaction();
       try {
+        final aplicado = await tx.query(
+          'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid = ?',
+          positional: [rackUuid],
+        );
+        if (aplicado.isNotEmpty) {
+          final pilha = await _lerPilha(tx, posicao);
+          await tx.rollback();
+          await TursoService().concluirPedidoOnline(chavePedido);
+          return pilha;
+        }
         final rows = await tx.query(
           'SELECT COALESCE(MAX(ordem), 0) AS topo FROM galpao_racks '
           'WHERE posicao = ?',
@@ -336,7 +361,6 @@ class GalpaoService {
           return null;
         }
         final ordem = topo + 1;
-        final rackUuid = gerarUuidV4();
 
         await tx.execute(
           'INSERT INTO galpao_racks (posicao, ordem, produto_codigo, '
@@ -368,6 +392,7 @@ class GalpaoService {
         // toda comparação futura terminar em conflito.
         mutacao = await TursoService().abrirMutacao(
           operacao: 'galpao.lancar',
+          uuid: rackUuid,
           tabela: 'galpao_racks',
           chave: {'rack_uuid': rackUuid},
           estadoAnterior: null, // rack novo no topo da pilha
@@ -383,13 +408,21 @@ class GalpaoService {
           quantidadePretendida: quantidade,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
-        await tx.commit();
+        final cacheRows = await tx.query(
+          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+          'FROM galpao_racks ORDER BY posicao, ordem',
+        );
+        await TursoService().confirmarCommit(tx, mutacao);
+        await TursoService().guardarConsulta('galpao', cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
+        await TursoService().concluirPedidoOnline(chavePedido);
         return pilha;
       } catch (e) {
-        await tx.rollback();
+        try {
+          await tx.rollback();
+        } catch (_) {}
         // Rollback: nada foi gravado. O registro não é apagado — a outbox não
         // apaga nada —, só sai da fila de reaplicação.
         if (mutacao != null) await TursoService().abortarMutacao(mutacao);
@@ -492,13 +525,20 @@ class GalpaoService {
           quantidadePretendida: quantidade,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
-        await tx.commit();
+        final cacheRows = await tx.query(
+          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+          'FROM galpao_racks ORDER BY posicao, ordem',
+        );
+        await TursoService().confirmarCommit(tx, mutacao);
+        await TursoService().guardarConsulta('galpao', cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
-        await tx.rollback();
+        try {
+          await tx.rollback();
+        } catch (_) {}
         // Rollback: nada foi gravado. O registro não é apagado — a outbox não
         // apaga nada —, só sai da fila de reaplicação.
         if (mutacao != null) await TursoService().abortarMutacao(mutacao);
@@ -607,13 +647,20 @@ class GalpaoService {
           quantidadePretendida: 0,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
-        await tx.commit();
+        final cacheRows = await tx.query(
+          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+          'FROM galpao_racks ORDER BY posicao, ordem',
+        );
+        await TursoService().confirmarCommit(tx, mutacao);
+        await TursoService().guardarConsulta('galpao', cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
         return pilha;
       } catch (e) {
-        await tx.rollback();
+        try {
+          await tx.rollback();
+        } catch (_) {}
         // Rollback: nada foi gravado. O registro não é apagado — a outbox não
         // apaga nada —, só sai da fila de reaplicação.
         if (mutacao != null) await TursoService().abortarMutacao(mutacao);

@@ -658,13 +658,13 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                       onChanged: _ocupado ? null : _alterarCacheLocal,
                       activeThumbColor: const Color(0xFF4a9d6a),
                       title: const Text(
-                        'Cache local',
+                        'Cache de consulta',
                         style: TextStyle(color: Colors.white, fontSize: 13),
                       ),
                       subtitle: const Text(
-                        'Guarda os dados num arquivo do dispositivo: o app abre '
-                        'e salva na hora, mesmo com internet ruim. Use o botão '
-                        'Sincronizar para enviar/receber do banco online.',
+                        'Mostra os produtos guardados no celular e atualiza em segundo plano. '
+                        'As alterações são gravadas diretamente no banco online '
+                        'e precisam de internet.',
                         style: TextStyle(
                           color: Color(0xFF8a9aa8),
                           fontSize: 11,
@@ -772,9 +772,9 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                     // adivinhar pelo tempo que o botão levou.
                                     Text(
                                       TursoService().gravacoesPendentes == 1
-                                          ? '1 gravação esperando envio'
+                                          ? '1 gravação antiga precisa de revisão'
                                           : '${TursoService().gravacoesPendentes} '
-                                                'gravações esperando envio',
+                                                'gravações antigas precisam de revisão',
                                       style: const TextStyle(
                                         color: Color(0xFFe0a33e),
                                         fontSize: 11,
@@ -821,8 +821,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                                   : const Icon(Icons.sync, size: 15),
                               label: Text(
                                 _sincronizando
-                                    ? 'Sincronizando...'
-                                    : 'Sincronizar',
+                                    ? 'Atualizando...'
+                                    : 'Atualizar dados',
                               ),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: const Color(0xFF4a9d6a),

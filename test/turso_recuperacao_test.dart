@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// aqui (identidade do banco, marca de recuperação) e volta antes de tentar
 /// qualquer conexão.
 ///
-/// A ORDEM IMPORTA na segunda metade: o TursoService é singleton e a trava da
+/// Contrato anterior substituído: o TursoService é singleton e a trava da
 /// recuperação, uma vez de pé, só sai por recuperação explícita — que é
 /// justamente o que estes testes afirmam. Por isso os testes de troca de banco
 /// vêm antes.
@@ -81,18 +81,31 @@ void main() {
     });
   });
 
-  group('marca de recuperação sobrevive ao init', () {
-    // Banco "vazio": o init lê as chaves desta identidade e volta sem rede.
-    final chaveRecuperacao =
-        '${TursoService.keyRecuperacaoNecessaria}_${idBanco('')}';
+  group('migração para cache de consulta preserva o legado', () {
+    final chave = '${TursoService.keyRecuperacaoNecessaria}_${idBanco('')}';
+    setUp(() {
+      SharedPreferences.setMockInitialValues({
+        chave: true,
+        TursoService.keyCacheLocal: true,
+      });
+    });
 
-    test('init com a marca em disco tranca o portão de escrita', () async {
-      SharedPreferences.setMockInitialValues({chaveRecuperacao: true});
-
+    test('cache ligado não abre réplica para novas gravações', () async {
       await TursoService().init();
+      expect(TursoService().modoLocal, isFalse);
+      expect(TursoService().estadoReplica, EstadoReplica.desconectada);
+      expect((await SharedPreferences.getInstance()).getBool(chave), isTrue);
+    });
 
-      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
+    test('reabrir mantém a marca antiga sem ativar a réplica', () async {
+      await TursoService().init();
+      await TursoService().init();
+      expect(TursoService().modoLocal, isFalse);
+      expect((await SharedPreferences.getInstance()).getBool(chave), isTrue);
+    });
 
+    test('sem conexão não executa escrita nem diz que atualizou', () async {
+      await TursoService().init();
       var escreveu = false;
       await expectLater(
         TursoService().garantirReplicaProntaParaEscrita(
@@ -100,99 +113,41 @@ void main() {
         ),
         throwsA(isA<ReplicaNaoProntaParaEscrita>()),
       );
-      expect(
-        escreveu,
-        isFalse,
-        reason: 'a réplica divergente não pode receber gravação nova',
-      );
+      expect(escreveu, isFalse);
+      expect(await TursoService().sincronizar(), isFalse);
+      expect((await SharedPreferences.getInstance()).getBool(chave), isTrue);
     });
 
-    test('reabrir o app não destrava', () async {
-      // Segundo init da mesma sessão é o que o app faz a cada tela de
-      // configuração; com a marca em disco, é também o que acontece depois de
-      // fechar e abrir.
+    test('desligar cache também mantém o arquivo antigo protegido', () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(TursoService.keyCacheLocal, false);
       await TursoService().init();
-
-      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
+      expect(TursoService().modoLocal, isFalse);
+      expect(prefs.getBool(chave), isTrue);
     });
 
-    test('Sincronizar não roda nem apaga a marca', () async {
-      final ok = await TursoService().sincronizar();
-
-      expect(ok, isFalse);
-      expect(TursoService().ultimoErroSync, contains('Revisar recuperação'));
-      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
-    });
-  });
-
-  // A trava é da RÉPLICA marcada, não do app: fora dela não existe frame
-  // local para o servidor recusar. Estes testes deixam o singleton
-  // destravado, por isso vêm depois do grupo acima.
-  group('a trava não vaza para onde não há réplica divergente', () {
-    final chaveVazio =
-        '${TursoService.keyRecuperacaoNecessaria}_${idBanco('')}';
-
-    test('cache local desligado grava direto no remoto', () async {
-      SharedPreferences.setMockInitialValues({chaveVazio: true});
-      await TursoService().init();
-      expect(
-        TursoService().estadoReplica,
-        EstadoReplica.recuperacaoNecessaria,
-        reason: 'com cache local ligado, a marca vale',
-      );
-
-      // O usuário desliga o cache local: não há mais arquivo de réplica no
-      // caminho, e toda gravação vai pela rede. Travar aqui seria recusar
-      // escrita que não tem como divergir.
-      SharedPreferences.setMockInitialValues({
-        chaveVazio: true,
-        TursoService.keyCacheLocal: false,
-      });
-      await TursoService().init();
-
-      expect(
-        TursoService().estadoReplica,
-        isNot(EstadoReplica.recuperacaoNecessaria),
-      );
-    });
-
-    test('outro banco não herda a trava do anterior', () async {
-      SharedPreferences.setMockInitialValues({chaveVazio: true});
-      await TursoService().init();
-      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
-
-      // Troca para um banco que nunca divergiu. Sem token, o init decide tudo
-      // o que importa aqui e volta antes de tocar na rede.
-      SharedPreferences.setMockInitialValues({
-        chaveVazio: true,
-        TursoService.keyDbUrl: 'libsql://banco-saudavel.turso.io',
-      });
-      await TursoService().init();
-
-      expect(
-        TursoService().estadoReplica,
-        isNot(EstadoReplica.recuperacaoNecessaria),
-        reason: 'a trava do banco anterior ficava presa em memória',
-      );
-    });
-
-    test('voltar ao banco marcado volta a travar', () async {
-      SharedPreferences.setMockInitialValues({
-        chaveVazio: true,
-        TursoService.keyDbUrl: 'libsql://banco-saudavel.turso.io',
-      });
+    test('outro banco não herda a marca antiga', () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(TursoService.keyDbUrl, outraUrl);
       await TursoService().init();
       expect(
         TursoService().estadoReplica,
         isNot(EstadoReplica.recuperacaoNecessaria),
       );
-
-      // A marca continua em disco: ela não some por o app ter passado por
-      // outro banco no meio do caminho.
-      SharedPreferences.setMockInitialValues({chaveVazio: true});
-      await TursoService().init();
-
-      expect(TursoService().estadoReplica, EstadoReplica.recuperacaoNecessaria);
+      expect(prefs.getBool(chave), isTrue);
     });
+
+    test(
+      'voltar ao banco antigo mantém leitura sem reativar offline writes',
+      () async {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(TursoService.keyDbUrl, outraUrl);
+        await TursoService().init();
+        await prefs.setString(TursoService.keyDbUrl, '');
+        await TursoService().init();
+        expect(TursoService().modoLocal, isFalse);
+        expect(prefs.getBool(chave), isTrue);
+      },
+    );
   });
 }
