@@ -27,6 +27,7 @@ class ConsultaCache {
     Future<LinhasConsulta> Function() consultar, {
     bool usarCache = true,
     bool forceRefresh = false,
+    bool falharSemCache = false,
   }) async {
     _consultas[chave] = consultar;
     if (usarCache && !_valores.containsKey(chave)) {
@@ -53,7 +54,8 @@ class ConsultaCache {
     try {
       return _copiar(await _atualizar(chave));
     } catch (_) {
-      if (forceRefresh) rethrow;
+      if (forceRefresh || (falharSemCache && (!usarCache || atual == null)))
+        rethrow;
       return usarCache ? _copiar(atual ?? []) : [];
     }
   }

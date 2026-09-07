@@ -371,8 +371,18 @@ class EstoqueLocalizadoService {
       )];
 
   Future<List<EnderecoLocalizado>> fetchEnderecosProduto(
-    String produtoCodigo,
-  ) async {
+    String produtoCodigo, {
+    bool usarCache = false,
+  }) async {
+    if (usarCache) {
+      final rows = await TursoService().consultarQuantidades(
+        falharSemCache: true,
+      );
+      return rows
+          .where((r) => r['produto_codigo'] == produtoCodigo)
+          .map(_enderecoDaLinha)
+          .toList();
+    }
     final client = await _conexao();
     if (client == null) return [];
     try {
@@ -384,20 +394,24 @@ class EstoqueLocalizadoService {
       final rows = await stmt.query(positional: [produtoCodigo]);
       return (rows as List<dynamic>).map((dynamic row) {
         final r = row as Map<String, dynamic>;
-        return EnderecoLocalizado(
-          id: r['id'] as int?,
-          produtoCodigo: r['produto_codigo'] as String? ?? produtoCodigo,
-          localTipo: r['local_tipo'] as String? ?? 'gondola',
-          localNum: r['local_num'] as int? ?? 0,
-          faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
-          andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
-          quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
-          atualizadoEm: r['atualizado_em'] as String?,
-        );
+        return _enderecoDaLinha(r);
       }).toList();
     } catch (_) {
       return [];
     }
+  }
+
+  static EnderecoLocalizado _enderecoDaLinha(Map<String, dynamic> r) {
+    return EnderecoLocalizado(
+      id: r['id'] as int?,
+      produtoCodigo: r['produto_codigo'] as String? ?? '',
+      localTipo: r['local_tipo'] as String? ?? 'gondola',
+      localNum: r['local_num'] as int? ?? 0,
+      faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
+      andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
+      quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+      atualizadoEm: r['atualizado_em'] as String?,
+    );
   }
 
   Future<double> totalProduto(String produtoCodigo) async {
@@ -405,7 +419,21 @@ class EstoqueLocalizadoService {
     return enderecos.fold<double>(0, (soma, e) => soma + e.quantidade);
   }
 
-  Future<InfoEstoqueMestre?> buscarInfoMestre(String produtoCodigo) async {
+  Future<InfoEstoqueMestre?> buscarInfoMestre(
+    String produtoCodigo, {
+    bool usarCache = false,
+  }) async {
+    if (usarCache) {
+      final rows = await TursoService().consultarSaldos();
+      final encontrados = rows.where((r) => r['codigo'] == produtoCodigo);
+      if (encontrados.isEmpty) return null;
+      final r = encontrados.first;
+      return InfoEstoqueMestre(
+        produtoNome: r['produto'] as String? ?? '',
+        categoria: r['categoria'] as String? ?? '',
+        qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
+      );
+    }
     final client = await _conexao();
     if (client == null) return null;
     try {
@@ -562,9 +590,21 @@ class EstoqueLocalizadoService {
         quantidadePretendida: quantidade,
       );
       await TursoService().carimbarMutacao(tx, mutacao);
+      final quantidadesConfirmadas = await tx.query(
+        'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
+        'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
+        'WHERE produto_codigo = ?',
+        positional: [produtoCodigo],
+      );
       await tx.commit();
       _invalidarCachesBadges();
       await TursoService().marcarGravacaoLocal();
+      await TursoService().guardarQuantidadesProduto(
+        produtoCodigo,
+        quantidadesConfirmadas
+            .map((r) => Map<String, dynamic>.from(r))
+            .toList(),
+      );
       return true;
     } catch (_) {
       await tx.rollback();
@@ -684,9 +724,21 @@ class EstoqueLocalizadoService {
         quantidadePretendida: 0,
       );
       await TursoService().carimbarMutacao(tx, mutacao);
+      final quantidadesConfirmadas = await tx.query(
+        'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
+        'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
+        'WHERE produto_codigo = ?',
+        positional: [produtoCodigo],
+      );
       await tx.commit();
       _invalidarCachesBadges();
       await TursoService().marcarGravacaoLocal();
+      await TursoService().guardarQuantidadesProduto(
+        produtoCodigo,
+        quantidadesConfirmadas
+            .map((r) => Map<String, dynamic>.from(r))
+            .toList(),
+      );
       return true;
     } catch (_) {
       await tx.rollback();
@@ -751,9 +803,21 @@ class EstoqueLocalizadoService {
         posicao: localNum,
       );
       await TursoService().carimbarMutacao(tx, mutacao);
+      final quantidadesConfirmadas = await tx.query(
+        'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
+        'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
+        'WHERE produto_codigo = ?',
+        positional: [produtoCodigo],
+      );
       await tx.commit();
       _invalidarCachesBadges();
       await TursoService().marcarGravacaoLocal();
+      await TursoService().guardarQuantidadesProduto(
+        produtoCodigo,
+        quantidadesConfirmadas
+            .map((r) => Map<String, dynamic>.from(r))
+            .toList(),
+      );
       return true;
     } catch (_) {
       await tx.rollback();

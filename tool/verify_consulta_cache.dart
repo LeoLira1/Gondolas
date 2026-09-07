@@ -91,6 +91,23 @@ Future<void> main() async {
   }
   conferir(falhou, 'Atualização explícita deve reportar falha');
 
+  var semDadosFalhou = false;
+  try {
+    await reiniciado.ler('banco_sem_copia', falhar, falharSemCache: true);
+  } catch (_) {
+    semDadosFalhou = true;
+  }
+  conferir(semDadosFalhou, 'Falha sem cópia não pode parecer quantidade zero');
+  conferir(
+    (await reiniciado.ler(
+          'banco_a_estante',
+          falhar,
+          falharSemCache: true,
+        )).first['produto'] ==
+        'confirmado online',
+    'Modo estrito ainda mostra cópia disponível sem rede',
+  );
+
   final vazio = ConsultaCache(
     lerDisco: (_) async => '[]',
     gravarDisco: (_, __) async {},
