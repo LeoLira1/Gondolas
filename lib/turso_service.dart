@@ -183,10 +183,14 @@ class TursoService {
     String sql, {
     List<dynamic> parametros = const [],
     bool forceRefresh = false,
+    bool falharSemCache = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString(keyDbUrl) ?? '';
-    if (url.isEmpty) return [];
+    if (url.isEmpty) {
+      if (falharSemCache) throw StateError('Banco não configurado');
+      return [];
+    }
     final usarCache = prefs.getBool(keyCacheLocal) ?? true;
     return _consultaCache.ler(
       'consulta_v1_${idBanco(url)}_$chave',
@@ -201,6 +205,7 @@ class TursoService {
       },
       usarCache: usarCache,
       forceRefresh: forceRefresh,
+      falharSemCache: falharSemCache,
     );
   }
 
@@ -243,6 +248,20 @@ class TursoService {
               .toList(),
         );
     }
+  }
+
+  Future<void> guardarQuantidadesProduto(
+    String codigo,
+    List<Map<String, dynamic>> linhas,
+  ) async {
+    final url = _urlAtiva;
+    if (url == null) return;
+    await _consultaCache.atualizarParte(
+      'consulta_v1_${idBanco(url)}_quantidades_detalhes_v2',
+      (r) => r['produto_codigo'] == codigo,
+      linhas,
+    );
+    dataRevision.value++;
   }
 
   /// Na volta do aplicativo a consulta acontece atrás da cena já visível.
@@ -857,7 +876,7 @@ class TursoService {
     if (!_modoLocal) {
       _consultaCache.invalidarConsultasEmAndamento();
       _consultaCache.expirar(
-        'consulta_v1_${_identidadeAtiva}_busca_quantidades',
+        'consulta_v1_${_identidadeAtiva}_quantidades_detalhes_v2',
       );
       return;
     }
@@ -2561,12 +2580,23 @@ class TursoService {
 
   // Busca produto por nome (LIKE) em gôndola_layout E estante_layout,
   // retornando uma lista combinada (gôndolas primeiro).
+  Future<List<Map<String, dynamic>>> consultarQuantidades({
+    bool falharSemCache = false,
+  }) => consultarComCache(
+    'quantidades_detalhes_v2',
+    'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
+        'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado',
+    falharSemCache: falharSemCache,
+  );
+
+  Future<List<Map<String, dynamic>>> consultarSaldos() => consultarComCache(
+    'saldos_dialogo_v1',
+    'SELECT codigo, produto, categoria, qtd_sistema FROM estoque_mestre',
+    falharSemCache: true,
+  );
+
   Future<List<Map<String, dynamic>>> _quantidadesParaBusca() =>
-      consultarComCache(
-        'busca_quantidades',
-        'SELECT produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel, quantidade '
-            'FROM estoque_localizado',
-      );
+      consultarQuantidades();
 
   Future<void> _precarregarBusca() async {
     await Future.wait([
@@ -2574,6 +2604,7 @@ class TursoService {
       _buscarNasEstantes(''),
       _buscarNoGalpao(''),
       _quantidadesParaBusca(),
+      consultarSaldos().catchError((_) => <Map<String, dynamic>>[]),
     ]);
   }
 
