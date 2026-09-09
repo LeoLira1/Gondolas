@@ -8,7 +8,8 @@ import 'barracao_service.dart';
 import 'galpao_page.dart'
     show LancamentoRecente, PainelEnderecoGalpao;
 import 'galpao_scene.dart' show RackGalpao, ToqueGalpao;
-import 'models.dart' show Produto, pluralizar;
+import 'modo_conferencia_service.dart';
+import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
 import 'turso_service.dart';
 
 /// Mapa 3D do BARRACÃO da CAMDA.
@@ -34,12 +35,18 @@ class BarracaoPage extends StatefulWidget {
   /// Código do produto que veio da busca: TODOS os paletes dele acendem em
   /// laranja.
   final String? codigoDestacado;
+  final int? enderecoInicialId;
+  final bool conferenciaAoAbrir;
+  final ModoConferenciaResultado? conferenciaInicial;
 
   const BarracaoPage({
     super.key,
     this.enderecosIniciais,
     this.catalogoInicial,
     this.codigoDestacado,
+    this.enderecoInicialId,
+    this.conferenciaAoAbrir = false,
+    this.conferenciaInicial,
   });
 
   @override
@@ -65,10 +72,14 @@ class _BarracaoPageState extends State<BarracaoPage> {
 
   /// Produto aceso no barracão inteiro (busca ou o botão do painel).
   String? _destacadoCodigo;
+  bool _modoConferencia = false;
+  bool _carregandoConferencia = false;
+  ModoConferenciaResultado? _conferencia;
 
   /// True quando a página fala com o banco. Com endereços semeados por
   /// parâmetro (testes, uso offline) tudo fica em memória.
   bool get _persistindo => widget.enderecosIniciais == null;
+  bool get _consultandoConferencia => widget.conferenciaInicial == null;
 
   @override
   void initState() {
@@ -82,6 +93,10 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final sementeEnderecos = widget.enderecosIniciais;
     if (sementeEnderecos != null) {
       _enderecos = List.unmodifiable(sementeEnderecos);
+      if (widget.enderecoInicialId != null &&
+          _porId(widget.enderecoInicialId!) != null) {
+        _selecionadoId = widget.enderecoInicialId;
+      }
     } else {
       unawaited(_carregarEnderecos());
     }
@@ -96,6 +111,11 @@ class _BarracaoPageState extends State<BarracaoPage> {
     // Uma sincronização traz paletes endereçados em outro aparelho — o mesmo
     // gancho que as outras telas usam para se atualizar sem reabrir.
     TursoService().dataRevision.addListener(_aoAtualizarDados);
+    _conferencia = widget.conferenciaInicial;
+    if (widget.conferenciaAoAbrir) {
+      _modoConferencia = true;
+      if (_consultandoConferencia) unawaited(_carregarConferencia());
+    }
   }
 
   @override
@@ -108,6 +128,9 @@ class _BarracaoPageState extends State<BarracaoPage> {
     if (!mounted || !_persistindo) return;
     unawaited(_carregarEnderecos());
     unawaited(_carregarCatalogo());
+    if (_modoConferencia && _consultandoConferencia) {
+      unawaited(_carregarConferencia());
+    }
   }
 
   Future<void> _carregarEnderecos() async {
@@ -123,6 +146,10 @@ class _BarracaoPageState extends State<BarracaoPage> {
       // lugar que não existe mais no chão.
       if (_selecionadoId != null && _porId(_selecionadoId!) == null) {
         _selecionadoId = null;
+      }
+      final inicial = widget.enderecoInicialId;
+      if (_selecionadoId == null && inicial != null && _porId(inicial) != null) {
+        _selecionadoId = inicial;
       }
     });
   }
@@ -259,6 +286,39 @@ class _BarracaoPageState extends State<BarracaoPage> {
         _destacadoCodigo = _destacadoCodigo == codigo ? null : codigo);
   }
 
+  Future<void> _toggleConferencia() async {
+    if (_modoConferencia) {
+      setState(() {
+        _modoConferencia = false;
+        if (_consultandoConferencia) _conferencia = null;
+      });
+      return;
+    }
+    setState(() => _modoConferencia = true);
+    if (_consultandoConferencia) await _carregarConferencia();
+  }
+
+  Future<void> _carregarConferencia() async {
+    setState(() => _carregandoConferencia = true);
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    if (!mounted) return;
+    setState(() {
+      _conferencia = resultado;
+      _carregandoConferencia = false;
+    });
+  }
+
+  Map<int, int> get _contagemConferencia {
+    final r = _conferencia;
+    if (!_modoConferencia || r == null) return const {};
+    return {for (final p in r.barracao.values) p.posicao: p.itens.length};
+  }
+
+  Set<String> get _codigosConferencia {
+    final r = _conferencia;
+    return !_modoConferencia || r == null ? const {} : r.codigosBarracao;
+  }
+
   int get _ocupados =>
       _enderecos.where((e) => e.ocupado).length;
 
@@ -316,7 +376,10 @@ class _BarracaoPageState extends State<BarracaoPage> {
             enderecos:       _enderecos,
             corPorProduto:   _corPorProduto,
             selecionadoId:   _selecionadoId,
-            destacadoCodigo: _destacadoCodigo,
+            destacadoCodigo: _modoConferencia ? null : _destacadoCodigo,
+            modoConferencia: _modoConferencia,
+            codigosConferencia: _codigosConferencia,
+            contagemConferencia: _contagemConferencia,
             onTapEndereco: (e) =>
                 setState(() => _selecionadoId = e?.id),
           ),
@@ -363,13 +426,17 @@ class _BarracaoPageState extends State<BarracaoPage> {
                         ],
                       ),
                     ),
+                    _ToggleConferenciaBarracao(
+                      ativo: _modoConferencia,
+                      onTap: _toggleConferencia,
+                    ),
                   ],
                 ),
               ),
             ),
           ),
 
-          if (_destacadoCodigo != null)
+          if (_destacadoCodigo != null && !_modoConferencia)
             Positioned(
               top: 0, left: 0, right: 0,
               child: SafeArea(
@@ -380,6 +447,22 @@ class _BarracaoPageState extends State<BarracaoPage> {
                     paletes:  _paletesComDestaque,
                     onLimpar: () =>
                         setState(() => _destacadoCodigo = null),
+                  ),
+                ),
+              ),
+            ),
+
+          if (_modoConferencia)
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 68, 12, 0),
+                  child: _BannerConferenciaBarracao(
+                    carregando: _carregandoConferencia,
+                    resultado: _conferencia,
+                    onRefresh: _carregandoConferencia || !_consultandoConferencia
+                        ? null : _carregarConferencia,
                   ),
                 ),
               ),
@@ -400,8 +483,10 @@ class _BarracaoPageState extends State<BarracaoPage> {
                   catalogo:           _catalogo,
                   recentes:           _recentes,
                   carregandoCatalogo: _carregandoCatalogo,
+                  codigosConferencia: _codigosConferencia,
                   destacadoCodigo:    _destacadoCodigo,
-                  onAlternarDestaque: _alternarDestaque,
+                  onAlternarDestaque:
+                      _modoConferencia ? null : _alternarDestaque,
                   rotuloEndereco:     aberto.rotulo,
                   subtitulo:          _subtituloDoEndereco(aberto),
                   textoVagaLivre:
@@ -426,8 +511,11 @@ class _BarracaoPageState extends State<BarracaoPage> {
                 child: SafeArea(
                   top: false,
                   child: Text(
-                    'Toque num palete para ver o endereço. '
-                    'Um dedo arrasta · dois dedos giram e dão zoom.',
+                    _modoConferencia
+                        ? 'Paletes em ciano guardam produto para conferir hoje — '
+                          'toque num deles para ver o que contar.'
+                        : 'Toque num palete para ver o endereço. '
+                          'Um dedo arrasta · dois dedos giram e dão zoom.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color:    Colors.white.withValues(alpha: 0.35),
@@ -446,10 +534,12 @@ class _BarracaoPageState extends State<BarracaoPage> {
   /// é a encostada na parede do fundo — o mesmo sentido em que os endereços
   /// são numerados.
   String _subtituloDoEndereco(EnderecoBarracao e) {
-    final fileira =
-        ((BarracaoConfig.interiorZ1 - BarracaoConfig.paleteZ / 2 - e.z) /
-                BarracaoConfig.passoZ)
-            .round();
+    var fileira = 0;
+    var menor = double.infinity;
+    for (var i = 0; i < BarracaoConfig.fileiras; i++) {
+      final d = (BarracaoConfig.zDaFileira(i) - e.z).abs();
+      if (d < menor) { menor = d; fileira = i; }
+    }
     return 'Fileira ${fileira + 1} · a ${(e.z / 100).toStringAsFixed(1)} m '
         'da parede das aberturas';
   }
@@ -562,6 +652,69 @@ class _BotaoVoltar extends StatelessWidget {
         child: const Icon(Icons.arrow_back,
             color: Color(0xFF8a877f), size: 20),
       ),
+    );
+  }
+}
+
+class _ToggleConferenciaBarracao extends StatelessWidget {
+  final bool ativo;
+  final VoidCallback onTap;
+  const _ToggleConferenciaBarracao({required this.ativo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      height: 46, width: 46,
+      decoration: BoxDecoration(
+        color: ativo ? corConferenciaCiano.withValues(alpha: 0.18)
+            : const Color(0xEE141518),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: ativo ? corConferenciaCiano
+            : Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Icon(ativo ? Icons.fact_check : Icons.fact_check_outlined,
+        color: ativo ? corConferenciaCiano : const Color(0xFF8a877f), size: 20),
+    ),
+  );
+}
+
+class _BannerConferenciaBarracao extends StatelessWidget {
+  final bool carregando;
+  final ModoConferenciaResultado? resultado;
+  final VoidCallback? onRefresh;
+  const _BannerConferenciaBarracao({required this.carregando,
+    required this.resultado, this.onRefresh});
+
+  @override
+  Widget build(BuildContext context) {
+    final r = resultado;
+    final vazio = !carregando && (r == null || r.barracaoVazioHoje);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xE60d2226),
+        border: Border.all(color: corConferenciaCiano.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
+          color: corConferenciaCiano, size: 15),
+        const SizedBox(width: 8),
+        Expanded(child: Text(
+          carregando ? 'Carregando conferência do dia…'
+              : vazio ? 'Nenhum pendente no barracão hoje 🎉'
+              : 'Conferência do dia: '
+                '${pluralizar(r!.totalProdutosBarracao, 'produto')} em '
+                '${pluralizar(r.totalPosicoesBarracao, 'palete')}',
+          maxLines: 2, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+        )),
+        if (onRefresh != null) IconButton(
+          icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
+          onPressed: onRefresh, padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(), tooltip: 'Atualizar'),
+      ]),
     );
   }
 }

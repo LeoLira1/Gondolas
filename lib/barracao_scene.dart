@@ -1,11 +1,13 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 import 'package:flutter/material.dart';
 
 import 'barracao_config.dart';
 import 'barracao_service.dart' show EnderecoBarracao;
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, ProjecaoCamera;
+import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,7 +68,13 @@ Color corBagBarracao({
   required String produtoCodigo,
   Map<String, Color> corPorProduto = const {},
   String? destacadoCodigo,
+  bool modoConferencia = false,
+  Set<String> codigosConferencia = const {},
 }) {
+  if (modoConferencia) {
+    return codigosConferencia.contains(produtoCodigo)
+        ? corConferenciaCiano : const Color(0xFF34383c);
+  }
   if (destacadoCodigo != null &&
       destacadoCodigo.isNotEmpty &&
       produtoCodigo == destacadoCodigo) {
@@ -106,12 +114,15 @@ class BarracaoGeometry {
     Map<String, Color> corPorProduto = const {},
     int? selecionadoId,
     String? destacadoCodigo,
+    bool modoConferencia = false,
+    Set<String> codigosConferencia = const {},
   }) {
     // As duas coleções entram na chave por IDENTIDADE: List e Map não
     // sobrescrevem `==`, então o registro compara referência — que é
     // exatamente o contrato de "a página trocou os dados", e não uma varredura
     // de 100 endereços a cada frame.
-    final chave = (enderecos, corPorProduto, selecionadoId, destacadoCodigo);
+    final chave = (enderecos, corPorProduto, selecionadoId, destacadoCodigo,
+        modoConferencia, codigosConferencia);
     final cache = _cacheFaces;
     if (cache != null && _cacheChave == chave) return cache;
 
@@ -121,7 +132,9 @@ class BarracaoGeometry {
       _palete(faces, e,
           corPorProduto:   corPorProduto,
           selecionado:     e.id == selecionadoId,
-          destacadoCodigo: destacadoCodigo);
+          destacadoCodigo: destacadoCodigo,
+          modoConferencia: modoConferencia,
+          codigosConferencia: codigosConferencia);
     }
 
     _cacheChave = chave;
@@ -208,6 +221,8 @@ class BarracaoGeometry {
     required Map<String, Color> corPorProduto,
     required bool selecionado,
     String? destacadoCodigo,
+    bool modoConferencia = false,
+    Set<String> codigosConferencia = const {},
   }) {
     const px = BarracaoConfig.paleteX / 2;
     const pz = BarracaoConfig.paleteZ / 2;
@@ -231,6 +246,8 @@ class BarracaoGeometry {
       produtoCodigo:   e.produtoCodigo,
       corPorProduto:   corPorProduto,
       destacadoCodigo: destacadoCodigo,
+      modoConferencia: modoConferencia,
+      codigosConferencia: codigosConferencia,
     );
     _caixa(faces,
         x0: e.x - bx, x1: e.x + bx,
@@ -318,6 +335,9 @@ class BarracaoPainter extends CustomPainter {
   /// busca responde é "onde está este produto", que raramente tem uma resposta
   /// só.
   final String? destacadoCodigo;
+  final bool modoConferencia;
+  final Set<String> codigosConferencia;
+  final Map<int, int> contagemConferencia;
 
   /// Rótulo de cada palete pintado no chão ao lado dele.
   final bool mostrarEtiquetas;
@@ -328,6 +348,9 @@ class BarracaoPainter extends CustomPainter {
     this.corPorProduto    = const {},
     this.selecionadoId,
     this.destacadoCodigo,
+    this.modoConferencia = false,
+    this.codigosConferencia = const {},
+    this.contagemConferencia = const {},
     this.mostrarEtiquetas = true,
   });
 
@@ -352,10 +375,32 @@ class BarracaoPainter extends CustomPainter {
       corPorProduto:   corPorProduto,
       selecionadoId:   selecionadoId,
       destacadoCodigo: codigoAceso,
+      modoConferencia: modoConferencia,
+      codigosConferencia: codigosConferencia,
     );
     proj.projetarFaces(faces);
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _desenharFacesEContornos(canvas, faces, proj, codigoAceso);
+    if (modoConferencia) _desenharBadgesConferencia(canvas, proj);
+  }
+
+  void _desenharBadgesConferencia(Canvas canvas, ProjecaoCamera proj) {
+    for (final e in enderecos) {
+      final n = contagemConferencia[e.id];
+      if (n == null || n <= 0) continue;
+      final hit = proj.projetar(
+          Vec3(e.x, BarracaoConfig.alturaCarga + 28, e.z));
+      if (hit == null) continue;
+      final centro = hit.$1;
+      canvas.drawCircle(centro, 10,
+          Paint()..color = corConferenciaCiano.withValues(alpha: 0.94));
+      final tp = TextPainter(
+        text: TextSpan(text: '$n', style: const TextStyle(
+          color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, centro - Offset(tp.width / 2, tp.height / 2));
+    }
   }
 
   void _desenharPiso(Canvas canvas, ProjecaoCamera proj) {
@@ -635,6 +680,9 @@ class BarracaoPainter extends CustomPainter {
       old.camera.target.z  != camera.target.z  ||
       old.selecionadoId    != selecionadoId    ||
       old.destacadoCodigo  != destacadoCodigo  ||
+      old.modoConferencia  != modoConferencia  ||
+      !setEquals(old.codigosConferencia, codigosConferencia) ||
+      !mapEquals(old.contagemConferencia, contagemConferencia) ||
       old.mostrarEtiquetas != mostrarEtiquetas ||
       !identical(old.enderecos, enderecos)     ||
       !identical(old.corPorProduto, corPorProduto);
@@ -647,6 +695,9 @@ class BarracaoScene extends StatefulWidget {
   final Map<String, Color>     corPorProduto;
   final int?                   selecionadoId;
   final String?                destacadoCodigo;
+  final bool                   modoConferencia;
+  final Set<String>            codigosConferencia;
+  final Map<int, int>          contagemConferencia;
   final bool                   mostrarEtiquetas;
 
   /// Toque num palete, ou null quando o toque caiu fora de qualquer alvo — é
@@ -659,6 +710,9 @@ class BarracaoScene extends StatefulWidget {
     this.corPorProduto    = const {},
     this.selecionadoId,
     this.destacadoCodigo,
+    this.modoConferencia = false,
+    this.codigosConferencia = const {},
+    this.contagemConferencia = const {},
     this.mostrarEtiquetas = true,
     this.onTapEndereco,
   });
@@ -910,6 +964,9 @@ class _BarracaoSceneState extends State<BarracaoScene>
                 corPorProduto:    widget.corPorProduto,
                 selecionadoId:    widget.selecionadoId,
                 destacadoCodigo:  widget.destacadoCodigo,
+                modoConferencia: widget.modoConferencia,
+                codigosConferencia: widget.codigosConferencia,
+                contagemConferencia: widget.contagemConferencia,
                 mostrarEtiquetas: widget.mostrarEtiquetas,
               ),
               child: const SizedBox.expand(),

@@ -145,6 +145,7 @@ class ModoConferenciaResultado {
   final Map<String, EstruturaConferencia> estruturas; // chave '$tipo:$numero'
   // Posições do galpão com pendentes, por número global (1–129).
   final Map<int, PosicaoConferencia> galpao;
+  final Map<int, PosicaoConferencia> barracao;
   final List<ItemPendente> semEndereco;
   final int totalProdutos; // pendentes únicos de hoje relevantes à loja
   // Pendentes de categorias de depósito (ver categoriasExcluidasKeywords) que
@@ -158,11 +159,13 @@ class ModoConferenciaResultado {
     required this.totalProdutos,
     required this.totalFiltradosDeposito,
     this.galpao = const {},
+    this.barracao = const {},
   });
 
   static const vazio = ModoConferenciaResultado(
     estruturas: {},
     galpao: {},
+    barracao: {},
     semEndereco: [],
     totalProdutos: 0,
     totalFiltradosDeposito: 0,
@@ -188,6 +191,13 @@ class ModoConferenciaResultado {
   int get totalProdutosGalpao => codigosGalpao.length;
 
   bool get galpaoVazioHoje => galpao.isEmpty;
+
+  int get totalPosicoesBarracao => barracao.length;
+  Set<String> get codigosBarracao => {
+        for (final p in barracao.values) ...p.codigos,
+      };
+  int get totalProdutosBarracao => codigosBarracao.length;
+  bool get barracaoVazioHoje => barracao.isEmpty;
 }
 
 /// Cruza os pendentes do dia com os endereços já lidos do banco.
@@ -202,9 +212,11 @@ ModoConferenciaResultado montarConferencia({
   required Map<String, Set<int>> gondolasPorCodigo,
   required Map<String, Set<int>> estantesPorCodigo,
   required Map<String, Set<int>> galpaoPorCodigo,
+  Map<String, Set<int>> barracaoPorCodigo = const {},
 }) {
   final estruturas    = <String, List<ItemPendente>>{};
   final posicoes      = <int, List<ItemPendente>>{};
+  final paletesBarracao = <int, List<ItemPendente>>{};
   final semEndereco   = <ItemPendente>[];
   var totalLoja       = 0;
   var filtradosDeposito = 0;
@@ -215,6 +227,10 @@ ModoConferenciaResultado montarConferencia({
     final noGalpao = galpaoPorCodigo[item.codigo] ?? const <int>{};
     for (final numero in noGalpao) {
       posicoes.putIfAbsent(numero, () => []).add(item);
+    }
+    final noBarracao = barracaoPorCodigo[item.codigo] ?? const <int>{};
+    for (final id in noBarracao) {
+      paletesBarracao.putIfAbsent(id, () => []).add(item);
     }
 
     final gondolas = gondolasPorCodigo[item.codigo] ?? const <int>{};
@@ -228,7 +244,7 @@ ModoConferenciaResultado montarConferencia({
     if (!temEnderecoNaLoja && ehCategoriaDeDeposito(item)) {
       // Sem rack no galpão o item não tem onde aparecer — segue oculto, como
       // antes de o galpão existir no app.
-      if (noGalpao.isEmpty) filtradosDeposito++;
+      if (noGalpao.isEmpty && noBarracao.isEmpty) filtradosDeposito++;
       continue;
     }
 
@@ -236,7 +252,7 @@ ModoConferenciaResultado montarConferencia({
     if (!temEnderecoNaLoja) {
       // "Sem endereço" é sem endereço NENHUM: com rack no galpão o item já
       // tem para onde mandar quem vai conferir.
-      if (noGalpao.isEmpty) semEndereco.add(item);
+      if (noGalpao.isEmpty && noBarracao.isEmpty) semEndereco.add(item);
       continue;
     }
     for (final g in gondolas) {
@@ -263,6 +279,13 @@ ModoConferenciaResultado montarConferencia({
           itens:   entry.value,
         ),
     },
+    barracao: {
+      for (final entry in paletesBarracao.entries)
+        entry.key: PosicaoConferencia(
+          posicao: entry.key,
+          itens: entry.value,
+        ),
+    },
     semEndereco:            semEndereco,
     totalProdutos:          totalLoja,
     totalFiltradosDeposito: filtradosDeposito,
@@ -285,7 +308,8 @@ class ModoConferenciaService {
   }
 
   /// Busca os pendentes de contagem_itens e cruza com gondola_layout,
-  /// estante_layout e galpao_racks numa única passada — 4 queries no total (ou
+  /// estante_layout, galpao_racks e barracao_enderecos numa única passada —
+  /// 5 queries no total (ou
   /// poucas mais, se o lote de códigos precisar ser quebrado), nunca uma por
   /// estrutura.
   ///
@@ -307,6 +331,7 @@ class ModoConferenciaService {
         _buscarEnderecosGondola(client, codigosTodos),
         _buscarEnderecosEstante(client, codigosTodos),
         _buscarEnderecosGalpao(client, codigosTodos),
+        _buscarEnderecosBarracao(client, codigosTodos),
       ]);
 
       return montarConferencia(
@@ -314,6 +339,7 @@ class ModoConferenciaService {
         gondolasPorCodigo: resultados[0],
         estantesPorCodigo: resultados[1],
         galpaoPorCodigo:   resultados[2],
+        barracaoPorCodigo: resultados[3],
       );
     } catch (_) {
       return ModoConferenciaResultado.vazio;
@@ -420,6 +446,30 @@ class ModoConferenciaService {
         // carregarPilhas fazem — badge numa posição inexistente não desenha.
         if (GalpaoConfig.porNumero(posicao) == null) continue;
         mapa.putIfAbsent(codigo, () => <int>{}).add(posicao);
+      }
+    }
+    return mapa;
+  }
+
+  Future<Map<String, Set<int>>> _buscarEnderecosBarracao(
+      LibsqlClient client, List<String> codigos) async {
+    final mapa = <String, Set<int>>{};
+    for (var i = 0; i < codigos.length; i += _maxCodigosPorConsulta) {
+      final fim = (i + _maxCodigosPorConsulta < codigos.length)
+          ? i + _maxCodigosPorConsulta : codigos.length;
+      final lote = codigos.sublist(i, fim);
+      final placeholders = List.filled(lote.length, '?').join(', ');
+      final stmt = await client.prepare(
+        'SELECT DISTINCT produto_codigo, id FROM barracao_enderecos '
+        'WHERE produto_codigo IN ($placeholders)',
+      );
+      final rows = await stmt.query(positional: lote);
+      for (final dynamic row in rows as List<dynamic>) {
+        final r = row as Map<String, dynamic>;
+        final codigo = r['produto_codigo'] as String? ?? '';
+        final id = r['id'] as int? ?? 0;
+        if (codigo.isEmpty || id <= 0) continue;
+        mapa.putIfAbsent(codigo, () => <int>{}).add(id);
       }
     }
     return mapa;

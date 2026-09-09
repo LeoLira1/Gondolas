@@ -13,6 +13,7 @@ import 'package:libsql_dart/src/transaction.dart' show Transaction;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'barracao_layout_migration.dart';
 import 'galpao_config.dart';
 import 'galpao_migracao_unidades.dart';
 import 'layout_cache.dart';
@@ -878,8 +879,14 @@ class TursoService {
       _consultaCache.expirar(
         'consulta_v1_${_identidadeAtiva}_quantidades_detalhes_v2',
       );
+      _consultaCache.expirar(
+        'consulta_v1_${_identidadeAtiva}_busca_barracao',
+      );
       return;
     }
+    _consultaCache.expirar(
+      'consulta_v1_${_identidadeAtiva}_busca_barracao',
+    );
     _gravacoesPendentes++;
     await _persistirGravacoesPendentes();
   }
@@ -1082,6 +1089,7 @@ class TursoService {
       await _migrarEsquemaLabelsEstante3(client);
       await _migrarPaletesCadastroDinamico(client);
       await migrarGalpaoParaUnidades(client);
+      await migrarBarracaoParaLayout2x2(client);
       _client = client;
       _connected = true;
       _modoLocal = false;
@@ -1169,6 +1177,7 @@ class TursoService {
     await _migrarEsquemaLabelsEstante3(client);
     await _migrarPaletesCadastroDinamico(client);
     await migrarGalpaoParaUnidades(client);
+    await migrarBarracaoParaLayout2x2(client);
     _basePendente = false;
     _coordenador.definirEstado(EstadoReplica.pronta);
     final prefs = await SharedPreferences.getInstance();
@@ -2603,6 +2612,7 @@ class TursoService {
       _buscarNasGondolas(''),
       _buscarNasEstantes(''),
       _buscarNoGalpao(''),
+      _buscarNoBarracao(''),
       _quantidadesParaBusca(),
       consultarSaldos().catchError((_) => <Map<String, dynamic>>[]),
     ]);
@@ -2617,11 +2627,13 @@ class TursoService {
       _buscarNasGondolas(like),
       _buscarNasEstantes(like),
       _buscarNoGalpao(like),
+      _buscarNoBarracao(like),
     ]);
     return _anexarQuantidades([
       ...resultados[0],
       ...resultados[1],
       ...resultados[2],
+      ...resultados[3],
     ]);
   }
 
@@ -2670,6 +2682,33 @@ class TursoService {
     }
   }
 
+  Future<List<ProdutoEncontrado>> _buscarNoBarracao(String like) async {
+    try {
+      final rows = filtrarBuscaLocal(
+        await consultarComCache(
+          'busca_barracao',
+          'SELECT id, rotulo, produto_codigo, produto_nome, quantidade '
+              "FROM barracao_enderecos WHERE produto_codigo <> '' "
+              'ORDER BY produto_nome, rotulo',
+        ),
+        like,
+      );
+      return rows.map((dynamic row) {
+        final r = row as Map<String, dynamic>;
+        return ProdutoEncontrado(
+          nome:             r['produto_nome'] as String? ?? '',
+          tipo:             localTipoBarracao,
+          numero:           r['id'] as int? ?? 0,
+          nivelDescricao:   r['rotulo'] as String? ?? 'Barracão',
+          produtoCodigo:    r['produto_codigo'] as String? ?? '',
+          quantidade:       (r['quantidade'] as num?)?.toDouble(),
+        );
+      }).where((p) => p.numero > 0 && p.produtoCodigo.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Anexa a cada resultado a quantidade contada (estoque_localizado) no seu
   /// local: gôndola casa pelo endereço exato (face + andar); estante soma as
   /// colunas do nível, já que a busca agrupa por estante + nível.
@@ -2707,6 +2746,7 @@ class TursoService {
         final chave = switch (tipo) {
           'gondola' => 'g|$codigo|$localNum|$fc|$an',
           localTipoGalpao => 'x|$codigo|$localNum|$an',
+          localTipoBarracao => 'b|$codigo|$localNum',
           _ =>
             'e|$codigo|$localNum|${an.clamp(0, niveisProdutoPara(localNum) - 1)}',
         };
@@ -2716,7 +2756,7 @@ class TursoService {
       return encontrados.map((p) {
         // O galpão já traz a quantidade da própria linha do rack; o espelho
         // em estoque_localizado só confirmaria o mesmo número.
-        if (p.tipo == localTipoGalpao) return p;
+        if (p.tipo == localTipoGalpao || p.tipo == localTipoBarracao) return p;
         final chave = p.tipo == 'gondola'
             ? 'g|${p.produtoCodigo}|${p.numero}|${p.face}|${p.andar}'
             : 'e|${p.produtoCodigo}|${p.numero}|${p.nivel}';

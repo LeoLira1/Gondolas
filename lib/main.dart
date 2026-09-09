@@ -330,6 +330,13 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
           codigoDestacado: produto?.produtoCodigo,
         ),
       ));
+    } else if (tipo == localTipoBarracao) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => BarracaoPage(
+          enderecoInicialId: numero,
+          codigoDestacado: produto?.produtoCodigo,
+        ),
+      ));
     } else if (tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
@@ -392,6 +399,13 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
     ));
     // Confirmações feitas no app de contagem enquanto o galpão estava aberto
     // valem para os dois prédios — o mesmo recarregar de _abrirEstrutura.
+    if (mounted && _modoConferencia) _carregarConferencia();
+  }
+
+  Future<void> _abrirBarracaoEmConferencia() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const BarracaoPage(conferenciaAoAbrir: true),
+    ));
     if (mounted && _modoConferencia) _carregarConferencia();
   }
 
@@ -730,6 +744,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                           foraDoMapa: _estruturasForaDoMapa,
                           onVerForaDoMapa: _mostrarForaDoMapa,
                           onVerGalpao: _abrirGalpaoEmConferencia,
+                          onVerBarracao: _abrirBarracaoEmConferencia,
                         ),
                       ),
                     // Título / dica
@@ -1028,6 +1043,7 @@ class _BannerConferencia extends StatelessWidget {
   // Pendentes com rack no galpão: outro prédio, outro mapa — atalho próprio,
   // que abre o galpão já em Modo Conferência.
   final VoidCallback               onVerGalpao;
+  final VoidCallback               onVerBarracao;
 
   const _BannerConferencia({
     required this.carregando,
@@ -1037,6 +1053,7 @@ class _BannerConferencia extends StatelessWidget {
     this.foraDoMapa = const [],
     required this.onVerForaDoMapa,
     required this.onVerGalpao,
+    required this.onVerBarracao,
   });
 
   @override
@@ -1045,12 +1062,15 @@ class _BannerConferencia extends StatelessWidget {
     // "Nada hoje" agora exige os dois prédios vazios: com o galpão no app, um
     // dia só de herbicida e adubo tem conferência de verdade, ainda que nenhuma
     // estrutura da loja acenda.
-    final vazio = !carregando && (r == null || (r.vazioHoje && r.galpaoVazioHoje));
+    final vazio = !carregando && (r == null ||
+        (r.vazioHoje && r.galpaoVazioHoje && r.barracaoVazioHoje));
     final temSemEndereco = !carregando && r != null && r.semEndereco.isNotEmpty;
     final temFiltrados   = !carregando && r != null && r.totalFiltradosDeposito > 0;
     final temForaDoMapa  = !carregando && foraDoMapa.isNotEmpty;
     final noGalpao       = r == null ? 0 : r.totalProdutosGalpao;
     final temGalpao      = !carregando && noGalpao > 0;
+    final noBarracao     = r == null ? 0 : r.totalProdutosBarracao;
+    final temBarracao    = !carregando && noBarracao > 0;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -1083,8 +1103,8 @@ class _BannerConferencia extends StatelessWidget {
                         : r!.vazioHoje
                             // Nenhuma estrutura da loja acesa, mas o galpão tem
                             // racks a conferir: o chip abaixo é o caminho.
-                            ? 'Nada a conferir na loja hoje — a conferência é '
-                              'no galpão'
+                            ? 'Nada a conferir na loja hoje — veja os '
+                              'depósitos abaixo'
                             // Só os dois números que valem para o mapa: o resto
                             // virou chip, e chip não empurra o texto.
                             : 'Conferência do dia: '
@@ -1109,7 +1129,8 @@ class _BannerConferencia extends StatelessWidget {
               tooltip: 'Atualizar',
             ),
           ]),
-          if (temGalpao || temForaDoMapa || temSemEndereco || temFiltrados)
+          if (temGalpao || temBarracao || temForaDoMapa ||
+              temSemEndereco || temFiltrados)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Wrap(
@@ -1124,6 +1145,15 @@ class _BannerConferencia extends StatelessWidget {
                       corFundo: corConferenciaCiano.withValues(alpha: 0.16),
                       corBorda: corConferenciaCiano.withValues(alpha: 0.6),
                       onTap:   onVerGalpao,
+                    ),
+                  if (temBarracao)
+                    _ChipBanner(
+                      icone: Icons.inventory_2_outlined,
+                      texto: '$noBarracao no barracão',
+                      cor: corConferenciaCiano,
+                      corFundo: corConferenciaCiano.withValues(alpha: 0.16),
+                      corBorda: corConferenciaCiano.withValues(alpha: 0.6),
+                      onTap: onVerBarracao,
                     ),
                   if (temForaDoMapa)
                     _ChipBanner(
@@ -1302,7 +1332,9 @@ class _SearchBox extends StatelessWidget {
                             Divider(height: 1, color: Colors.white.withValues(alpha: 0.05)),
                         itemBuilder: (_, i) {
                           final p   = sugestoes[i];
-                          final cor = p.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+                          final cor = p.tipo == 'gondola' ? corGondolaLoja
+                              : p.tipo == localTipoGalpao || p.tipo == localTipoBarracao
+                                  ? corCamda : corEstanteLoja;
                           return InkWell(
                             onTap: () => onSelecionar(p),
                             child: Padding(
@@ -1326,8 +1358,10 @@ class _SearchBox extends StatelessWidget {
                                           const SizedBox(width: 5),
                                           Flexible(
                                             child: Text(
-                                              '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
-                                              ' nº ${p.numero} · ${p.nivelDescricao}',
+                                              p.tipo == localTipoBarracao
+                                                  ? 'Barracão · ${p.nivelDescricao}'
+                                                  : '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
+                                                    ' nº ${p.numero} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
                                             ),
@@ -1445,9 +1479,10 @@ class _LocationCard extends StatelessWidget {
     final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
     final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
     final ehGalpaoAqui = tipo == localTipoGalpao;
+    final ehBarracaoAqui = tipo == localTipoBarracao;
     final cor = tipo == 'gondola'
         ? corGondolaLoja
-        : ehGalpaoAqui
+        : ehGalpaoAqui || ehBarracaoAqui
             ? corCamda
             : corEstanteLoja;
     // No galpão o número JÁ é o endereço (1–129, único no galpão inteiro, as
@@ -1457,6 +1492,8 @@ class _LocationCard extends StatelessWidget {
         ? 'G'
         : ehGalpaoAqui
             ? ''
+            : ehBarracaoAqui
+                ? ''
             : ehPaleteAqui
                 ? 'P'
                 : 'E';
@@ -1464,6 +1501,8 @@ class _LocationCard extends StatelessWidget {
         ? 'Gôndola'
         : ehGalpaoAqui
             ? 'Galpão'
+            : ehBarracaoAqui
+                ? 'Barracão'
             : ehPaleteAqui
                 ? 'Palete'
                 : ehParede
@@ -1471,7 +1510,9 @@ class _LocationCard extends StatelessWidget {
                     : 'Estante';
     // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
     // resultado da busca quando há produto selecionado.
-    final numeroTitulo = ehParede
+    final numeroTitulo = ehBarracaoAqui && produto != null
+        ? produto!.nivelDescricao
+        : ehParede
         ? 'E$estanteParedeMin–E$estanteParedeMax'
         : '$prefixo$numero';
     final numeroTexto =
@@ -1513,7 +1554,9 @@ class _LocationCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             produto != null
-                ? '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
+                ? ehBarracaoAqui
+                    ? '${produto!.nome} · $tipoLabel · ${produto!.nivelDescricao}'
+                    : '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
                 : ehParede
                     ? '$tipoLabel · 6 seções · P1–P12'
                     : '$tipoLabel nº $numero',

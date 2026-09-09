@@ -22,12 +22,13 @@
 //
 //     z = 1000  ┌───────────────────────────────────────────────┐  parede cheia
 //               │                                               │
-//               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ … 25 paletes por fileira  │
-//               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ …                         │
-//               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ …  4 fileiras             │
+//               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ … 2 fileiras à esquerda   │
 //               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ …                         │
 //               │                                               │
-//               │        corredor de manobra da empilhadeira    │
+//               │        corredor central da empilhadeira       │
+//               │                                               │
+//               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ … 2 fileiras à direita    │
+//               │   ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ ▤ … 25 paletes por fileira  │
 //     z = 0     └────┤PORTA├──────┤ PORTÃO ├──────┤PORTA├───────┘
 //                x = 0                                    x = 3500
 //
@@ -195,21 +196,14 @@ class BarracaoConfig {
   /// Passo entre fileiras no eixo Z: 100 do palete + 20 de folga.
   static const double passoZ = 120;
 
-  /// Corredor de manobra da empilhadeira: espaço livre exigido entre a face
-  /// interna da parede das aberturas e a fileira mais à frente.
+  /// Corredor central de manobra da empilhadeira.
   static const double corredorManobra = 400;
 
-  /// Quantas fileiras cabem entre a parede do fundo e o corredor de manobra.
-  ///
-  /// As fileiras começam ENCOSTADAS na parede do fundo e avançam para a
-  /// frente; a última só é válida enquanto a borda dianteira dela deixa
-  /// [corredorManobra] livre até a parede das aberturas.
-  static int get fileiras {
-    final disponivel =
-        interiorZ1 - paleteZ - (interiorZ0 + corredorManobra);
-    if (disponivel < 0) return 0;
-    return 1 + (disponivel / passoZ).floor();
-  }
+  static const int fileirasPorLado = 2;
+  static const double recuoDasAberturas = 120;
+
+  /// Quatro fileiras: duas em cada lado do corredor central.
+  static const int fileiras = fileirasPorLado * 2;
 
   /// Quantos paletes cabem numa fileira, entre as duas paredes laterais.
   static int get colunas {
@@ -218,8 +212,16 @@ class BarracaoConfig {
     return 1 + (disponivel / passoX).floor();
   }
 
-  /// Z do centro da fileira [i] (0 = a encostada na parede do fundo).
-  static double zDaFileira(int i) => interiorZ1 - paleteZ / 2 - i * passoZ;
+  /// Z do centro da fileira [i], numerada do fundo para a frente.
+  static double zDaFileira(int i) {
+    assert(i >= 0 && i < fileiras);
+    if (i < fileirasPorLado) {
+      return interiorZ1 - paleteZ / 2 - i * passoZ;
+    }
+    final indiceDoLadoDaFrente = fileiras - 1 - i;
+    return interiorZ0 + recuoDasAberturas + paleteZ / 2 +
+        indiceDoLadoDaFrente * passoZ;
+  }
 
   /// X do centro da coluna [j], com a grade CENTRADA entre as laterais: a
   /// sobra que não fecha um passo inteiro vira folga igual dos dois lados, em
@@ -230,11 +232,12 @@ class BarracaoConfig {
     return interiorX0 + margem + paleteX / 2 + j * passoX;
   }
 
-  /// Espaço livre entre a fileira mais à frente e a face interna da parede
-  /// das aberturas. Existe para o teste cobrar o corredor de manobra sem
-  /// refazer a conta do layout.
-  static double get corredorLivre =>
-      (zDaFileira(fileiras - 1) - paleteZ / 2) - interiorZ0;
+  /// Espaço livre entre as faces internas dos dois blocos.
+  static double get corredorLivre {
+    final fundo = zDaFileira(fileirasPorLado - 1) - paleteZ / 2;
+    final frente = zDaFileira(fileirasPorLado) + paleteZ / 2;
+    return fundo - frente;
+  }
 
   /// Rótulo do endereço de índice [i] (0-based), na sequência CONTÍNUA do
   /// barracão inteiro: BAR-01, BAR-02, … BAR-100. Não reinicia por fileira —
@@ -246,9 +249,8 @@ class BarracaoConfig {
   static String rotuloDoIndice(int i) =>
       'BAR-${(i + 1).toString().padLeft(2, '0')}';
 
-  /// O layout PADRÃO: fileiras paralelas à parede do fundo, começando nela e
-  /// avançando para a frente, numeradas continuamente da fileira do fundo
-  /// para a da frente e, dentro de cada uma, da esquerda para a direita.
+  /// O layout PADRÃO: duas fileiras em cada lado do corredor central,
+  /// numeradas continuamente do fundo para a frente.
   ///
   /// É SEMENTE, não verdade corrente. Quem desenha o barracão lê
   /// `barracao_enderecos` no Turso (ver BarracaoService), porque o número de
@@ -305,5 +307,5 @@ class BarracaoConfig {
   /// e o corredor de manobra ([corredorManobra], 400 cm) mais a meia-folga do
   /// layout deixam a fileira da frente 500 cm adentro — do lado de fora dessa
   /// sombra. Um teste cobra os dois números juntos.
-  static const double rotXPadrao = 0.92;
+  static const double rotXPadrao = 1.40;
 }

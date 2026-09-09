@@ -113,8 +113,9 @@ void main() {
       expect(z + BarracaoConfig.paleteZ / 2, BarracaoConfig.interiorZ1);
     });
 
-    test('as fileiras avançam para a FRENTE, uma por passo', () {
-      for (var i = 1; i < BarracaoConfig.fileiras; i++) {
+    test('há duas fileiras de cada lado, com um passo dentro de cada bloco', () {
+      expect(BarracaoConfig.fileiras, 4);
+      for (final i in [1, 3]) {
         expect(
           BarracaoConfig.zDaFileira(i - 1) - BarracaoConfig.zDaFileira(i),
           closeTo(BarracaoConfig.passoZ, 1e-9),
@@ -127,13 +128,11 @@ void main() {
           greaterThanOrEqualTo(BarracaoConfig.corredorManobra));
     });
 
-    test('não cabe mais uma fileira sem comer o corredor', () {
-      // A fileira seguinte à última existente invadiria os 400 cm — é o que
-      // decide o número de fileiras, e o que um passo diferente mudaria.
-      final proxima = BarracaoConfig.zDaFileira(BarracaoConfig.fileiras) -
+    test('o lado das aberturas mantém uma faixa livre antes dos paletes', () {
+      final frente = BarracaoConfig.zDaFileira(BarracaoConfig.fileiras - 1) -
           BarracaoConfig.paleteZ / 2;
-      expect(proxima - BarracaoConfig.interiorZ0,
-          lessThan(BarracaoConfig.corredorManobra));
+      expect(frente - BarracaoConfig.interiorZ0,
+          BarracaoConfig.recuoDasAberturas);
     });
 
     test('as colunas cabem entre as paredes, com folga igual dos dois lados',
