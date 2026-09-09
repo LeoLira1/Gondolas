@@ -40,6 +40,8 @@ List<Map<String, dynamic>> filtrarBuscaLocal(
             r['nivel'],
             r['posicao'],
             r['ordem'],
+            r['id'],
+            r['rotulo'],
           ]),
         ),
       )

@@ -18,6 +18,7 @@ String chaveDaLinha({
     switch (tipo) {
       'gondola' => 'g|$codigo|$localNum|$faceOuColuna|$andarOuNivel',
       localTipoGalpao => 'x|$codigo|$localNum|$andarOuNivel',
+      localTipoBarracao => 'b|$codigo|$localNum',
       _ => 'e|$codigo|$localNum|'
           '${andarOuNivel.clamp(0, niveisProdutoPara(localNum) - 1)}',
     };
@@ -39,15 +40,16 @@ void main() {
       expect(noGalpao, isNot(naEstante));
     });
 
-    test('gôndola, estante e galpão têm prefixos distintos', () {
+    test('gôndola, estante, galpão e barracão têm prefixos distintos', () {
       final chaves = {
-        for (final tipo in ['gondola', 'estante', localTipoGalpao])
+        for (final tipo in ['gondola', 'estante', localTipoGalpao,
+          localTipoBarracao])
           chaveDaLinha(
             codigo: 'X', tipo: tipo,
             localNum: 3, faceOuColuna: 0, andarOuNivel: 1,
           ),
       };
-      expect(chaves.length, 3);
+      expect(chaves.length, 4);
     });
 
     test('somar duas linhas do MESMO endereço continua funcionando', () {

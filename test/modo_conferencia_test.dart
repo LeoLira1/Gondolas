@@ -16,12 +16,14 @@ ModoConferenciaResultado _montar(
   Map<String, Set<int>> gondolas = const {},
   Map<String, Set<int>> estantes = const {},
   Map<String, Set<int>> galpao   = const {},
+  Map<String, Set<int>> barracao = const {},
 }) =>
     montarConferencia(
       pendentes:         pendentes,
       gondolasPorCodigo: gondolas,
       estantesPorCodigo: estantes,
       galpaoPorCodigo:   galpao,
+      barracaoPorCodigo: barracao,
     );
 
 void main() {
@@ -194,6 +196,18 @@ void main() {
       final comRack = _montar([item], galpao: const {'OM20': {40}});
       expect(comRack.totalFiltradosDeposito, 0);
       expect(comRack.galpao.keys, [40]);
+    });
+  });
+
+  group('cruzamento com o barracão', () {
+    test('produto pendente acende todos os paletes em que está', () {
+      final r = _montar([_item('BAG1', categoria: 'ADUBOS')],
+          barracao: const {'BAG1': {7, 42}});
+      expect(r.barracao.keys, containsAll([7, 42]));
+      expect(r.totalPosicoesBarracao, 2);
+      expect(r.totalProdutosBarracao, 1);
+      expect(r.totalFiltradosDeposito, 0);
+      expect(r.semEndereco, isEmpty);
     });
   });
 }
