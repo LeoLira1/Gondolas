@@ -370,6 +370,11 @@ const String localTipoGalpao = 'galpao';
 /// tem de levar o local_tipo na chave, nunca só o local_num.
 const String localTipoBarracao = 'barracao';
 
+/// Número do barracão como peça do mapa da loja. O barracão é UM retângulo no
+/// mapa (os ~100 paletes só existem na tela dele), então todo endereço dele
+/// aponta para esta mesma peça — a mesma ideia das seções da Estante Parede.
+const int barracaoMapaNum = 1;
+
 /// Chave que identifica unicamente um endereço físico + produto, usada para
 /// casar linhas de estoque_localizado com o conjunto de endereços
 /// desatualizados (Fase 2 — aviso de endereço desatualizado).
