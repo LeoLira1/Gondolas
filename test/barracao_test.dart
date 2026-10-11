@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gondola_camda/barracao_busca.dart';
 import 'package:gondola_camda/barracao_config.dart';
 import 'package:gondola_camda/barracao_page.dart';
 import 'package:gondola_camda/barracao_scene.dart';
@@ -547,4 +548,55 @@ Future<void> _tocarNoPalete(WidgetTester tester, String rotulo) async {
 
   await tester.tapAt(caixa.topLeft + alvo!);
   await tester.pump();
+
+  group('busca de paletes', () {
+    final enderecos = [
+      const EnderecoBarracao(
+          id: 1, rotulo: 'BAR-01', x: 0, z: 0,
+          produtoCodigo: 'H1', produtoNome: 'HERBICIDA BORAL 500 SC 20L',
+          quantidade: 45),
+      const EnderecoBarracao(
+          id: 2, rotulo: 'BAR-02', x: 0, z: 0,
+          produtoCodigo: 'H1', produtoNome: 'HERBICIDA BORAL 500 SC 20L',
+          quantidade: 10),
+      const EnderecoBarracao(
+          id: 3, rotulo: 'BAR-03', x: 0, z: 0,
+          produtoCodigo: 'F1', produtoNome: 'FUNGICIDA AZOX 200 1L',
+          quantidade: 7),
+      const EnderecoBarracao(id: 4, rotulo: 'BAR-04', x: 0, z: 0),
+    ];
+
+    test('dois termos soltos, uma linha por palete', () {
+      final r = buscarPaletesBarracao('boral 20', enderecos);
+      expect(r.map((e) => e.rotulo), ['BAR-01', 'BAR-02']);
+    });
+
+    test('código e rótulo também valem; palete livre nunca aparece', () {
+      expect(buscarPaletesBarracao('f1', enderecos).single.id, 3);
+      expect(buscarPaletesBarracao('bar-04', enderecos), isEmpty);
+    });
+
+    test('menos de 2 caracteres não busca nada', () {
+      expect(buscarPaletesBarracao('b', enderecos), isEmpty);
+    });
+
+    testWidgets('digitar, escolher e ver o palete aceso', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: BarracaoPage(
+          enderecosIniciais: enderecos,
+          catalogoInicial:   const [],
+        ),
+      ));
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'azox');
+      await tester.pump();
+      await tester.tap(find.text('FUNGICIDA AZOX 200 1L'));
+      await tester.pump();
+
+      // O palete abre no painel e o produto fica aceso.
+      expect(find.textContaining('em 1 palete'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
 }

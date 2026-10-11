@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'barracao_busca.dart';
 import 'barracao_config.dart';
 import 'barracao_scene.dart' show BarracaoScene, corCamdaBarracao;
 import 'barracao_service.dart';
@@ -64,6 +65,11 @@ class _BarracaoPageState extends State<BarracaoPage> {
   bool               _carregandoCatalogo = false;
   bool               _carregandoEnderecos = false;
 
+  /// Busca de paletes (onde está o produto X). Os resultados saem da lista de
+  /// endereços em memória; ver barracao_busca.dart.
+  final _buscaCtrl = TextEditingController();
+  List<EnderecoBarracao> _resultadosBusca = const [];
+
   final List<LancamentoRecente> _recentes = [];
   static const int _maxRecentes = 4;
 
@@ -121,6 +127,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
   @override
   void dispose() {
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    _buscaCtrl.dispose();
     super.dispose();
   }
 
@@ -145,6 +152,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
     setState(() {
       _enderecos = List.unmodifiable(enderecos);
       _carregandoEnderecos = false;
+      _resultadosBusca = buscarPaletesBarracao(_buscaCtrl.text, _enderecos);
       // Endereço aberto que sumiu do cadastro (palete retirado em outro
       // aparelho) não pode continuar com o painel em pé: ele mostraria um
       // lugar que não existe mais no chão.
@@ -281,6 +289,24 @@ class _BarracaoPageState extends State<BarracaoPage> {
     } else {
       setState(() => _substituir(gravado));
     }
+  }
+
+  // ── Busca de paletes ───────────────────────────────────────────────────────
+
+  void _aoDigitarBusca(String q) {
+    setState(() => _resultadosBusca = buscarPaletesBarracao(q, _enderecos));
+  }
+
+  /// Escolher um resultado acende o produto em TODOS os paletes dele e abre o
+  /// palete escolhido — o mesmo que a busca da loja faz ao chegar aqui.
+  void _escolherResultado(EnderecoBarracao e) {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _destacadoCodigo = e.produtoCodigo;
+      _selecionadoId   = e.id;
+      _buscaCtrl.clear();
+      _resultadosBusca = const [];
+    });
   }
 
   // ── Destaque ───────────────────────────────────────────────────────────────
@@ -440,12 +466,31 @@ class _BarracaoPageState extends State<BarracaoPage> {
             ),
           ),
 
-          if (_destacadoCodigo != null && !_modoConferencia)
+          // Com o painel de um palete aberto o campo some: o painel tem o seu
+          // próprio (catálogo), e dois campos de busca na tela confundem.
+          if (!_modoConferencia && toque == null)
             Positioned(
               top: 0, left: 0, right: 0,
               child: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 68, 12, 0),
+                  child: _BuscaPaletesBarracao(
+                    controller:  _buscaCtrl,
+                    resultados:  _resultadosBusca,
+                    onChanged:   _aoDigitarBusca,
+                    onEscolher:  _escolherResultado,
+                  ),
+                ),
+              ),
+            ),
+
+          if (_destacadoCodigo != null && !_modoConferencia)
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                      12, toque == null ? 124 : 68, 12, 0),
                   child: _FaixaDestaqueBarracao(
                     nome:     _nomeDestacado,
                     paletes:  _paletesComDestaque,
@@ -566,6 +611,117 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final codigo = _destacadoCodigo;
     if (codigo == null) return 0;
     return _enderecos.where((e) => e.produtoCodigo == codigo).length;
+  }
+}
+
+// ── Busca de paletes ─────────────────────────────────────────────────────────
+
+/// Campo + lista de resultados. Cada linha é um PALETE (rótulo, produto e
+/// quantidade), porque o mesmo produto costuma estar em vários.
+class _BuscaPaletesBarracao extends StatelessWidget {
+  final TextEditingController          controller;
+  final List<EnderecoBarracao>         resultados;
+  final ValueChanged<String>           onChanged;
+  final ValueChanged<EnderecoBarracao> onEscolher;
+
+  const _BuscaPaletesBarracao({
+    required this.controller,
+    required this.resultados,
+    required this.onChanged,
+    required this.onEscolher,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final digitando = controller.text.trim().length >= 2;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 46,
+          child: TextField(
+            controller: controller,
+            onChanged:  onChanged,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: InputDecoration(
+              hintText: 'Onde está o produto? Nome ou código…',
+              hintStyle: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
+              prefixIcon: const Icon(Icons.search,
+                  size: 18, color: Color(0xFF8a9aa8)),
+              filled: true,
+              fillColor: const Color(0xEE141518),
+              contentPadding: EdgeInsets.zero,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.10)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.10)),
+              ),
+            ),
+          ),
+        ),
+        if (resultados.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xF2141518),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final e in resultados)
+                  InkWell(
+                    onTap: () => onEscolher(e),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 9),
+                      child: Row(
+                        children: [
+                          Text(e.rotulo,
+                              style: const TextStyle(
+                                color: corCamdaBarracao,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              )),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(e.produtoNome.isEmpty
+                                    ? e.produtoCodigo
+                                    : e.produtoNome,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 12)),
+                          ),
+                          const SizedBox(width: 8),
+                          Text('${e.quantidade % 1 == 0
+                                  ? e.quantidade.toInt()
+                                  : e.quantidade}',
+                              style: const TextStyle(
+                                  color: Color(0xFF8a9aa8), fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          )
+        else if (digitando)
+          const Padding(
+            padding: EdgeInsets.only(top: 8, left: 4),
+            child: Text('Nenhum palete com esse produto.',
+                style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 11)),
+          ),
+      ],
+    );
   }
 }
 
