@@ -7,18 +7,22 @@ List<Map<String, dynamic>> filtrarBuscaLocal(
   String termo, {
   int limite = 20,
 }) {
-  final q = termo.trim().toLowerCase();
+  // Cada palavra precisa aparecer no nome OU no código, em qualquer ordem —
+  // a mesma regra da busca do galpão ('boral 20' acha 'BORAL 500 SC 20L').
+  // Consulta vazia casa tudo (é como o pré-carregamento aquece o cache).
+  final termos = termo
+      .trim()
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((t) => t.isNotEmpty)
+      .toList();
   final resultado =
       linhas
-          .where(
-            (r) =>
-                (r['produto_nome'] as String? ?? '').toLowerCase().contains(
-                  q,
-                ) ||
-                (r['produto_codigo'] as String? ?? '').toLowerCase().contains(
-                  q,
-                ),
-          )
+          .where((r) {
+            final nome = (r['produto_nome'] as String? ?? '').toLowerCase();
+            final codigo = (r['produto_codigo'] as String? ?? '').toLowerCase();
+            return termos.every((t) => nome.contains(t) || codigo.contains(t));
+          })
           .toList()
         ..sort(
           (a, b) => (a['produto_nome'] as String? ?? '').compareTo(

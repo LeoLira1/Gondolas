@@ -40,6 +40,14 @@ Future<void> main() async {
     filtrarBuscaLocal(linhas, 'outro').length == 1,
     'Termo novo usa mesma cópia completa',
   );
+  verificar(
+    filtrarBuscaLocal([
+      {'produto_codigo': '010', 'produto_nome': 'HERBICIDA BORAL 500 SC 20L'},
+      {'produto_codigo': '011', 'produto_nome': 'HERBICIDA BORAL 500 SC 5L'},
+    ], 'boral 20')
+        .single['produto_codigo'] == '010',
+    'Dois termos soltos casam em qualquer ordem',
+  );
   await Future<void>.delayed(Duration.zero);
   await cache.ler('banco_a', rede);
   verificar(chamadas == 1, 'Não faz consultas por termo nem duplica download');

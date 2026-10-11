@@ -103,6 +103,10 @@ class BarracaoService {
   /// chão), então reescrever apagaria justamente o cadastro que a tabela
   /// existe para guardar. A semente é só o ponto de partida de um banco novo.
   Future<bool> garantirSeed() async {
+    // Seed já feito não tem o que escrever: entrar na fila de escrita só para
+    // descobrir isso fazia a LEITURA dos paletes esperar o mutex e qualquer
+    // sync nativo em andamento.
+    if (_seedFeito) return true;
     try {
       return await TursoService().garantirReplicaProntaParaEscrita(_garantirSeed);
     } on ReplicaNaoProntaParaEscrita {
@@ -127,6 +131,7 @@ class BarracaoService {
 
       final agora = DateTime.now().toIso8601String();
       MutacaoOutbox? mutacao;
+      List<Map<String, dynamic>>? cacheRows;
       final tx = await client.transaction();
       try {
         for (final p in BarracaoConfig.posicoesPadrao) {
@@ -149,7 +154,9 @@ class BarracaoService {
           estadoFinal:    null,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
+        cacheRows = await _lerTodos(tx);
         await tx.commit();
+        await _guardarCache(cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
@@ -171,31 +178,51 @@ class BarracaoService {
   /// Uma consulta só: são ~100 linhas, e percorrer endereço a endereço
   /// custaria uma ida ao banco por palete para pintar um frame.
   Future<List<EnderecoBarracao>> carregarEnderecos() async {
-    final client = await _conexao();
-    if (client == null) return const [];
     try {
-      final stmt = await client.prepare(
-        'SELECT id, rotulo, pos_x, pos_z, produto_codigo, produto_nome, '
-        'quantidade FROM barracao_enderecos ORDER BY rotulo',
+      // Mesmo caminho do galpão: a cópia em memória/disco responde na hora e
+      // o banco é relido atrás. As gravações abaixo atualizam esta cópia.
+      final rows = await TursoService().consultarComCache(
+        chaveCache,
+        _sqlTodos,
       );
-      final rows = await stmt.query() as List<dynamic>;
       return [
-        for (final dynamic row in rows)
-          if (row is Map<String, dynamic>)
-            EnderecoBarracao(
-              id:            row['id']     as int?    ?? 0,
-              rotulo:        row['rotulo'] as String? ?? '',
-              x:             (row['pos_x'] as num?)?.toDouble() ?? 0,
-              z:             (row['pos_z'] as num?)?.toDouble() ?? 0,
-              produtoCodigo: row['produto_codigo'] as String? ?? '',
-              produtoNome:   row['produto_nome']   as String? ?? '',
-              quantidade:    (row['quantidade'] as num?)?.toDouble() ?? 0,
-            ),
+        for (final row in rows)
+          EnderecoBarracao(
+            id:            row['id']     as int?    ?? 0,
+            rotulo:        row['rotulo'] as String? ?? '',
+            x:             (row['pos_x'] as num?)?.toDouble() ?? 0,
+            z:             (row['pos_z'] as num?)?.toDouble() ?? 0,
+            produtoCodigo: row['produto_codigo'] as String? ?? '',
+            produtoNome:   row['produto_nome']   as String? ?? '',
+            quantidade:    (row['quantidade'] as num?)?.toDouble() ?? 0,
+          ),
       ];
     } catch (_) {
       return const [];
     }
   }
+
+  /// Chave da cópia de leitura. É a mesma que `guardarConsulta` conhece para
+  /// derivar o índice de `busca_barracao`.
+  static const String chaveCache = 'barracao';
+
+  static const String _sqlTodos =
+      'SELECT id, rotulo, pos_x, pos_z, produto_codigo, produto_nome, '
+      'quantidade FROM barracao_enderecos ORDER BY rotulo';
+
+  /// Atualiza a cópia de leitura DEPOIS do commit. Falhar aqui não pode virar
+  /// rollback de uma gravação já confirmada: no pior caso o refresh em segundo
+  /// plano corrige a cópia.
+  Future<void> _guardarCache(List<Map<String, dynamic>> linhas) async {
+    try {
+      await TursoService().guardarConsulta(chaveCache, linhas);
+    } catch (_) {}
+  }
+
+  Future<List<Map<String, dynamic>>> _lerTodos(Transaction tx) async =>
+      (await tx.query(_sqlTodos))
+          .map((r) => Map<String, dynamic>.from(r))
+          .toList();
 
   /// Atribui um produto ao palete (ou troca o que estava lá) com a quantidade
   /// informada. Devolve o endereço gravado, ou null se falhou.
@@ -272,7 +299,11 @@ class BarracaoService {
           quantidadePretendida: quantidade,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
+        final cacheRows = await _lerTodos(tx);
         await tx.commit();
+        // Cópia de leitura (lista e busca) já com a gravação: sem isto a busca
+        // devolvia o estado anterior até o refresh em segundo plano.
+        await _guardarCache(cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
@@ -355,7 +386,11 @@ class BarracaoService {
           quantidadePretendida: 0,
         );
         await TursoService().carimbarMutacao(tx, mutacao);
+        final cacheRows = await _lerTodos(tx);
         await tx.commit();
+        // Cópia de leitura (lista e busca) já com a gravação: sem isto a busca
+        // devolvia o estado anterior até o refresh em segundo plano.
+        await _guardarCache(cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
         await TursoService().marcarGravacaoLocal();
