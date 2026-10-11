@@ -135,8 +135,12 @@ class _BarracaoPageState extends State<BarracaoPage> {
 
   Future<void> _carregarEnderecos() async {
     setState(() => _carregandoEnderecos = true);
-    await BarracaoService().garantirSeed();
-    final enderecos = await BarracaoService().carregarEnderecos();
+    // Lê primeiro (cópia local responde na hora); o seed só entra quando o
+    // cadastro está vazio, que é o único caso em que há o que semear.
+    var enderecos = await BarracaoService().carregarEnderecos();
+    if (enderecos.isEmpty && await BarracaoService().garantirSeed()) {
+      enderecos = await BarracaoService().carregarEnderecos();
+    }
     if (!mounted) return;
     setState(() {
       _enderecos = List.unmodifiable(enderecos);

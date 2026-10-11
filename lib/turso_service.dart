@@ -223,6 +223,29 @@ class TursoService {
     final prefixo = 'consulta_v1_${idBanco(url)}_';
     if (chave == 'galpao') {
       await _consultaCache.confirmar('${prefixo}busca_galpao', linhas);
+    } else if (chave == 'barracao') {
+      // A busca só enxerga paletes com produto, e só as colunas que ela usa.
+      await _consultaCache.confirmar(
+        '${prefixo}busca_barracao',
+        [
+          for (final r in linhas)
+            if ((r['produto_codigo'] as String? ?? '').isNotEmpty)
+              {
+                'id': r['id'],
+                'rotulo': r['rotulo'],
+                'produto_codigo': r['produto_codigo'],
+                'produto_nome': r['produto_nome'],
+                'quantidade': r['quantidade'],
+              },
+        ]..sort((a, b) {
+            final n = ((a['produto_nome'] as String?) ?? '')
+                .compareTo((b['produto_nome'] as String?) ?? '');
+            return n != 0
+                ? n
+                : ((a['rotulo'] as String?) ?? '')
+                    .compareTo((b['rotulo'] as String?) ?? '');
+          }),
+      );
     } else if (chave.startsWith('gondola_')) {
       final numero = int.tryParse(chave.substring('gondola_'.length));
       if (numero != null)

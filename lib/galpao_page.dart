@@ -1483,6 +1483,12 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     // Saldo relido do banco (ou mexido por um lançamento em outro endereço)
     // com o painel aberto: a tarja acompanha, sem setState — a tela já está
     // sendo reconstruída aqui.
+    // Catálogo que chegou (ou mudou) depois da digitação: refaz a busca em
+    // curso, senão a lista ficava vazia até a pessoa redigitar.
+    if (!identical(old.catalogo, widget.catalogo) &&
+        _buscaCtrl.text.trim().length >= 2) {
+      _resultados = buscarProdutosGalpao(_buscaCtrl.text, widget.catalogo);
+    }
     if (identical(old.saldos, widget.saldos)) return;
     final codigo = _produtoSel?.codigo ?? _rackDoToque?.produtoCodigo;
     if (codigo == null) return;
