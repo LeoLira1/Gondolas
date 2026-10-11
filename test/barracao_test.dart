@@ -508,46 +508,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
   });
-}
-
-/// Projeta um ponto do mundo na tela com a mesma conta da cena, ou null se ele
-/// está atrás da câmera.
-Offset? _projetar(Camera camera, Size size, Vec3 v) {
-  final eye   = camera.position;
-  final fwd   = (camera.target - eye).normalized;
-  final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
-  final up    = right.cross(fwd).normalized;
-  const fovY  = 45.0 * math.pi / 180.0;
-  final tanH   = math.tan(fovY / 2);
-  final aspect = size.width / size.height;
-
-  final d  = v - eye;
-  final cz = d.dot(fwd);
-  if (cz <= 0.1) return null;
-  final cx = d.dot(right) / (cz * tanH * aspect);
-  final cy = d.dot(up)    / (cz * tanH);
-  return Offset((cx + 1) / 2 * size.width, (1 - cy) / 2 * size.height);
-}
-
-/// Toca o palete de [rotulo] na cena montada, mirando no centro do volume da
-/// carga — o hit-test da cena é por raio, então o toque tem de sair de um
-/// ponto de tela que realmente cruza a caixa do palete.
-Future<void> _tocarNoPalete(WidgetTester tester, String rotulo) async {
-  final cena = find.byType(BarracaoScene);
-  final caixa = tester.getRect(cena);
-  final camera = BarracaoScene.enquadrar(caixa.size);
-
-  final posicao = BarracaoConfig.posicoesPadrao
-      .firstWhere((p) => p.rotulo == rotulo);
-  final alvo = _projetar(
-    camera,
-    caixa.size,
-    Vec3(posicao.x, BarracaoConfig.alturaCarga / 2, posicao.z),
-  );
-  expect(alvo, isNotNull, reason: '$rotulo não está na tela');
-
-  await tester.tapAt(caixa.topLeft + alvo!);
-  await tester.pump();
 
   group('busca de paletes', () {
     final enderecos = [
@@ -599,4 +559,44 @@ Future<void> _tocarNoPalete(WidgetTester tester, String rotulo) async {
       await tester.pumpWidget(const SizedBox());
     });
   });
+}
+
+/// Projeta um ponto do mundo na tela com a mesma conta da cena, ou null se ele
+/// está atrás da câmera.
+Offset? _projetar(Camera camera, Size size, Vec3 v) {
+  final eye   = camera.position;
+  final fwd   = (camera.target - eye).normalized;
+  final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+  final up    = right.cross(fwd).normalized;
+  const fovY  = 45.0 * math.pi / 180.0;
+  final tanH   = math.tan(fovY / 2);
+  final aspect = size.width / size.height;
+
+  final d  = v - eye;
+  final cz = d.dot(fwd);
+  if (cz <= 0.1) return null;
+  final cx = d.dot(right) / (cz * tanH * aspect);
+  final cy = d.dot(up)    / (cz * tanH);
+  return Offset((cx + 1) / 2 * size.width, (1 - cy) / 2 * size.height);
+}
+
+/// Toca o palete de [rotulo] na cena montada, mirando no centro do volume da
+/// carga — o hit-test da cena é por raio, então o toque tem de sair de um
+/// ponto de tela que realmente cruza a caixa do palete.
+Future<void> _tocarNoPalete(WidgetTester tester, String rotulo) async {
+  final cena = find.byType(BarracaoScene);
+  final caixa = tester.getRect(cena);
+  final camera = BarracaoScene.enquadrar(caixa.size);
+
+  final posicao = BarracaoConfig.posicoesPadrao
+      .firstWhere((p) => p.rotulo == rotulo);
+  final alvo = _projetar(
+    camera,
+    caixa.size,
+    Vec3(posicao.x, BarracaoConfig.alturaCarga / 2, posicao.z),
+  );
+  expect(alvo, isNotNull, reason: '$rotulo não está na tela');
+
+  await tester.tapAt(caixa.topLeft + alvo!);
+  await tester.pump();
 }
