@@ -5,6 +5,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 
 import 'barracao_config.dart';
+import 'estocados_busca.dart' show codigoEhEstocado;
 import 'models.dart' show localTipoBarracao;
 import 'turso_service.dart';
 import 'outbox.dart';
@@ -424,6 +425,8 @@ class BarracaoService {
       positional: [localTipoBarracao, id],
     );
     if (codigo.trim().isEmpty || quantidade <= 0) return;
+    // Material de cooperado já saiu do sistema: não entra no saldo.
+    if (codigoEhEstocado(codigo)) return;
     await tx.execute(
       'INSERT INTO estoque_localizado (produto_codigo, local_tipo, '
       'local_num, face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '

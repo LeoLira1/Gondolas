@@ -278,3 +278,25 @@ começar, para não disputar a thread com o primeiro paint da cena 3D.
 ## Créditos
 
 Ícone do app: [Map icon criado por Freepik — Flaticon](https://www.flaticon.com/br/icones-gratis/mapa)
+
+## Produtos estocados (material de cooperado)
+
+Botão de caixa (📦) na barra de cima do **galpão** e do **barracão**. Abre uma busca
+por cooperado, produto ou código, lendo `materiais_terceiros` — a mesma tabela do app
+Estocados.
+
+**Lançar o palete.** Os mesmos itens aparecem na busca de produto do painel do endereço
+(toque numa vaga → digite cooperado ou produto → quantidade → lançar). O nome fica
+`PRODUTO · COOPERADO` e a cor é violeta.
+
+**Fora do saldo, de propósito.** Esse material já foi faturado e saiu do sistema. Por isso
+o código gravado no palete leva o prefixo `EST:` e os serviços do galpão e do barracão
+**não o espelham em `estoque_localizado`**: ele não entra no saldo, na baixa pela
+contagem nem no Modo Conferência, mas ocupa a vaga e aparece no mapa. Nenhuma coluna nova
+no banco. A regra está em `lib/estocados_busca.dart` (`prefixoEstocado`).
+
+**Onde está.** Cada item da lista mostra `📍 Galpão 40 · N4` / `BAR-07` (ou `sem endereço`), ligando o palete ao item pelo nome `PRODUTO · COOPERADO`.
+
+**Retirar do endereço.** No painel de um palete de estocado há o botão `Retirar do endereço` (com confirmação): a vaga fica livre, a pilha desce se houver rack em cima, e o item continua na lista do cooperado. Vale no galpão e no barracão (mesmo painel). Fica registrado em `contagens_log` como qualquer esvaziamento.
+
+**Ocupação no cabeçalho do galpão.** Em vez de só `N vagas livres`, o cabeçalho mostra `38 livres · 30 estocados · 61 loja` (parte zerada some), para ver quanto do galpão os estocados ocupam.

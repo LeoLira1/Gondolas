@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'estocados_busca.dart';
+import 'estocados_sheet.dart';
 import 'galpao_busca.dart';
 import 'baixa_por_contagem.dart';
 import 'baixa_por_contagem_service.dart';
@@ -226,6 +228,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_carregarEstocados());
     // Código vazio (rack gravado sem código) não destaca nada — senão o
     // destaque casaria com todos os outros racks sem código.
     final destaque = widget.codigoDestacado;
@@ -437,9 +440,28 @@ class _GalpaoPageState extends State<GalpaoPage> {
     });
   }
 
+  /// Estocados (material de cooperado) como produtos lançáveis. Entram na
+  /// busca do painel do endereço e no mapa, mas NÃO no saldo (ver
+  /// `prefixoEstocado`).
+  List<Produto> _estocados = const [];
+
   void _aplicarCatalogo(List<Produto> produtos) {
-    _catalogo = produtos;
-    _corPorProduto = {for (final p in produtos) p.codigo: p.cor};
+    final base = produtos.where((p) => !codigoEhEstocado(p.codigo));
+    _catalogo = [...base, ..._estocados];
+    _corPorProduto = {for (final p in _catalogo) p.codigo: p.cor};
+  }
+
+  Future<void> _carregarEstocados() async {
+    try {
+      final itens = await carregarEstocados();
+      if (!mounted) return;
+      setState(() {
+        _estocados = itens.map(produtoDeEstocado).toList();
+        _aplicarCatalogo(_catalogo);
+      });
+    } catch (_) {
+      // Sem a lista, o painel segue com o catálogo da loja.
+    }
   }
 
   void _onTapEndereco(ToqueGalpao? toque) {
@@ -727,14 +749,6 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   void _toggleSaldo() => setState(() => _mostrarSaldo = !_mostrarSaldo);
 
-  /// Racks ocupados no galpão inteiro.
-  int get _racksOcupados =>
-      _pilhas.values.fold(0, (soma, pilha) => soma + pilha.length);
-
-  /// Vagas livres: o total de endereços menos o que está ocupado. É o número
-  /// que interessa a quem vai descarregar carga.
-  int get _vagasLivres => GalpaoConfig.totalEnderecos - _racksOcupados;
-
   void _avisar(String mensagem, {VoidCallback? tentarNovamente}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -841,7 +855,13 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           Text(
                             _carregandoPilhas
                                 ? 'Carregando ocupação…'
-                                : '$_vagasLivres vagas livres',
+                                : resumoOcupacao(
+                                    totalVagas: GalpaoConfig.totalEnderecos,
+                                    codigos: [
+                                      for (final pilha in _pilhas.values)
+                                        for (final r in pilha) r.produtoCodigo,
+                                    ],
+                                  ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -866,6 +886,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       ativo: _modoConferencia,
                       onTap: _toggleConferencia,
                     ),
+                    const SizedBox(width: 8),
+                    const BotaoEstocados(),
                     const SizedBox(width: 10),
                     // Ir para o número: digita 52, isola a rua e marca.
                     SizedBox(
@@ -1730,8 +1752,67 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           const SizedBox(height: 8),
           botaoDestaque,
         ],
+        // Só palete de estocado: o cooperado levou a mercadoria, a vaga
+        // precisa voltar a ficar livre. Os demais racks seguem com o número
+        // como única ação (0 esvazia), como descrito no README.
+        if (codigoEhEstocado(rack.produtoCodigo) &&
+            widget.onEsvaziar != null) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => _retirarEstocado(rack),
+            icon: const Icon(Icons.output_outlined, size: 16),
+            label: const Text('Retirar do endereço'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: corEnderecoDivergente,
+              side: BorderSide(
+                color: corEnderecoDivergente.withValues(alpha: 0.5),
+              ),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  /// Tira o palete de estocado do endereço depois de confirmar. A confirmação
+  /// existe porque o toque é de um botão solto no painel, e porque, num rack
+  /// com outros em cima, a pilha desce (o N2 vira N1).
+  Future<void> _retirarEstocado(RackGalpao rack) async {
+    final t = widget.toque;
+    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
+    final temAcima = t.ordem < pilha.length;
+    final nome = rack.produtoNome.isEmpty ? rack.produtoCodigo : rack.produtoNome;
+    final confirmou = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1b1d21),
+        title: Text(
+          'Retirar $_rotulo?',
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: Text(
+          '$nome\n\nA vaga fica livre. O item continua na lista de estocados '
+          'do cooperado.'
+          '${temAcima ? '\n\nOs paletes de cima descem um nível.' : ''}',
+          style: const TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Retirar',
+              style: TextStyle(color: corEnderecoDivergente),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmou == true && mounted) widget.onEsvaziar?.call();
   }
 
   /// O saldo do produto em foco, em uma tarja: o que o sistema tem, o que já

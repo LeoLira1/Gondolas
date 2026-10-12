@@ -850,7 +850,7 @@ void main() {
 
       // A camada de cima agora começa pelo seletor de parte, então é ELE que
       // o cabeçalho não pode invadir — a barra de ruas vem logo abaixo.
-      final subtitulo = tester.getRect(find.textContaining('vagas'));
+      final subtitulo = tester.getRect(find.textContaining('livres'));
       final partes    = tester.getRect(find.text('Parte 1'));
       final chips     = tester.getRect(find.text('Todas'));
       expect(subtitulo.bottom, lessThanOrEqualTo(partes.top));
