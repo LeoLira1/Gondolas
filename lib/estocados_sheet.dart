@@ -137,7 +137,7 @@ class _EstocadosSheetState extends State<_EstocadosSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final achados = buscarEstocados(_busca.text, _itens);
+    final achados = somarEstocados(buscarEstocados(_busca.text, _itens));
     // Agrupa por cooperado mantendo a ordem do banco.
     final grupos = <String, List<ItemEstocado>>{};
     for (final i in achados) {
@@ -250,6 +250,7 @@ class _EstocadosSheetState extends State<_EstocadosSheet> {
     final detalhe = [
       if (i.codigo.isNotEmpty) i.codigo,
       if (i.armazem.isNotEmpty) 'arm ${i.armazem}',
+      if (i.lancamentos > 1) '${i.lancamentos} docs',
       if (i.documento.isNotEmpty) 'doc ${i.documento}',
     ].join(' · ');
     final onde = _enderecos[nomeDoPalete(i)] ?? const <String>[];

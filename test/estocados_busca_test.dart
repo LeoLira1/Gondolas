@@ -73,6 +73,26 @@ void main() {
     expect(mapa[nome], ['Galpão 40 · N4', 'BAR-07']);
   });
 
+  test('somarEstocados junta itens iguais e soma o saldo', () {
+    ItemEstocado it(String doc, double saldo, {String cod = '278636'}) =>
+        ItemEstocado(
+          cooperado: 'ELBIO',
+          produto: 'HERBICIDA 2,4-D 20L',
+          codigo: cod,
+          armazem: '70',
+          documento: doc,
+          emissao: '',
+          saldo: saldo,
+        );
+    final r = somarEstocados([it('1', 28), it('2', 17), it('3', 5, cod: '9')]);
+    expect(r.length, 2);
+    expect(r.first.saldo, 45);
+    expect(r.first.lancamentos, 2);
+    expect(r.first.documento, '');
+    expect(r.last.saldo, 5);
+    expect(r.last.lancamentos, 1);
+  });
+
   test('resumoOcupacao separa livres, estocados e loja e esconde o zero', () {
     expect(
       resumoOcupacao(
