@@ -27,7 +27,11 @@ class ItemEstocado {
   final String emissao;
   final double saldo;
 
+  /// Quantas linhas do banco foram somadas neste item (1 = nenhuma).
+  final int lancamentos;
+
   const ItemEstocado({
+    this.lancamentos = 1,
     required this.cooperado,
     required this.produto,
     required this.codigo,
@@ -66,6 +70,35 @@ class ItemEstocado {
       saldo: double.tryParse(texto(['saldo']).replaceAll(',', '.')) ?? 0,
     );
   }
+}
+
+/// Soma os itens iguais (mesmo cooperado, produto, código e armazém) numa
+/// linha só, somando o saldo. Documentos diferentes viram `N docs` no lugar do
+/// número. A ordem da primeira ocorrência é mantida.
+List<ItemEstocado> somarEstocados(Iterable<ItemEstocado> itens) {
+  final grupos = <String, List<ItemEstocado>>{};
+  for (final i in itens) {
+    final chave = _normalizar(
+      '${i.cooperado}|${i.produto}|${i.codigo}|${i.armazem}',
+    ).replaceAll(RegExp(r'\s+'), ' ');
+    grupos.putIfAbsent(chave, () => []).add(i);
+  }
+  return [
+    for (final g in grupos.values)
+      if (g.length == 1)
+        g.first
+      else
+        ItemEstocado(
+          cooperado: g.first.cooperado,
+          produto: g.first.produto,
+          codigo: g.first.codigo,
+          armazem: g.first.armazem,
+          documento: '',
+          emissao: g.first.emissao,
+          saldo: g.fold<double>(0, (s, i) => s + i.saldo),
+          lancamentos: g.length,
+        ),
+  ];
 }
 
 const _acentos = {
