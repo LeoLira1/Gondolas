@@ -4,7 +4,18 @@
 //
 // A lista vem de `materiais_terceiros`, a mesma tabela que o app Estocados lê.
 // Esse material já foi faturado e saiu do sistema: NADA daqui entra em
-// `estoque_localizado`, no saldo ou na baixa pela contagem. É só consulta.
+// `estoque_localizado`, no saldo ou na baixa pela contagem.
+
+import 'models.dart' show Produto;
+
+/// Prefixo do código de um palete de estocado em `galpao_racks` /
+/// `barracao_enderecos`. É o que o distingue do estoque da loja: os serviços
+/// NÃO espelham esses paletes em `estoque_localizado` (então não entram no
+/// saldo, na baixa pela contagem nem no Modo Conferência), e o código não casa
+/// com nenhuma linha de `estoque_mestre`.
+const prefixoEstocado = 'EST:';
+
+bool codigoEhEstocado(String codigo) => codigo.startsWith(prefixoEstocado);
 
 /// Uma linha de `materiais_terceiros` com saldo a entregar.
 class ItemEstocado {
@@ -88,3 +99,14 @@ List<ItemEstocado> buscarEstocados(String query, List<ItemEstocado> itens) {
     return termos.every(alvo.contains);
   }).toList();
 }
+
+/// O item como "produto" lançável num palete: código com [prefixoEstocado] e
+/// o cooperado no nome, para aparecer no mapa e na busca do painel do
+/// endereço (`'ADUBO FOLIAR 5L · MARIA SOUZA'`). Cor própria (violeta), para
+/// o estocado não se confundir com nenhuma categoria da loja.
+Produto produtoDeEstocado(ItemEstocado i) => Produto(
+      codigo: '$prefixoEstocado${i.codigo.isEmpty ? i.produto : i.codigo}',
+      nome: '${i.produto} · ${i.cooperado}',
+      categoria: 'ESTOCADO',
+      corHex: '#8B5CF6',
+    );

@@ -9,6 +9,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 
 import 'codigos_vinculados.dart';
+import 'estocados_busca.dart' show codigoEhEstocado;
 import 'galpao_config.dart';
 import 'galpao_saldo.dart';
 import 'galpao_scene.dart' show RackGalpao;
@@ -704,6 +705,8 @@ class GalpaoService {
       positional: [localTipoGalpao, posicao],
     );
     for (final rack in pilha) {
+      // Material de cooperado já saiu do sistema: não entra no saldo.
+      if (codigoEhEstocado(rack.produtoCodigo)) continue;
       await tx.execute(
         'INSERT INTO estoque_localizado (produto_codigo, local_tipo, '
         'local_num, face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '

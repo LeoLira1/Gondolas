@@ -283,6 +283,14 @@ começar, para não disputar a thread com o primeiro paint da cena 3D.
 
 Botão de caixa (📦) na barra de cima do **galpão** e do **barracão**. Abre uma busca
 por cooperado, produto ou código, lendo `materiais_terceiros` — a mesma tabela do app
-Estocados. É **só consulta**: esse material já saiu do sistema, então nada dele entra em
-`estoque_localizado`, no saldo, na baixa pela contagem nem no Modo Conferência.
-A lógica de busca está em `lib/estocados_busca.dart`; a tela, em `lib/estocados_sheet.dart`.
+Estocados.
+
+**Lançar o palete.** Os mesmos itens aparecem na busca de produto do painel do endereço
+(toque numa vaga → digite cooperado ou produto → quantidade → lançar). O nome fica
+`PRODUTO · COOPERADO` e a cor é violeta.
+
+**Fora do saldo, de propósito.** Esse material já foi faturado e saiu do sistema. Por isso
+o código gravado no palete leva o prefixo `EST:` e os serviços do galpão e do barracão
+**não o espelham em `estoque_localizado`**: ele não entra no saldo, na baixa pela
+contagem nem no Modo Conferência, mas ocupa a vaga e aparece no mapa. Nenhuma coluna nova
+no banco. A regra está em `lib/estocados_busca.dart` (`prefixoEstocado`).

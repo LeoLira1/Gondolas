@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'estocados_busca.dart';
 import 'estocados_sheet.dart';
 import 'galpao_busca.dart';
 import 'baixa_por_contagem.dart';
@@ -227,6 +228,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_carregarEstocados());
     // Código vazio (rack gravado sem código) não destaca nada — senão o
     // destaque casaria com todos os outros racks sem código.
     final destaque = widget.codigoDestacado;
@@ -438,9 +440,28 @@ class _GalpaoPageState extends State<GalpaoPage> {
     });
   }
 
+  /// Estocados (material de cooperado) como produtos lançáveis. Entram na
+  /// busca do painel do endereço e no mapa, mas NÃO no saldo (ver
+  /// `prefixoEstocado`).
+  List<Produto> _estocados = const [];
+
   void _aplicarCatalogo(List<Produto> produtos) {
-    _catalogo = produtos;
-    _corPorProduto = {for (final p in produtos) p.codigo: p.cor};
+    final base = produtos.where((p) => !codigoEhEstocado(p.codigo));
+    _catalogo = [...base, ..._estocados];
+    _corPorProduto = {for (final p in _catalogo) p.codigo: p.cor};
+  }
+
+  Future<void> _carregarEstocados() async {
+    try {
+      final itens = await carregarEstocados();
+      if (!mounted) return;
+      setState(() {
+        _estocados = itens.map(produtoDeEstocado).toList();
+        _aplicarCatalogo(_catalogo);
+      });
+    } catch (_) {
+      // Sem a lista, o painel segue com o catálogo da loja.
+    }
   }
 
   void _onTapEndereco(ToqueGalpao? toque) {

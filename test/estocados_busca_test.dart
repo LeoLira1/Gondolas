@@ -49,4 +49,12 @@ void main() {
     expect(i.codigo, '9');
     expect(i.saldo, 1.5);
   });
+
+  test('produtoDeEstocado leva prefixo, cooperado no nome e não casa com a loja', () {
+    final p = produtoDeEstocado(itens.first);
+    expect(p.codigo, 'EST:254185');
+    expect(codigoEhEstocado(p.codigo), isTrue);
+    expect(codigoEhEstocado('254185'), isFalse);
+    expect(p.nome, 'HERBICIDA BORAL 500 SC 20L · JOÃO DA SILVA');
+  });
 }
