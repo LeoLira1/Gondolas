@@ -284,10 +284,6 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   }
 
   Future<void> _abrirEstrutura(String tipo, int numero) async {
-    if (_modoConferencia && tipo == localTipoBarracao) {
-      await _abrirBarracaoEmConferencia();
-      return;
-    }
     if (_modoConferencia) {
       // O retângulo da parede representa as 6 seções (13–18): acende os
       // pendentes de todas ao abrir a cena pela seção 1.
@@ -337,11 +333,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
     } else if (tipo == localTipoBarracao) {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => BarracaoPage(
-          // O retângulo do mapa não tem endereço: o número dele é o da peça.
-          // Só a busca sabe qual palete abrir.
-          enderecoInicialId: produto?.tipo == localTipoBarracao
-              ? produto!.numero
-              : null,
+          enderecoInicialId: numero,
           codigoDestacado: produto?.produtoCodigo,
         ),
       ));
@@ -445,13 +437,6 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       final idx = itensLoja.indexWhere(
           (it) => it.tipo == estrutura.tipo && it.numero == numeroMapa);
       if (idx != -1) mapa[idx] = (mapa[idx] ?? 0) + estrutura.itens.length;
-    }
-    // O barracão vem separado das estruturas (ModoConferenciaResultado.barracao)
-    // e acende o retângulo dele com o total de produtos pendentes.
-    final noBarracao = conferencia.totalProdutosBarracao;
-    if (noBarracao > 0) {
-      final idx = itensLoja.indexWhere((it) => it.tipo == localTipoBarracao);
-      if (idx != -1) mapa[idx] = noBarracao;
     }
     return mapa;
   }
@@ -1525,8 +1510,8 @@ class _LocationCard extends StatelessWidget {
                     : 'Estante';
     // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
     // resultado da busca quando há produto selecionado.
-    final numeroTitulo = ehBarracaoAqui
-        ? (produto != null ? produto!.nivelDescricao : 'BARRACÃO')
+    final numeroTitulo = ehBarracaoAqui && produto != null
+        ? produto!.nivelDescricao
         : ehParede
         ? 'E$estanteParedeMin–E$estanteParedeMax'
         : '$prefixo$numero';
@@ -1572,8 +1557,6 @@ class _LocationCard extends StatelessWidget {
                 ? ehBarracaoAqui
                     ? '${produto!.nome} · $tipoLabel · ${produto!.nivelDescricao}'
                     : '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
-                : ehBarracaoAqui
-                    ? 'Barracão · paletes no chão'
                 : ehParede
                     ? '$tipoLabel · 6 seções · P1–P12'
                     : '$tipoLabel nº $numero',

@@ -15,25 +15,19 @@ import 'gondola_scene.dart'
 import 'models.dart'
     show balcaoNum, colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
          ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
-         expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum,
-         barracaoMapaNum, localTipoBarracao;
+         expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum;
 import 'scene_gestures.dart';
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
 /// Parede (13–18) são um retângulo único no mapa, registrado como o número da
 /// primeira seção (13).
-///
-/// O barracão também é uma peça só: qualquer endereço dele (o número é o id do
-/// palete) cai no retângulo único [barracaoMapaNum].
 int numeroNoMapaLoja(String tipo, int numero) =>
-    tipo == localTipoBarracao
-        ? barracaoMapaNum
-        : tipo == 'estante' && ehEstanteParede(numero) ? estanteParedeMin : numero;
+    tipo == 'estante' && ehEstanteParede(numero) ? estanteParedeMin : numero;
 
 // ── Data classes ──────────────────────────────────────────────────────────────
 
 class ItemLoja {
-  final String tipo;   // 'gondola', 'estante' ou localTipoBarracao
+  final String tipo;   // 'gondola' ou 'estante'
   final int numero;
   final double x, z;
   final double w, d;
@@ -127,22 +121,7 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: balcaoNum,
       x: 1.45, z: lojaH - LojaGeometry._paredeEsp - 7.95 / 2,
       w: 0.60, d: 7.95),
-  // Barracão: outro prédio, desenhado ao lado da loja. Toque leva à tela dele.
-  ItemLoja(tipo: localTipoBarracao, numero: barracaoMapaNum,
-      x: barracaoLojaX, z: barracaoLojaZ,
-      w: barracaoLojaW, d: barracaoLojaD),
 ];
-
-/// O barracão no mapa: um retângulo FORA das paredes da loja, à direita dela.
-///
-/// É esquemático, não está em escala — o barracão real tem 35 × 10 m (ver
-/// barracao_config.dart) e ocuparia mais que o dobro da loja. Mantém só a
-/// proporção (7 × 2 = 3,5 : 1) e fica fora do caminho dos bonecos, que andam
-/// dentro da loja. Posição e tamanho moram aqui para ajuste fino.
-const double barracaoLojaX = 15.0;
-const double barracaoLojaZ = 7.0;
-const double barracaoLojaW = 7.0;
-const double barracaoLojaD = 2.0;
 
 // ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
 
@@ -246,10 +225,6 @@ const Color corEstanteLoja = Color(0xFF4a93d8);
 const Color _corApagado    = Color(0xFF2d2e31);
 const Color _corParede     = Color(0xFF2a2b2f);
 const Color _corBg         = Color(0xFF0b0c0e);
-// Barracão no mapa: paredes no laranja CAMDA (a cor dele na tela própria) e a
-// laje cinza, para ele não se confundir com as estantes azuis.
-const Color corBarracaoLoja = Color(0xFFe87722);
-const Color _corLajeBarracao = Color(0xFF8d9094);
 // Piso da loja: ladrilhos claros com rejunte discreto.
 const Color _corPiso       = Color(0xFFedeff0);
 const Color _corPisoRejunte = Color(0x14000000);
@@ -373,16 +348,12 @@ class LojaGeometry {
 
       final cor = aplicar(item.tipo == 'gondola'
           ? corGondolaLoja
-          : item.tipo == localTipoBarracao
-          ? corBarracaoLoja
           : item.numero == balcaoNum
               ? corBalcaoCorpo
               : corEstanteLoja);
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
-      } else if (item.tipo == localTipoBarracao) {
-        _barracao(faces, item, cor, aplicar(_corLajeBarracao));
       } else if (item.numero == estanteEdr300TriplaNum) {
         _estanteEdr300Tripla(faces, item, cor);
       } else if (item.numero == 8) {
@@ -416,23 +387,6 @@ class LojaGeometry {
     f.add(Face([Vec3(x0,0,z0), Vec3(x0,0,z1), Vec3(x0,h,z1), Vec3(x0,h,z0)], c));
     f.add(Face([Vec3(x1,0,z1), Vec3(x1,0,z0), Vec3(x1,h,z0), Vec3(x1,h,z1)], c));
     f.add(Face([Vec3(x0,h,z0), Vec3(x0,h,z1), Vec3(x1,h,z1), Vec3(x1,h,z0)], c));
-  }
-
-  /// Altura das paredes do barracão no mapa e a espessura delas.
-  static const double _barracaoParedeH   = 0.55;
-  static const double _barracaoParedeEsp = 0.12;
-
-  /// Laje + quatro paredes baixas: o contorno do prédio visto de cima, sem
-  /// tampa, para o mapa mostrar que é um espaço e não uma peça maciça.
-  static void _barracao(List<Face> faces, ItemLoja item, Color cor, Color laje) {
-    final x0 = item.x - item.w / 2, x1 = item.x + item.w / 2;
-    final z0 = item.z - item.d / 2, z1 = item.z + item.d / 2;
-    const e = _barracaoParedeEsp, h = _barracaoParedeH;
-    _boxLoja(faces, x0: x0, x1: x1, y0: 0, y1: 0.03, z0: z0, z1: z1, color: laje);
-    _boxLoja(faces, x0: x0, x1: x1, y0: 0, y1: h, z0: z0, z1: z0 + e, color: cor);
-    _boxLoja(faces, x0: x0, x1: x1, y0: 0, y1: h, z0: z1 - e, z1: z1, color: cor);
-    _boxLoja(faces, x0: x0, x1: x0 + e, y0: 0, y1: h, z0: z0 + e, z1: z1 - e, color: cor);
-    _boxLoja(faces, x0: x1 - e, x1: x1, y0: 0, y1: h, z0: z0 + e, z1: z1 - e, color: cor);
   }
 
   static void _gondola(List<Face> faces, ItemLoja item, Color cor) {
@@ -775,27 +729,6 @@ class LojaPainter extends CustomPainter {
       tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
     }
 
-    // Nome do barracão sobre a laje (o prédio não tem número nem níveis).
-    for (final item in itensLoja) {
-      if (item.tipo != localTipoBarracao) continue;
-      final hit = project(Vec3(item.x, 0.05, item.z));
-      if (hit == null) continue;
-      final (screen, cz) = hit;
-      final tp = TextPainter(
-        text: TextSpan(
-          text: 'BARRACÃO',
-          style: TextStyle(
-            color: const Color(0xCC15181c),
-            fontSize: 12.0 * (9.0 / cz).clamp(0.6, 1.5),
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
-    }
-
     // Números de face 1-6 ao redor da gôndola selecionada (mesma convenção
     // e culling da cena de detalhe, em discos menores)
     final selIdx = selecionadoIdx;
@@ -900,9 +833,7 @@ class LojaPainter extends CustomPainter {
         final (screen, cz) = hit;
 
         final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
-        final texto   = item.tipo == localTipoBarracao
-            ? 'BARRACÃO · ${entry.value}'
-            : '$prefixo${item.numero} · ${entry.value}';
+        final texto   = '$prefixo${item.numero} · ${entry.value}';
         final fontSize = 13.0 * (9.0 / cz).clamp(0.6, 1.4);
 
         final tp = TextPainter(
@@ -989,10 +920,6 @@ class _LojaSceneState extends State<LojaScene>
     dist:   17.0,
     target: Vec3(lojaW / 2, 0.2, lojaH / 2),
   );
-
-  // O pan alcança o barracão, que fica fora das paredes da loja.
-  static const double _panMinX = 0.0;
-  static const double _panMaxX = barracaoLojaX + barracaoLojaW / 2;
 
   final _key = GlobalKey();
   Camera? _cam0;
@@ -1179,7 +1106,7 @@ class _LojaSceneState extends State<LojaScene>
           dist: _cam0!.dist,
           target: Vec3(
             (_cam0!.target.x - math.cos(rotY) * dxW - math.sin(rotY) * dyW)
-                .clamp(_panMinX, _panMaxX),
+                .clamp(0.0, lojaW),
             _cam0!.target.y,
             (_cam0!.target.z + math.sin(rotY) * dxW - math.cos(rotY) * dyW)
                 .clamp(0.0, lojaH),
@@ -1248,10 +1175,6 @@ class _LojaSceneState extends State<LojaScene>
         hw = LojaGeometry.gondolaR + margem;
         hd = LojaGeometry.gondolaR + margem;
         h  = gondolaAltura;
-      } else if (item.tipo == localTipoBarracao) {
-        hw = item.w / 2 + margem;
-        hd = item.d / 2 + margem;
-        h  = LojaGeometry._barracaoParedeH;
       } else {
         hw = item.w / 2 + margem;
         hd = item.d / 2 + margem;
