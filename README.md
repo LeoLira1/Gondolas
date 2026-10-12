@@ -299,3 +299,4 @@ no banco. A regra está em `lib/estocados_busca.dart` (`prefixoEstocado`).
 
 **Retirar do endereço.** No painel de um palete de estocado há o botão `Retirar do endereço` (com confirmação): a vaga fica livre, a pilha desce se houver rack em cima, e o item continua na lista do cooperado. Vale no galpão e no barracão (mesmo painel). Fica registrado em `contagens_log` como qualquer esvaziamento.
 
+**Ocupação no cabeçalho do galpão.** Em vez de só `N vagas livres`, o cabeçalho mostra `38 livres · 30 estocados · 61 loja` (parte zerada some), para ver quanto do galpão os estocados ocupam.

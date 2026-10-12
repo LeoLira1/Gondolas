@@ -749,14 +749,6 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   void _toggleSaldo() => setState(() => _mostrarSaldo = !_mostrarSaldo);
 
-  /// Racks ocupados no galpão inteiro.
-  int get _racksOcupados =>
-      _pilhas.values.fold(0, (soma, pilha) => soma + pilha.length);
-
-  /// Vagas livres: o total de endereços menos o que está ocupado. É o número
-  /// que interessa a quem vai descarregar carga.
-  int get _vagasLivres => GalpaoConfig.totalEnderecos - _racksOcupados;
-
   void _avisar(String mensagem, {VoidCallback? tentarNovamente}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -863,7 +855,13 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           Text(
                             _carregandoPilhas
                                 ? 'Carregando ocupação…'
-                                : '$_vagasLivres vagas livres',
+                                : resumoOcupacao(
+                                    totalVagas: GalpaoConfig.totalEnderecos,
+                                    codigos: [
+                                      for (final pilha in _pilhas.values)
+                                        for (final r in pilha) r.produtoCodigo,
+                                    ],
+                                  ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(

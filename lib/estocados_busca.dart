@@ -138,3 +138,26 @@ Map<String, List<String>> enderecosDosEstocados({
   }
   return mapa;
 }
+
+/// Texto do cabeçalho do galpão: vagas livres e quanto do ocupado é estocado
+/// (cooperado) e quanto é da loja. Parte zerada some — `38 livres · 30
+/// estocados` quando não há nada da loja — para a linha caber na barra.
+///
+/// [codigos] são os códigos de TODOS os racks ocupados.
+String resumoOcupacao({required int totalVagas, required Iterable<String> codigos}) {
+  var estocados = 0;
+  var loja = 0;
+  for (final c in codigos) {
+    if (codigoEhEstocado(c)) {
+      estocados++;
+    } else {
+      loja++;
+    }
+  }
+  final livres = totalVagas - estocados - loja;
+  return [
+    '$livres livres',
+    if (estocados > 0) '$estocados estocados',
+    if (loja > 0) '$loja loja',
+  ].join(' · ');
+}

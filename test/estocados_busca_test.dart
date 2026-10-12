@@ -72,4 +72,19 @@ void main() {
     expect(mapa.keys, [nome]);
     expect(mapa[nome], ['Galpão 40 · N4', 'BAR-07']);
   });
+
+  test('resumoOcupacao separa livres, estocados e loja e esconde o zero', () {
+    expect(
+      resumoOcupacao(
+        totalVagas: 10,
+        codigos: ['EST:1', 'EST:2', '999'],
+      ),
+      '7 livres · 2 estocados · 1 loja',
+    );
+    expect(
+      resumoOcupacao(totalVagas: 10, codigos: ['EST:1']),
+      '9 livres · 1 estocados',
+    );
+    expect(resumoOcupacao(totalVagas: 10, codigos: []), '10 livres');
+  });
 }
