@@ -294,3 +294,5 @@ o código gravado no palete leva o prefixo `EST:` e os serviços do galpão e do
 **não o espelham em `estoque_localizado`**: ele não entra no saldo, na baixa pela
 contagem nem no Modo Conferência, mas ocupa a vaga e aparece no mapa. Nenhuma coluna nova
 no banco. A regra está em `lib/estocados_busca.dart` (`prefixoEstocado`).
+
+**Onde está.** Cada item da lista mostra `📍 Galpão 40 · N4` / `BAR-07` (ou `sem endereço`), ligando o palete ao item pelo nome `PRODUTO · COOPERADO`.

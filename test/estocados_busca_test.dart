@@ -57,4 +57,19 @@ void main() {
     expect(codigoEhEstocado('254185'), isFalse);
     expect(p.nome, 'HERBICIDA BORAL 500 SC 20L · JOÃO DA SILVA');
   });
+
+  test('enderecosDosEstocados liga palete ao item pelo nome e ignora a loja', () {
+    final nome = nomeDoPalete(itens.first);
+    final mapa = enderecosDosEstocados(
+      galpao: [
+        (posicao: 40, ordem: 4, codigo: 'EST:254185', nome: nome),
+        (posicao: 41, ordem: 1, codigo: '999', nome: 'DA LOJA'),
+      ],
+      barracao: [
+        (rotulo: 'BAR-07', codigo: 'EST:254185', nome: nome),
+      ],
+    );
+    expect(mapa.keys, [nome]);
+    expect(mapa[nome], ['Galpão 40 · N4', 'BAR-07']);
+  });
 }

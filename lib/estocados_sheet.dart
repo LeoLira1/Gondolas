@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'estocados_busca.dart';
+import 'barracao_service.dart';
 import 'galpao_scene.dart' show corCamda;
+import 'galpao_service.dart';
 import 'turso_service.dart';
 
 /// Lê a lista de material de cooperado guardado (tabela `materiais_terceiros`,
@@ -14,6 +16,33 @@ Future<List<ItemEstocado>> carregarEstocados({bool forceRefresh = false}) async 
     forceRefresh: forceRefresh,
   );
   return rows.map(ItemEstocado.deLinha).toList();
+}
+
+/// Onde cada palete de estocado está (nome do palete → endereços). Lê o que o
+/// mapa já guarda de galpão e barracão; falha vira "sem endereços", nunca erro.
+Future<Map<String, List<String>>> carregarEnderecosDosEstocados() async {
+  try {
+    final pilhas = await GalpaoService().carregarPilhas();
+    final barracao = await BarracaoService().carregarEnderecos();
+    return enderecosDosEstocados(
+      galpao: [
+        for (final pilha in pilhas.values)
+          for (final r in pilha)
+            (
+              posicao: r.posicao,
+              ordem: r.ordem,
+              codigo: r.produtoCodigo,
+              nome: r.produtoNome,
+            ),
+      ],
+      barracao: [
+        for (final e in barracao)
+          (rotulo: e.rotulo, codigo: e.produtoCodigo, nome: e.produtoNome),
+      ],
+    );
+  } catch (_) {
+    return const {};
+  }
 }
 
 /// Botão da barra de cima (galpão e barracão) que abre a busca de estocados.
@@ -64,6 +93,7 @@ class _EstocadosSheet extends StatefulWidget {
 class _EstocadosSheetState extends State<_EstocadosSheet> {
   final _busca = TextEditingController();
   List<ItemEstocado> _itens = const [];
+  Map<String, List<String>> _enderecos = const {};
   bool _carregando = true;
   String? _erro;
 
@@ -86,9 +116,11 @@ class _EstocadosSheetState extends State<_EstocadosSheet> {
     });
     try {
       final itens = await carregarEstocados(forceRefresh: forceRefresh);
+      final enderecos = await carregarEnderecosDosEstocados();
       if (!mounted) return;
       setState(() {
         _itens = itens;
+        _enderecos = enderecos;
         _carregando = false;
       });
     } catch (e) {
@@ -220,6 +252,7 @@ class _EstocadosSheetState extends State<_EstocadosSheet> {
       if (i.armazem.isNotEmpty) 'arm ${i.armazem}',
       if (i.documento.isNotEmpty) 'doc ${i.documento}',
     ].join(' · ');
+    final onde = _enderecos[nomeDoPalete(i)] ?? const <String>[];
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.all(10),
@@ -245,6 +278,16 @@ class _EstocadosSheetState extends State<_EstocadosSheet> {
                       fontSize: 11,
                     ),
                   ),
+                Text(
+                  onde.isEmpty ? 'sem endereço' : '📍 ${onde.join('  ·  ')}',
+                  style: TextStyle(
+                    color: onde.isEmpty
+                        ? Colors.white.withValues(alpha: 0.30)
+                        : corCamda,
+                    fontSize: 11,
+                    fontWeight: onde.isEmpty ? FontWeight.w400 : FontWeight.w600,
+                  ),
+                ),
               ],
             ),
           ),

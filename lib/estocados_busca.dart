@@ -106,7 +106,35 @@ List<ItemEstocado> buscarEstocados(String query, List<ItemEstocado> itens) {
 /// o estocado não se confundir com nenhuma categoria da loja.
 Produto produtoDeEstocado(ItemEstocado i) => Produto(
       codigo: '$prefixoEstocado${i.codigo.isEmpty ? i.produto : i.codigo}',
-      nome: '${i.produto} · ${i.cooperado}',
+      nome: nomeDoPalete(i),
       categoria: 'ESTOCADO',
       corHex: '#8B5CF6',
     );
+
+/// Nome gravado no palete (`produto_nome`) para um item: o mesmo texto de
+/// [produtoDeEstocado]. É a chave que liga o palete ao item da lista — o
+/// código sozinho não serve, porque dois cooperados podem ter o mesmo produto.
+String nomeDoPalete(ItemEstocado i) => '${i.produto} · ${i.cooperado}';
+
+/// Endereços por nome de palete, só dos paletes de estocado.
+///
+/// [galpao] recebe (posição, ordem, código, nome) e [barracao] (rótulo, código,
+/// nome) — o mínimo que as duas tabelas têm em comum, para a regra ser pura.
+Map<String, List<String>> enderecosDosEstocados({
+  required Iterable<({int posicao, int ordem, String codigo, String nome})>
+      galpao,
+  required Iterable<({String rotulo, String codigo, String nome})> barracao,
+}) {
+  final mapa = <String, List<String>>{};
+  for (final r in galpao) {
+    if (!codigoEhEstocado(r.codigo)) continue;
+    mapa
+        .putIfAbsent(r.nome, () => [])
+        .add('Galpão ${r.posicao} · N${r.ordem}');
+  }
+  for (final e in barracao) {
+    if (!codigoEhEstocado(e.codigo)) continue;
+    mapa.putIfAbsent(e.nome, () => []).add(e.rotulo);
+  }
+  return mapa;
+}
