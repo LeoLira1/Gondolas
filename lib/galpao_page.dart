@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'estocados_sheet.dart';
 import 'galpao_busca.dart';
 import 'baixa_por_contagem.dart';
 import 'baixa_por_contagem_service.dart';
@@ -866,6 +867,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
                       ativo: _modoConferencia,
                       onTap: _toggleConferencia,
                     ),
+                    const SizedBox(width: 8),
+                    const BotaoEstocados(),
                     const SizedBox(width: 10),
                     // Ir para o número: digita 52, isola a rua e marca.
                     SizedBox(

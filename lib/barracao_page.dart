@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'barracao_busca.dart';
+import 'estocados_sheet.dart';
 import 'barracao_config.dart';
 import 'barracao_scene.dart' show BarracaoScene, corCamdaBarracao;
 import 'barracao_service.dart';
@@ -460,6 +461,8 @@ class _BarracaoPageState extends State<BarracaoPage> {
                       ativo: _modoConferencia,
                       onTap: _toggleConferencia,
                     ),
+                    const SizedBox(width: 8),
+                    const BotaoEstocados(),
                   ],
                 ),
               ),

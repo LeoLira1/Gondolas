@@ -278,3 +278,11 @@ começar, para não disputar a thread com o primeiro paint da cena 3D.
 ## Créditos
 
 Ícone do app: [Map icon criado por Freepik — Flaticon](https://www.flaticon.com/br/icones-gratis/mapa)
+
+## Produtos estocados (material de cooperado)
+
+Botão de caixa (📦) na barra de cima do **galpão** e do **barracão**. Abre uma busca
+por cooperado, produto ou código, lendo `materiais_terceiros` — a mesma tabela do app
+Estocados. É **só consulta**: esse material já saiu do sistema, então nada dele entra em
+`estoque_localizado`, no saldo, na baixa pela contagem nem no Modo Conferência.
+A lógica de busca está em `lib/estocados_busca.dart`; a tela, em `lib/estocados_sheet.dart`.
