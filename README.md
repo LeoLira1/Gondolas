@@ -296,3 +296,6 @@ contagem nem no Modo Conferência, mas ocupa a vaga e aparece no mapa. Nenhuma c
 no banco. A regra está em `lib/estocados_busca.dart` (`prefixoEstocado`).
 
 **Onde está.** Cada item da lista mostra `📍 Galpão 40 · N4` / `BAR-07` (ou `sem endereço`), ligando o palete ao item pelo nome `PRODUTO · COOPERADO`.
+
+**Retirar do endereço.** No painel de um palete de estocado há o botão `Retirar do endereço` (com confirmação): a vaga fica livre, a pilha desce se houver rack em cima, e o item continua na lista do cooperado. Vale no galpão e no barracão (mesmo painel). Fica registrado em `contagens_log` como qualquer esvaziamento.
+

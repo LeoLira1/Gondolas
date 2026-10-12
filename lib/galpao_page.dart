@@ -1754,8 +1754,67 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           const SizedBox(height: 8),
           botaoDestaque,
         ],
+        // Só palete de estocado: o cooperado levou a mercadoria, a vaga
+        // precisa voltar a ficar livre. Os demais racks seguem com o número
+        // como única ação (0 esvazia), como descrito no README.
+        if (codigoEhEstocado(rack.produtoCodigo) &&
+            widget.onEsvaziar != null) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => _retirarEstocado(rack),
+            icon: const Icon(Icons.output_outlined, size: 16),
+            label: const Text('Retirar do endereço'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: corEnderecoDivergente,
+              side: BorderSide(
+                color: corEnderecoDivergente.withValues(alpha: 0.5),
+              ),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  /// Tira o palete de estocado do endereço depois de confirmar. A confirmação
+  /// existe porque o toque é de um botão solto no painel, e porque, num rack
+  /// com outros em cima, a pilha desce (o N2 vira N1).
+  Future<void> _retirarEstocado(RackGalpao rack) async {
+    final t = widget.toque;
+    final pilha = widget.pilhas[t.posicao] ?? const <RackGalpao>[];
+    final temAcima = t.ordem < pilha.length;
+    final nome = rack.produtoNome.isEmpty ? rack.produtoCodigo : rack.produtoNome;
+    final confirmou = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1b1d21),
+        title: Text(
+          'Retirar $_rotulo?',
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: Text(
+          '$nome\n\nA vaga fica livre. O item continua na lista de estocados '
+          'do cooperado.'
+          '${temAcima ? '\n\nOs paletes de cima descem um nível.' : ''}',
+          style: const TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Retirar',
+              style: TextStyle(color: corEnderecoDivergente),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmou == true && mounted) widget.onEsvaziar?.call();
   }
 
   /// O saldo do produto em foco, em uma tarja: o que o sistema tem, o que já
