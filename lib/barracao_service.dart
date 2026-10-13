@@ -5,8 +5,7 @@ import 'package:libsql_dart/libsql_dart.dart';
 import 'package:libsql_dart/src/transaction.dart' show Transaction;
 
 import 'barracao_config.dart';
-import 'estocados_busca.dart' show codigoEhEstocado;
-import 'models.dart' show localTipoBarracao;
+import 'gravacao_lote.dart';
 import 'turso_service.dart';
 import 'outbox.dart';
 import 'replica_coordinator.dart';
@@ -186,22 +185,40 @@ class BarracaoService {
         chaveCache,
         _sqlTodos,
       );
-      return [
-        for (final row in rows)
-          EnderecoBarracao(
-            id:            row['id']     as int?    ?? 0,
-            rotulo:        row['rotulo'] as String? ?? '',
-            x:             (row['pos_x'] as num?)?.toDouble() ?? 0,
-            z:             (row['pos_z'] as num?)?.toDouble() ?? 0,
-            produtoCodigo: row['produto_codigo'] as String? ?? '',
-            produtoNome:   row['produto_nome']   as String? ?? '',
-            quantidade:    (row['quantidade'] as num?)?.toDouble() ?? 0,
-          ),
-      ];
+      return [for (final row in rows) _daLinha(row)];
     } catch (_) {
       return const [];
     }
   }
+
+  /// Relê os endereços DO SERVIDOR, sem servir a cópia, e atualiza a cópia de
+  /// leitura e a da busca — a conferência depois que a fila de gravação
+  /// esvazia. Null quando a leitura falhou: aqui uma lista vazia por falta de
+  /// rede apagaria o barracão inteiro da tela.
+  Future<List<EnderecoBarracao>?> recarregarEnderecos() async {
+    try {
+      final rows = await TursoService().consultarComCache(
+        chaveCache,
+        _sqlTodos,
+        forceRefresh: true,
+      );
+      await _guardarCache(rows);
+      return [for (final row in rows) _daLinha(row)];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static EnderecoBarracao _daLinha(Map<String, dynamic> row) =>
+      EnderecoBarracao(
+        id:            row['id']     as int?    ?? 0,
+        rotulo:        row['rotulo'] as String? ?? '',
+        x:             (row['pos_x'] as num?)?.toDouble() ?? 0,
+        z:             (row['pos_z'] as num?)?.toDouble() ?? 0,
+        produtoCodigo: row['produto_codigo'] as String? ?? '',
+        produtoNome:   row['produto_nome']   as String? ?? '',
+        quantidade:    (row['quantidade'] as num?)?.toDouble() ?? 0,
+      );
 
   /// Chave da cópia de leitura. É a mesma que `guardarConsulta` conhece para
   /// derivar o índice de `busca_barracao`.
@@ -224,243 +241,36 @@ class BarracaoService {
       (await tx.query(_sqlTodos))
           .map((r) => Map<String, dynamic>.from(r))
           .toList();
+}
 
-  /// Atribui um produto ao palete (ou troca o que estava lá) com a quantidade
-  /// informada. Devolve o endereço gravado, ou null se falhou.
-  ///
-  /// Atribuir e corrigir a quantidade são a MESMA gravação de propósito: no
-  /// barracão não existe "empilhar por cima" — o palete tem um produto e um
-  /// número, e mudar qualquer um dos dois é reescrever a linha.
-  Future<EnderecoBarracao?> atribuir({required int id, required String produtoCodigo,
-      required String produtoNome, required double quantidade}) async {
-    try {
-      return await TursoService().garantirReplicaProntaParaEscrita(() =>
-          _atribuir(id: id, produtoCodigo: produtoCodigo,
-              produtoNome: produtoNome, quantidade: quantidade));
-    } on ReplicaNaoProntaParaEscrita { return null; }
-  }
-
-  Future<EnderecoBarracao?> _atribuir({
-    required int id, required String produtoCodigo,
-    required String produtoNome, required double quantidade,
-  }) async {
-    if (quantidade <= 0) return null; // zerar é esvaziar, que é outra coisa
-    final client = await _conexao();
-    if (client == null) return null;
-    final agora = DateTime.now().toIso8601String();
-    try {
-      MutacaoOutbox? mutacao;
-      final tx = await client.transaction();
-      try {
-        final antes = await tx.query(
-          'SELECT rotulo, pos_x, pos_z, produto_codigo, quantidade '
-          'FROM barracao_enderecos WHERE id = ? LIMIT 1',
-          positional: [id],
-        );
-        if (antes.isEmpty) {
-          await tx.rollback();
-          return null;
-        }
-        final rotulo = antes.first['rotulo'] as String? ?? '';
-        final codigoAntes = antes.first['produto_codigo'] as String? ?? '';
-        // Quantidade anterior só conta como "anterior" quando é do MESMO
-        // produto: trocar o produto do palete é lançamento novo, e registrar
-        // a quantidade do produto que saiu como ponto de partida do que
-        // entrou faria o log mentir.
-        final qtdAntes = codigoAntes == produtoCodigo
-            ? (antes.first['quantidade'] as num?)?.toDouble() ?? 0
-            : null;
-
-        await tx.execute(
-          'UPDATE barracao_enderecos SET produto_codigo = ?, '
-          'produto_nome = ?, quantidade = ?, atualizado_em = ? WHERE id = ?',
-          positional: [produtoCodigo, produtoNome, quantidade, agora, id],
-        );
-        await _reescreverEspelho(tx, id, produtoCodigo, quantidade, agora);
-        await _registrarLog(tx, rotulo, produtoCodigo,
-            anterior: qtdAntes, nova: quantidade, agora: agora);
-        // O endereço do barracão tem `id` próprio e não é renumerado: a chave
-        // aponta sempre para o MESMO palete, então dá para reaplicar sozinho.
-        mutacao = await TursoService().abrirMutacao(
-          operacao: 'barracao.atribuir',
-          tabela:   'barracao_enderecos',
-          chave:    {'id': id},
-          estadoAnterior: {
-            'produto_codigo': codigoAntes,
-            'quantidade': (antes.first['quantidade'] as num?)?.toDouble() ?? 0,
-          },
-          estadoFinal: {
-            'produto_codigo': produtoCodigo,
-            'quantidade':     quantidade,
-          },
-          produtoCodigo: produtoCodigo,
-          produtoNome:   produtoNome,
-          posicao:       id,
-          quantidadeAnterior:   qtdAntes,
-          quantidadePretendida: quantidade,
-        );
-        await TursoService().carimbarMutacao(tx, mutacao);
-        final cacheRows = await _lerTodos(tx);
-        await tx.commit();
-        // Cópia de leitura (lista e busca) já com a gravação: sem isto a busca
-        // devolvia o estado anterior até o refresh em segundo plano.
-        await _guardarCache(cacheRows);
-        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
-        // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
-
-        return EnderecoBarracao(
-          id:            id,
-          rotulo:        rotulo,
-          x:             (antes.first['pos_x'] as num?)?.toDouble() ?? 0,
-          z:             (antes.first['pos_z'] as num?)?.toDouble() ?? 0,
-          produtoCodigo: produtoCodigo,
-          produtoNome:   produtoNome,
-          quantidade:    quantidade,
-        );
-      } catch (e) {
-        await tx.rollback();
-        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-        rethrow;
-      }
-    } catch (_) {
-      return null;
+/// O barracão como a pessoa o vê: o banco com as gravações ainda na fila por
+/// cima, na ordem em que foram feitas (ver `aplicarPendentesGalpao`). As duas
+/// operações do barracão são absolutas — o palete fica com ESTE produto e
+/// ESTE número, ou vazio —, então reaplicar uma que o banco já tem não muda
+/// nada.
+List<EnderecoBarracao> aplicarPendentesBarracao(
+  List<EnderecoBarracao> enderecos,
+  Iterable<OperacaoPendente> pendentes,
+) {
+  var lista = enderecos;
+  for (final op in pendentes) {
+    if (op.tipo != TipoOperacao.barracaoAtribuir &&
+        op.tipo != TipoOperacao.barracaoEsvaziar) {
+      continue;
     }
+    lista = [
+      for (final e in lista)
+        if (e.id != op.local)
+          e
+        else if (op.tipo == TipoOperacao.barracaoEsvaziar)
+          e.vazio
+        else
+          e.comProduto(
+            produtoCodigo: op.produtoCodigo,
+            produtoNome: op.produtoNome,
+            quantidade: op.quantidade,
+          ),
+    ];
   }
-
-  /// Tira o produto do palete — o endereço continua existindo, vazio.
-  ///
-  /// É o que o 0 do teclado de quantidade pede. O palete NÃO sai da tabela:
-  /// ele continua no chão do barracão esperando a próxima carga, e apagar a
-  /// linha recicaria o rótulo num endereço futuro (mesma lição do
-  /// PaleteRegistry, ver palete_registry.dart).
-  Future<EnderecoBarracao?> esvaziar({required int id, String? origem}) async {
-    try {
-      return await TursoService().garantirReplicaProntaParaEscrita(
-          () => _esvaziar(id: id, origem: origem));
-    } on ReplicaNaoProntaParaEscrita { return null; }
-  }
-
-  Future<EnderecoBarracao?> _esvaziar({required int id, String? origem}) async {
-    final client = await _conexao();
-    if (client == null) return null;
-    final agora = DateTime.now().toIso8601String();
-    try {
-      MutacaoOutbox? mutacao;
-      final tx = await client.transaction();
-      try {
-        final antes = await tx.query(
-          'SELECT rotulo, pos_x, pos_z, produto_codigo, quantidade '
-          'FROM barracao_enderecos WHERE id = ? LIMIT 1',
-          positional: [id],
-        );
-        if (antes.isEmpty) {
-          await tx.rollback();
-          return null;
-        }
-        final rotulo   = antes.first['rotulo'] as String? ?? '';
-        final codigo   = antes.first['produto_codigo'] as String? ?? '';
-        final qtdAntes = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
-
-        await tx.execute(
-          "UPDATE barracao_enderecos SET produto_codigo = '', "
-          "produto_nome = '', quantidade = 0, atualizado_em = ? WHERE id = ?",
-          positional: [agora, id],
-        );
-        await _reescreverEspelho(tx, id, '', 0, agora);
-        await _registrarLog(tx, rotulo, codigo,
-            anterior: qtdAntes, nova: 0, agora: agora, origem: origem);
-        // O endereço continua existindo, vazio — por isso o estado final não é
-        // `null`: a linha não some, ela zera.
-        mutacao = await TursoService().abrirMutacao(
-          operacao: 'barracao.esvaziar',
-          tabela:   'barracao_enderecos',
-          chave:    {'id': id},
-          estadoAnterior: {
-            'produto_codigo': codigo,
-            'quantidade':     qtdAntes,
-          },
-          estadoFinal: const {'produto_codigo': '', 'quantidade': 0},
-          produtoCodigo: codigo,
-          posicao:       id,
-          quantidadeAnterior:   qtdAntes,
-          quantidadePretendida: 0,
-        );
-        await TursoService().carimbarMutacao(tx, mutacao);
-        final cacheRows = await _lerTodos(tx);
-        await tx.commit();
-        // Cópia de leitura (lista e busca) já com a gravação: sem isto a busca
-        // devolvia o estado anterior até o refresh em segundo plano.
-        await _guardarCache(cacheRows);
-        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
-        // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
-
-        return EnderecoBarracao(
-          id:     id,
-          rotulo: rotulo,
-          x:      (antes.first['pos_x'] as num?)?.toDouble() ?? 0,
-          z:      (antes.first['pos_z'] as num?)?.toDouble() ?? 0,
-        );
-      } catch (e) {
-        await tx.rollback();
-        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-        rethrow;
-      }
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Reescreve as linhas de `estoque_localizado` do endereço.
-  ///
-  /// Apaga e insere, como o galpão faz por posição: o endereço tem no máximo
-  /// uma linha, e reescrever é o que faz a TROCA de produto no palete não
-  /// deixar a linha do produto anterior para trás — um UPDATE por chave
-  /// deixaria o antigo endereçado para sempre.
-  Future<void> _reescreverEspelho(Transaction tx, int id, String codigo,
-      double quantidade, String agora) async {
-    await tx.execute(
-      'DELETE FROM estoque_localizado WHERE local_tipo = ? AND local_num = ?',
-      positional: [localTipoBarracao, id],
-    );
-    if (codigo.trim().isEmpty || quantidade <= 0) return;
-    // Material de cooperado já saiu do sistema: não entra no saldo.
-    if (codigoEhEstocado(codigo)) return;
-    await tx.execute(
-      'INSERT INTO estoque_localizado (produto_codigo, local_tipo, '
-      'local_num, face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '
-      'VALUES (?, ?, ?, 0, 0, ?, ?)',
-      positional: [codigo, localTipoBarracao, id, quantidade, agora],
-    );
-  }
-
-  /// Uma linha em `contagens_log` por gravação do barracão, no mesmo formato
-  /// do galpão — o endereço textual aqui pode ser o rótulo puro justamente
-  /// porque ele não carrega nível nenhum para vencer na primeira movimentação.
-  Future<void> _registrarLog(
-    Transaction tx,
-    String rotulo,
-    String produtoCodigo, {
-    required double? anterior,
-    required double nova,
-    required String agora,
-    String? origem,
-  }) async {
-    await tx.execute(
-      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
-      'qtd_nova, origem, registrado_em) VALUES (?, ?, ?, ?, ?, ?)',
-      positional: [
-        produtoCodigo,
-        'BARRACAO·$rotulo',
-        anterior,
-        nova,
-        origem ??
-            (nova == 0
-                ? 'gondolas_app_barracao_exclusao'
-                : 'gondolas_app_barracao'),
-        agora,
-      ],
-    );
-  }
+  return lista;
 }

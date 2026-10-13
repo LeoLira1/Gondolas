@@ -10,6 +10,7 @@ import 'estante_edr300_scene.dart';
 import 'estante_parede_scene.dart';
 import 'estante_scene.dart';
 import 'estoque_localizado_service.dart';
+import 'fila_gravacao.dart';
 import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
 import 'expositor_nellore_scene.dart';
@@ -144,6 +145,9 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(TursoService().atualizarConsultas());
+      // Voltar ao app costuma ser voltar ao sinal: a gravação que estava
+      // esperando a próxima tentativa vai já.
+      FilaGravacao().tentarAgora();
     }
   }
 
@@ -169,6 +173,10 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
     // usuário ainda está se situando no mapa. LojaPage é a home e não emite
     // consulta própria, então essa janela é livre — e é ela que faz a PRIMEIRA
     // abertura de uma gôndola/prateleira custar o mesmo que as seguintes.
+    // Gravações do galpão/barracão que ficaram na fila (rede ruim, app
+    // fechado no meio) voltam a ser enviadas já na abertura, sem esperar
+    // alguém abrir o galpão.
+    unawaited(FilaGravacao().carregar());
     unawaited(TursoService().init().then((_) {
       unawaited(TursoService().prewarm());
       // Junto do prewarm: a baixa é a primeira coisa que precisa acontecer no

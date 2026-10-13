@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:libsql_dart/libsql_dart.dart';
 
+import 'gravacao_lote.dart';
 import 'models.dart';
 import 'turso_service.dart';
 import 'outbox.dart';
@@ -470,146 +473,86 @@ class EstoqueLocalizadoService {
     required double quantidade,
     String origem = 'gondolas_app',
   }) async {
-    try {
-      return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _upsertQuantidade(
-          produtoCodigo: produtoCodigo,
-          localTipo: localTipo,
-          localNum: localNum,
-          faceOuColuna: faceOuColuna,
-          andarOuNivel: andarOuNivel,
-          quantidade: quantidade,
-          origem: origem,
-        ),
-      );
-    } on ReplicaNaoProntaParaEscrita {
-      return false;
-    }
-  }
-
-  Future<bool> _upsertQuantidade({
-    required String produtoCodigo,
-    required String localTipo,
-    required int localNum,
-    required int faceOuColuna,
-    required int andarOuNivel,
-    required double quantidade,
-    String origem = 'gondolas_app',
-  }) async {
-    final client = await _conexao();
-    if (client == null) return false;
-    final tx = await client.transaction();
-    MutacaoOutbox? mutacao;
-    final chaveEndereco = chaveDoEndereco(
+    final turso = TursoService();
+    final uuid = gerarUuidV4();
+    final agora = DateTime.now().toIso8601String();
+    final endereco = EnderecoLocalizado(
       produtoCodigo: produtoCodigo,
       localTipo: localTipo,
       localNum: localNum,
       faceOuColuna: faceOuColuna,
       andarOuNivel: andarOuNivel,
+      quantidade: quantidade,
     );
+    final codigo = sqlTexto(produtoCodigo);
+    final tipo = sqlTexto(localTipo);
+    final onde =
+        'produto_codigo = $codigo AND local_tipo = $tipo AND '
+        'local_num = ${sqlNumero(localNum)} AND '
+        'face_ou_coluna = ${sqlNumero(faceOuColuna)} AND '
+        'andar_ou_nivel = ${sqlNumero(andarOuNivel)}';
+    // UMA requisição (ver gravacao_lote.dart). Eram ~9 idas e voltas em fila
+    // — leitura do anterior, upsert, log, carimbo, releitura —, todas dentro
+    // de uma transação aberta no servidor. O log vem antes do upsert porque é
+    // a linha ainda intacta que dá a quantidade anterior.
     try {
-      final rowsAnterior = await tx.query(
-        'SELECT quantidade FROM estoque_localizado WHERE produto_codigo = ? AND '
-        'local_tipo = ? AND local_num = ? AND face_ou_coluna = ? AND andar_ou_nivel = ? LIMIT 1',
-        positional: [
-          produtoCodigo,
-          localTipo,
-          localNum,
-          faceOuColuna,
-          andarOuNivel,
-        ],
-      );
-      final qtdAnterior = rowsAnterior.isEmpty
-          ? null
-          : rowsAnterior.first['quantidade'] as num?;
-
-      final agora = DateTime.now().toIso8601String();
-      await tx.execute(
-        'INSERT INTO estoque_localizado '
-        '(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?) '
-        'ON CONFLICT(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel) '
-        'DO UPDATE SET quantidade = excluded.quantidade, atualizado_em = excluded.atualizado_em',
-        positional: [
-          produtoCodigo,
-          localTipo,
-          localNum,
-          faceOuColuna,
-          andarOuNivel,
-          quantidade,
-          agora,
-        ],
-      );
-
-      final endereco = EnderecoLocalizado(
-        produtoCodigo: produtoCodigo,
-        localTipo: localTipo,
-        localNum: localNum,
-        faceOuColuna: faceOuColuna,
-        andarOuNivel: andarOuNivel,
-        quantidade: quantidade,
-      );
-      await tx.execute(
+      await turso.executarLote([
         'INSERT INTO contagens_log '
-        '(produto_codigo, endereco, qtd_anterior, qtd_nova, origem, registrado_em) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
-        positional: [
-          produtoCodigo,
-          endereco.enderecoCompacto,
-          qtdAnterior,
-          quantidade,
-          origem,
-          agora,
-        ],
-      );
-      // Endereço lógico é chave estável (produto + local), não posição numa
-      // pilha: dá para reler a MESMA linha no remoto depois de reconstruir, e
-      // por isso esta operação é reaplicável automaticamente.
-      mutacao = await TursoService().abrirMutacao(
-        operacao: 'estoqueLocalizado.upsertQuantidade',
-        auditoria: {
-          'produto_codigo': produtoCodigo,
-          'endereco': endereco.enderecoCompacto,
-          'qtd_anterior': qtdAnterior,
-          'qtd_nova': quantidade,
-          'origem': origem,
-          'registrado_em': agora,
-        },
-        tabela: 'estoque_localizado',
-        chave: chaveEndereco,
-        estadoAnterior: rowsAnterior.isEmpty
-            ? null
-            : {'quantidade': qtdAnterior},
-        estadoFinal: {'quantidade': quantidade},
-        // NOT NULL no esquema e fora da comparação: sem ele, recriar um
-        // endereço que o remoto não tem mais falharia no INSERT.
-        extrasParaInsercao: {'atualizado_em': agora},
-        produtoCodigo: produtoCodigo,
-        posicao: localNum,
-        quantidadeAnterior: qtdAnterior?.toDouble(),
-        quantidadePretendida: quantidade,
-      );
-      await TursoService().carimbarMutacao(tx, mutacao);
-      final quantidadesConfirmadas = await tx.query(
+            '(produto_codigo, endereco, qtd_anterior, qtd_nova, origem, '
+            'registrado_em) VALUES ($codigo, '
+            '${sqlTexto(endereco.enderecoCompacto)}, '
+            '(SELECT quantidade FROM estoque_localizado WHERE $onde LIMIT 1), '
+            '${sqlNumero(quantidade)}, ${sqlTexto(origem)}, '
+            '${sqlTexto(agora)})',
+        'INSERT INTO estoque_localizado (produto_codigo, local_tipo, '
+            'local_num, face_ou_coluna, andar_ou_nivel, quantidade, '
+            'atualizado_em) VALUES ($codigo, $tipo, ${sqlNumero(localNum)}, '
+            '${sqlNumero(faceOuColuna)}, ${sqlNumero(andarOuNivel)}, '
+            '${sqlNumero(quantidade)}, ${sqlTexto(agora)}) '
+            'ON CONFLICT(produto_codigo, local_tipo, local_num, '
+            'face_ou_coluna, andar_ou_nivel) DO UPDATE SET '
+            'quantidade = excluded.quantidade, '
+            'atualizado_em = excluded.atualizado_em',
+        comandoCarimbo(
+          uuid: uuid,
+          operacao: 'estoqueLocalizado.upsertQuantidade',
+          aplicadaEm: agora,
+          dispositivo: await turso.dispositivo(),
+        ),
+      ]);
+    } on FalhaGravacao catch (falha) {
+      // Resposta perdida não prova que não gravou: o carimbo no servidor diz.
+      if (!falha.transitoria || !await turso.confirmadoNoServidor(uuid)) {
+        return false;
+      }
+    } catch (_) {
+      return false;
+    }
+    _invalidarCachesBadges();
+    await turso.marcarGravacaoLocal();
+    // A cópia das quantidades do produto é relida por trás: quem gravou já
+    // tem o número na tela, e esperar essa leitura era mais uma ida ao banco
+    // segurando o "salvando".
+    unawaited(_atualizarCopiaDoProduto(produtoCodigo));
+    return true;
+  }
+
+  Future<void> _atualizarCopiaDoProduto(String produtoCodigo) async {
+    try {
+      final client = await _conexao();
+      if (client == null) return;
+      final rows = await client.query(
         'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
         'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
-      await tx.commit();
-      _invalidarCachesBadges();
-      await TursoService().marcarGravacaoLocal();
       await TursoService().guardarQuantidadesProduto(
         produtoCodigo,
-        quantidadesConfirmadas
-            .map((r) => Map<String, dynamic>.from(r))
-            .toList(),
+        rows.map((r) => Map<String, dynamic>.from(r)).toList(),
       );
-      return true;
     } catch (_) {
-      await tx.rollback();
-      if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-      return false;
+      // A cópia se corrige no próximo refresh: a cache já foi expirada.
     }
   }
 

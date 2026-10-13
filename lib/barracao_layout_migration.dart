@@ -6,14 +6,14 @@ const String migracaoBarracaoLayout2x2 = 'barracao_layout_2x2_v1';
 
 /// Reposiciona somente os endereços padrão. IDs, produtos, quantidades e
 /// endereços extras permanecem intactos.
-Future<void> migrarBarracaoParaLayout2x2(LibsqlClient client) async {
+Future<bool> migrarBarracaoParaLayout2x2(LibsqlClient client) async {
   try {
     final check = await client.prepare(
       'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
     );
     final aplicada = await check.query(
         positional: [migracaoBarracaoLayout2x2]) as List<dynamic>;
-    if (aplicada.isNotEmpty) return;
+    if (aplicada.isNotEmpty) return true;
     final tx = await client.transaction();
     try {
       for (final p in BarracaoConfig.posicoesPadrao) {
@@ -32,7 +32,9 @@ Future<void> migrarBarracaoParaLayout2x2(LibsqlClient client) async {
       await tx.rollback();
       rethrow;
     }
+    return true;
   } catch (_) {
     // Sem marcador a próxima abertura tenta novamente.
+    return false;
   }
 }

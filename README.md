@@ -275,6 +275,74 @@ tamanho com um limite de 3 s, para o laço dentro do laço não voltar sem
 ninguém ver. A baixa do galpão também espera o primeiro frame antes de
 começar, para não disputar a thread com o primeiro paint da cena 3D.
 
+## Gravação com internet ruim
+
+Na rede da loja o galpão ficava em "Gravando no banco online…" por muito
+tempo, e às vezes o rack nem entrava. Medido no código, não no palpite:
+
+- **Um lançamento eram ~17 idas e voltas ao Turso, uma atrás da outra.** A
+  gravação era uma transação interativa (BEGIN, cada SELECT/INSERT/UPDATE uma
+  ida, COMMIT), e o `libsql_dart` ainda faz um `describe` antes de toda
+  consulta — cada SELECT custava duas idas. Com 1 s de latência, ~17 s; e a
+  transação aberta no servidor no meio disso expirava, que era o "às vezes
+  nem lança".
+- **O segundo toque era jogado fora.** Enquanto um rack ia ao banco, um novo
+  lançamento era ignorado em silêncio.
+- **Nada tinha prazo.** O HTTP do libsql não tem timeout, e todas as
+  consultas de uma conexão passam por um stream só, atrás de um mutex: uma
+  requisição pendurada segurava tudo. Uma requisição cortada no meio ainda
+  podia deixar o stream com um "baton" vencido, e daí em diante TODA
+  requisição daquela conexão falhava até reabrir o app.
+- **O seed da planta do galpão eram ~130 idas** numa transação, a cada
+  sessão, com a trava de escrita do banco presa — o lançamento esperava atrás.
+
+O que mudou:
+
+- **Uma gravação = uma requisição** (`lib/gravacao_lote.dart`). Lançar,
+  corrigir e esvaziar rack, atribuir e esvaziar palete do barracão e gravar
+  quantidade de gôndola/estante viram um texto SQL só, mandado num pipeline
+  Hrana único (`batch`) entre `BEGIN IMMEDIATE` e `COMMIT`. O servidor roda
+  tudo em milissegundos; se um passo falha, o resto (inclusive o COMMIT) é
+  pulado e nada é gravado.
+- **Reenviar nunca grava duas vezes.** Todo comando do lote é condicionado a
+  `NOT EXISTS` do UUID em `app_mutacoes_aplicadas`, e o carimbo é o último
+  passo. Resposta perdida (o servidor gravou, o celular não ouviu) → o mesmo
+  lote, reenviado, não faz nada.
+- **Conflito tem nome.** Pilha que encheu em outro aparelho ou rack que já
+  saiu abortam o lote com `GONDOLAS_CONFLITO:<motivo>` (via `json_extract`,
+  porque fora de trigger o SQLite não tem RAISE). É o que separa "não adianta
+  reenviar" de "a rede caiu".
+- **O rack é achado pelo UUID, não pelo nível.** O UUID do rack nasce no
+  celular no momento do lançamento; um ajuste feito logo depois, ainda sem
+  rede, acha o rack certo mesmo que a pilha tenha mudado.
+- **Fila de gravação** (`lib/fila_gravacao.dart`). O toque aplica na tela e
+  entra na fila, guardada no aparelho antes de qualquer ida à rede — sobrevive
+  a fechar o app. Ela manda uma por vez, na ordem, e reenvia sozinha (1, 2,
+  4… até 20 s entre tentativas). A barra de baixo diz se está indo (rodinha)
+  ou se a rede não deixou mas está guardado (nuvem riscada, botão `Tentar
+  já`); tocar nela lista o que falta e tem `Descartar todas` para emergência.
+  Só o que o banco recusa de verdade volta atrás na tela, com aviso dizendo o
+  quê e por quê. A fila recomeça sozinha ao abrir o app e ao voltar para ele.
+- **A tela é o banco + a fila por cima** (`aplicarPendentesGalpao`,
+  `aplicarPendentesBarracao`): recarregar do banco a qualquer momento não faz
+  sumir o que ainda não subiu. O saldo é relido uma vez, quando a fila
+  esvazia — antes cada lançamento baixava de novo o `estoque_mestre` inteiro.
+- **Conexão de escrita própria, descartada a cada falha**, com prazo de 25 s.
+  A de leitura também ganhou prazo e se renova sozinha depois de uma falha.
+- **Abertura enxuta.** As ~20 criações de tabela/índice viraram uma
+  requisição; as migrações só conferem `app_migrations` até darem certo uma
+  vez por banco (a marca fica no aparelho); o seed da planta é um upsert só e
+  só sai quando a planta do código muda. De ~35 idas na abertura para 1–3.
+
+Verificado em SQLite real por `tool/verify_gravacao_sql.py` (lotes, conflito,
+reenvio, pilha que desce, estocado fora do espelho, esquema da abertura) e
+nos testes de `test/fila_gravacao_test.dart` e `test/gravacao_lote_test.dart`.
+O teste que falta é o do celular na rede da loja.
+
+Ainda no caminho antigo (várias idas por gravação): layouts de gôndola e
+estante, cadastro de paletes, exclusão de endereço de gôndola e conclusão de
+contagem.
+
 ## Créditos
 
 Ícone do app: [Map icon criado por Freepik — Flaticon](https://www.flaticon.com/br/icones-gratis/mapa)

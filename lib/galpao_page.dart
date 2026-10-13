@@ -5,6 +5,9 @@ import 'package:flutter/services.dart';
 
 import 'estocados_busca.dart';
 import 'estocados_sheet.dart';
+import 'fila_gravacao.dart';
+import 'fila_gravacao_ui.dart';
+import 'gravacao_lote.dart';
 import 'galpao_busca.dart';
 import 'baixa_por_contagem.dart';
 import 'baixa_por_contagem_service.dart';
@@ -18,6 +21,7 @@ import 'gondola_scene.dart'
     show corEnderecoDivergente, corEnderecoDivergentePositiva;
 import 'modo_conferencia_service.dart';
 import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
+import 'outbox.dart' show gerarUuidV4;
 import 'turso_service.dart';
 import 'unidades.dart';
 
@@ -142,6 +146,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
   @override
   void dispose() {
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    if (_persistindo) _fila.removeListener(_aoMudarFila);
+    unawaited(_eventosFila?.cancel());
+    _recargaAposFila?.cancel();
     _irParaCtrl.dispose();
     super.dispose();
   }
@@ -248,7 +255,17 @@ class _GalpaoPageState extends State<GalpaoPage> {
       if (_consultandoConferencia) unawaited(_carregarConferencia());
     }
     if (_persistindo) {
-      _carregarPilhas();
+      // Antes das pilhas: o que ficou na fila (desta sessão ou de antes de o
+      // app fechar) entra por cima do que vier do banco.
+      _fila.addListener(_aoMudarFila);
+      _eventosFila = _fila.eventos.listen(_aoEventoFila);
+      _filaTinhaPendentes = _temPendentesGalpao;
+      // A fila primeiro (é leitura local, já feita na abertura do app quase
+      // sempre): pilhas que chegassem do cache antes dela sairiam sem o que
+      // ficou pendente da sessão anterior.
+      unawaited(_fila.carregar().then((_) {
+        if (mounted) _carregarPilhas();
+      }));
       // Depois de _carregarPilhas, não antes: a baixa avisa por dataRevision
       // quando muda alguma coisa, e é esse aviso que traz as pilhas já
       // corrigidas. Abrir o galpão é o momento certo — é aqui que o rack
@@ -269,7 +286,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 
   void _aoAtualizarDados() {
-    if (!mounted || !_persistindo || _gravandoOnline) return;
+    if (!mounted || !_persistindo) return;
     _carregarPilhas();
     unawaited(_carregarCatalogo());
     // Uma sincronização também traz as confirmações feitas no app de contagem:
@@ -280,18 +297,19 @@ class _GalpaoPageState extends State<GalpaoPage> {
   }
 
   Future<void> _carregarPilhas() async {
-    if (_gravandoOnline) return;
     final versao = _versaoPilhas;
     setState(() => _carregandoPilhas = true);
     unawaited(GalpaoService().garantirSeed());
     final pilhas = await GalpaoService().carregarPilhas();
-    if (!mounted || _gravandoOnline || versao != _versaoPilhas) return;
-    setState(() {
-      _pilhas
-        ..clear()
-        ..addAll(pilhas);
-      _carregandoPilhas = false;
-    });
+    if (!mounted) return;
+    if (versao != _versaoPilhas) {
+      // Uma gravação foi confirmada enquanto esta leitura estava no ar: ela
+      // saiu da fila e pode não estar nas linhas lidas. A recarga do fim da
+      // fila é que traz o estado certo.
+      setState(() => _carregandoPilhas = false);
+      return;
+    }
+    _aplicarPilhasDoBanco(pilhas);
     _marcarPosicaoInicial();
     // Depois das pilhas de propósito: a consulta de saldo se apoia nos
     // códigos que estão em galpao_racks, e recarregá-la junto mantém as duas
@@ -316,8 +334,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// informação a mais, nunca um bloqueio para lançar carga.
   Future<void> _carregarSaldos() async {
     if (!_consultandoSaldos) return;
+    // Com gravação na fila, o banco ainda não sabe dela e a leitura apagaria
+    // o delta que a tela já aplicou. A recarga do fim da fila lê o saldo.
+    if (_temPendentesGalpao) return;
+    final mudancas = _mudancasLocais;
     final saldos = await GalpaoService().carregarSaldos();
-    if (!mounted) return;
+    if (!mounted || mudancas != _mudancasLocais || _temPendentesGalpao) return;
     setState(() => _saldos = saldos);
   }
 
@@ -539,198 +561,233 @@ class _GalpaoPageState extends State<GalpaoPage> {
     return partes;
   }
 
-  /// Lança na tela primeiro e no banco em seguida (UI otimista): o galpão é
-  /// usado em pé, com carga chegando, e esperar a ida ao banco a cada rack
-  /// travaria o ritmo. Se a gravação falhar, o estado local volta atrás e o
-  /// aviso é explícito — nunca fica um rack "lançado" só na tela.
-  bool _gravandoOnline = false;
+  // ── Gravação ──────────────────────────────────────────────────────────────
+  //
+  // Na tela primeiro, no banco depois — e o "depois" é da FilaGravacao, não
+  // desta página. O galpão é usado em pé, com carga chegando: cada toque
+  // aplica na hora e entra na fila, e a pessoa já pode tocar a próxima vaga
+  // (antes, um lançamento feito enquanto o anterior ia ao banco era ignorado
+  // em silêncio). A fila manda um lote por vez, em UMA requisição cada, e
+  // reenvia sozinha se a rede falhar; só o que o banco recusa de verdade
+  // (pilha que encheu em outro aparelho, rack que já saiu) volta atrás, com
+  // aviso.
+
+  final FilaGravacao _fila = FilaGravacao();
+  StreamSubscription<EventoFila>? _eventosFila;
+  bool _filaTinhaPendentes = false;
+  Timer? _recargaAposFila;
+
+  /// Muda quando uma gravação é CONFIRMADA: leitura do banco iniciada antes
+  /// disso é descartada (ver [_carregarPilhas]).
   int _versaoPilhas = 0;
 
-  Future<void> _onLancar(
-    int posicao,
-    Produto produto,
-    double quantidade,
-  ) async {
-    if (_gravandoOnline) return;
-    _gravandoOnline = _persistindo;
-    _versaoPilhas++;
-    try {
-      final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-      final nova = pilhaAposLancar(
-        antes,
-        posicao: posicao,
-        produtoCodigo: produto.codigo,
-        produtoNome: produto.nome,
-        quantidade: quantidade,
-      );
-      if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
-      setState(() {
-        _pilhas[posicao] = nova;
-        // O saldo do produto acompanha o lançamento na hora: o cubo que acabou
-        // de entrar não pode continuar vermelho esperando a releitura do banco.
-        _saldos = saldosComDelta(
-          _saldos,
-          codigo: produto.codigo,
-          delta: quantidade,
-        );
-        _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
-        _recentes.insert(
-          0,
-          LancamentoRecente(produto: produto, quantidade: quantidade),
-        );
-        if (_recentes.length > _maxRecentes) _recentes.removeLast();
-        // Fecha o painel: no fluxo de carga o próximo gesto é tocar a próxima
-        // vaga, e o produto recém-lançado está nos recentes.
-        _selecionado = null;
-      });
-      if (!_persistindo) return;
+  /// Muda a cada gravação feita na tela: leitura de saldo iniciada antes
+  /// disso não pode apagar o delta otimista.
+  int _mudancasLocais = 0;
 
-      final gravada = await GalpaoService().lancar(
+  bool get _temPendentesGalpao => _fila.pendentes.any((o) => o.tipo.doGalpao);
+
+  /// O banco + o que ainda está na fila, por cima.
+  void _aplicarPilhasDoBanco(Map<int, List<RackGalpao>> doBanco) {
+    final pilhas = aplicarPendentesGalpao(doBanco, _fila.pendentes);
+    setState(() {
+      _pilhas
+        ..clear()
+        ..addAll(pilhas);
+      _carregandoPilhas = false;
+    });
+  }
+
+  void _aoMudarFila() {
+    if (!mounted) return;
+    final tem = _temPendentesGalpao;
+    // A fila do galpão acabou (confirmada, recusada ou descartada): relê o
+    // banco uma vez, para trazer o que outro aparelho fez no meio tempo e o
+    // saldo de verdade. Um respiro curto junta as confirmações em rajada.
+    if (_filaTinhaPendentes && !tem) {
+      _recargaAposFila?.cancel();
+      _recargaAposFila = Timer(
+        const Duration(milliseconds: 800),
+        () => unawaited(_recarregarDoBanco()),
+      );
+    }
+    _filaTinhaPendentes = tem;
+    setState(() {});
+  }
+
+  void _aoEventoFila(EventoFila evento) {
+    if (!mounted || !evento.operacao.tipo.doGalpao) return;
+    _versaoPilhas++;
+    if (evento.gravada) return;
+    _avisar(mensagemFalhaFila(evento));
+    // A tela tinha aplicado a operação; agora ela saiu da fila, e o banco
+    // (com o resto da fila por cima) é o que vale.
+    unawaited(_recarregarDoBanco());
+  }
+
+  Future<void> _recarregarDoBanco() async {
+    final versao = _versaoPilhas;
+    final pilhas = await GalpaoService().recarregarPilhas();
+    if (!mounted || pilhas == null || versao != _versaoPilhas) return;
+    _aplicarPilhasDoBanco(pilhas);
+    unawaited(_carregarSaldos());
+  }
+
+  void _enfileirar(OperacaoPendente op) {
+    _mudancasLocais++;
+    unawaited(_fila.enfileirar(op));
+  }
+
+  OperacaoPendente _operacao(
+    TipoOperacao tipo, {
+    required int posicao,
+    required int ordem,
+    String? uuid,
+    String? rackUuid,
+    String produtoCodigo = '',
+    String produtoNome = '',
+    double quantidade = 0,
+    double? quantidadeAnterior,
+  }) => OperacaoPendente(
+    uuid: uuid ?? gerarUuidV4(),
+    tipo: tipo,
+    banco: TursoService().identidadeAtiva ?? '',
+    criadaEm: DateTime.now(),
+    local: posicao,
+    rackUuid: rackUuid,
+    produtoCodigo: produtoCodigo,
+    produtoNome: produtoNome,
+    quantidade: quantidade,
+    quantidadeAnterior: quantidadeAnterior,
+    rotulo: '$posicao · N$ordem',
+  );
+
+  void _onLancar(int posicao, Produto produto, double quantidade) {
+    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+    // O UUID do rack nasce aqui: é ele que o lote grava em rack_uuid, e é com
+    // ele que um ajuste feito antes de o lançamento chegar ao banco acha o
+    // rack certo.
+    final uuid = _persistindo ? gerarUuidV4() : null;
+    final nova = pilhaAposLancar(
+      antes,
+      posicao: posicao,
+      produtoCodigo: produto.codigo,
+      produtoNome: produto.nome,
+      quantidade: quantidade,
+      rackUuid: uuid,
+    );
+    if (nova == null) return; // pilha cheia — a UI não oferece, guarda dupla
+    setState(() {
+      _pilhas[posicao] = nova;
+      // O saldo do produto acompanha o lançamento na hora: o cubo que acabou
+      // de entrar não pode continuar vermelho esperando o banco.
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: produto.codigo,
+        delta: quantidade,
+      );
+      _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
+      _recentes.insert(
+        0,
+        LancamentoRecente(produto: produto, quantidade: quantidade),
+      );
+      if (_recentes.length > _maxRecentes) _recentes.removeLast();
+      // Fecha o painel: no fluxo de carga o próximo gesto é tocar a próxima
+      // vaga, e o produto recém-lançado está nos recentes.
+      _selecionado = null;
+    });
+    if (!_persistindo) return;
+    _enfileirar(
+      _operacao(
+        TipoOperacao.galpaoLancar,
+        uuid: uuid,
         posicao: posicao,
+        ordem: nova.length,
         produtoCodigo: produto.codigo,
         produtoNome: produto.nome,
         quantidade: quantidade,
-      );
-      if (!mounted) return;
-      if (gravada == null) {
-        setState(() {
-          _pilhas[posicao] = antes;
-          _saldos = saldosComDelta(
-            _saldos,
-            codigo: produto.codigo,
-            delta: -quantidade,
-          );
-        });
-        _avisar(
-          'Gravação não confirmada. Confira a conexão e tente novamente.',
-          tentarNovamente: () => _onLancar(posicao, produto, quantidade),
-        );
-      } else {
-        // A pilha do banco manda: se outra pessoa lançou nesta posição no meio
-        // do caminho, o rack novo entrou num nível acima do previsto.
-        setState(() => _pilhas[posicao] = gravada);
-        // E o saldo do banco também: o delta otimista acima ignora o que outro
-        // aparelho lançou enquanto isso.
-        unawaited(_carregarSaldos());
-      }
-    } finally {
-      _gravandoOnline = false;
-    }
+      ),
+    );
   }
 
   /// Corrige a quantidade de um rack que já está lá — mesmo palete, mesmo
-  /// produto, número novo. Otimista como o lançamento, e pelo mesmo motivo: a
-  /// conferência é feita em pé, com o produto na frente.
+  /// produto, número novo.
   ///
   /// O painel NÃO fecha aqui (ao contrário de [_onLancar]): quem acabou de
   /// corrigir quer ver a tarja de saldo fechar na hora — é a confirmação de
   /// que o número agora bate com o sistema.
-  Future<void> _onAjustar(int posicao, int ordem, double quantidade) async {
-    if (_gravandoOnline) return;
-    _gravandoOnline = _persistindo;
-    _versaoPilhas++;
-    try {
-      final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-      final rack = ordem >= 1 && ordem <= antes.length
-          ? antes[ordem - 1]
-          : null;
-      if (rack == null || quantidade <= 0) return;
-      final delta = quantidade - rack.quantidade;
-      if (delta == 0) return;
-
-      setState(() {
-        _pilhas[posicao] = pilhaAposAjustar(antes, ordem, quantidade);
-        _saldos = saldosComDelta(
-          _saldos,
-          codigo: rack.produtoCodigo,
-          delta: delta,
-        );
-      });
-      if (!_persistindo) return;
-
-      final gravada = await GalpaoService().ajustarQuantidade(
-        rackUuid: rack.rackUuid,
+  void _onAjustar(int posicao, int ordem, double quantidade) {
+    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+    final rack = ordem >= 1 && ordem <= antes.length ? antes[ordem - 1] : null;
+    if (rack == null || quantidade <= 0) return;
+    final delta = quantidade - rack.quantidade;
+    if (delta == 0) return;
+    if (_persistindo && rack.rackUuid == null) {
+      _avisar('Esse rack ainda não tem identidade no banco — reabra o galpão.');
+      return;
+    }
+    setState(() {
+      _pilhas[posicao] = pilhaAposAjustar(antes, ordem, quantidade);
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: rack.produtoCodigo,
+        delta: delta,
+      );
+    });
+    if (!_persistindo) return;
+    _enfileirar(
+      _operacao(
+        TipoOperacao.galpaoAjustar,
         posicao: posicao,
         ordem: ordem,
+        rackUuid: rack.rackUuid,
+        produtoCodigo: rack.produtoCodigo,
+        produtoNome: rack.produtoNome,
         quantidade: quantidade,
-      );
-      if (!mounted) return;
-      if (gravada == null) {
-        setState(() {
-          _pilhas[posicao] = antes;
-          _saldos = saldosComDelta(
-            _saldos,
-            codigo: rack.produtoCodigo,
-            delta: -delta,
-          );
-        });
-        _avisar(
-          'Não deu para gravar a quantidade — confira a conexão com o '
-          'banco em ⚙️.',
-        );
-      } else {
-        setState(() => _pilhas[posicao] = gravada);
-        unawaited(_carregarSaldos());
-      }
-    } finally {
-      _gravandoOnline = false;
-    }
+        quantidadeAnterior: rack.quantidade,
+      ),
+    );
   }
 
-  Future<void> _onEsvaziar(int posicao, int ordem) async {
-    if (_gravandoOnline) return;
-    _gravandoOnline = _persistindo;
-    _versaoPilhas++;
-    try {
-      final antes = _pilhas[posicao] ?? const <RackGalpao>[];
-      // O rack que sai: o que ele levava embora deixa de estar endereçado, e o
-      // saldo do produto tem de refletir isso no mesmo frame da descida.
-      final saindo = ordem >= 1 && ordem <= antes.length
-          ? antes[ordem - 1]
-          : null;
-      setState(() {
-        _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
-        if (saindo != null) {
-          _saldos = saldosComDelta(
-            _saldos,
-            codigo: saindo.produtoCodigo,
-            delta: -saindo.quantidade,
-          );
-        }
-        _descida = DescidaPilha(
-          posicao: posicao,
-          aPartirDaOrdem: ordem,
-          id: ++_descidaSeq,
+  void _onEsvaziar(int posicao, int ordem) {
+    final antes = _pilhas[posicao] ?? const <RackGalpao>[];
+    // O rack que sai: o que ele levava embora deixa de estar endereçado, e o
+    // saldo do produto tem de refletir isso no mesmo frame da descida.
+    final saindo = ordem >= 1 && ordem <= antes.length
+        ? antes[ordem - 1]
+        : null;
+    if (_persistindo && saindo?.rackUuid == null) {
+      _avisar('Esse rack ainda não tem identidade no banco — reabra o galpão.');
+      return;
+    }
+    setState(() {
+      _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
+      if (saindo != null) {
+        _saldos = saldosComDelta(
+          _saldos,
+          codigo: saindo.produtoCodigo,
+          delta: -saindo.quantidade,
         );
-        _selecionado = null;
-      });
-      if (!_persistindo) return;
-
-      final gravada = await GalpaoService().esvaziar(
-        rackUuid: saindo?.rackUuid,
+      }
+      _descida = DescidaPilha(
+        posicao: posicao,
+        aPartirDaOrdem: ordem,
+        id: ++_descidaSeq,
+      );
+      _selecionado = null;
+    });
+    if (!_persistindo || saindo == null) return;
+    _enfileirar(
+      _operacao(
+        TipoOperacao.galpaoEsvaziar,
         posicao: posicao,
         ordem: ordem,
-      );
-      if (!mounted) return;
-      if (gravada == null) {
-        setState(() {
-          _pilhas[posicao] = antes;
-          if (saindo != null) {
-            _saldos = saldosComDelta(
-              _saldos,
-              codigo: saindo.produtoCodigo,
-              delta: saindo.quantidade,
-            );
-          }
-        });
-        _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
-      } else {
-        setState(() => _pilhas[posicao] = gravada);
-        unawaited(_carregarSaldos());
-      }
-    } finally {
-      _gravandoOnline = false;
-    }
+        rackUuid: saindo.rackUuid,
+        produtoCodigo: saindo.produtoCodigo,
+        produtoNome: saindo.produtoNome,
+        quantidadeAnterior: saindo.quantidade,
+      ),
+    );
   }
 
   /// Códigos com rack no galpão — a base do resumo de saldo (um produto em
@@ -749,17 +806,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   void _toggleSaldo() => setState(() => _mostrarSaldo = !_mostrarSaldo);
 
-  void _avisar(String mensagem, {VoidCallback? tentarNovamente}) {
+  void _avisar(String mensagem) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(mensagem),
         behavior: SnackBarBehavior.floating,
-        action: tentarNovamente == null
-            ? null
-            : SnackBarAction(
-                label: 'Tentar novamente',
-                onPressed: tentarNovamente,
-              ),
+        duration: const Duration(seconds: 6),
       ),
     );
   }
@@ -772,23 +824,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
     final resumoSaldo = _resumoSaldo;
 
     return Scaffold(
-      bottomNavigationBar: _gravandoOnline
-          ? const SafeArea(
-              child: Padding(
-                padding: EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    SizedBox(width: 12),
-                    Text('Gravando no banco online…'),
-                  ],
-                ),
-              ),
-            )
+      bottomNavigationBar: _persistindo && !_fila.vazia
+          ? BarraFilaGravacao(fila: _fila)
           : null,
       backgroundColor: const Color(0xFF0b0c0e),
       body: Stack(

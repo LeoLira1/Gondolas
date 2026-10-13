@@ -16,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'barracao_layout_migration.dart';
 import 'galpao_config.dart';
 import 'galpao_migracao_unidades.dart';
+import 'gravacao_lote.dart';
 import 'layout_cache.dart';
 import 'consulta_cache.dart';
 import 'busca_local.dart';
@@ -200,13 +201,43 @@ class TursoService {
           throw StateError('Sem conexão com o banco');
         }
         consultasEmitidas++;
-        final stmt = await _client!.prepare(sql);
-        final rows = await stmt.query(positional: parametros) as List<dynamic>;
-        return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        final cliente = _client!;
+        try {
+          final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+          final rows =
+              await stmt
+                      .query(positional: parametros)
+                      .timeout(_timeoutLeitura)
+                  as List<dynamic>;
+          return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        } catch (_) {
+          _renovarClienteDeLeitura(cliente);
+          rethrow;
+        }
       },
       usarCache: usarCache,
       forceRefresh: forceRefresh,
       falharSemCache: falharSemCache,
+    );
+  }
+
+  /// Troca a conexão de leitura por uma nova depois de uma falha.
+  ///
+  /// Pelo mesmo motivo da de escrita (ver [_clienteEscrita]): o libsql guarda
+  /// o "baton" da conversa no stream da conexão, e uma consulta cortada no
+  /// meio pode deixá-lo vencido — dali em diante toda leitura falhava até
+  /// reabrir o app, e o galpão ficava preso na cópia antiga. A conexão nova
+  /// não toca no esquema (já está criado nesta sessão) e não sai à rede para
+  /// nascer. A velha não é fechada: quem ainda a usa termina com ela.
+  void _renovarClienteDeLeitura(LibsqlClient falhou) {
+    final url = _urlAtiva;
+    final token = _tokenAtivo;
+    if (!identical(_client, falhou) || _modoLocal || url == null) return;
+    final novo = LibsqlClient.remote(url, authToken: token);
+    unawaited(
+      novo.connect().timeout(_timeoutConexao).then((_) {
+        if (identical(_client, falhou) && _urlAtiva == url) _client = novo;
+      }, onError: (_) {}),
     );
   }
 
@@ -551,6 +582,25 @@ class TursoService {
     }
   }
 
+  /// True quando o UUID está carimbado NO SERVIDOR — a gravação entrou,
+  /// mesmo que a resposta do lote tenha se perdido no caminho. Pergunta pela
+  /// conexão de sondagem, não pela que acabou de falhar.
+  Future<bool> confirmadoNoServidor(String uuid) async {
+    try {
+      final remoto = await _sondaRemota();
+      final rows = await remoto
+          ?.query(
+            'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid = ?',
+            positional: [uuid],
+          )
+          .timeout(_timeoutConexao);
+      return rows != null && rows.isNotEmpty;
+    } catch (_) {
+      await _descartarSonda();
+      return false;
+    }
+  }
+
   /// Carimba o UUID DENTRO da transação da mutação. É o que faz o
   /// reconhecimento viajar nos mesmos frames: ou os dois chegam, ou nenhum.
   Future<void> carimbarMutacao(Transaction tx, MutacaoOutbox m) => tx.execute(
@@ -839,14 +889,21 @@ class TursoService {
     final atual = prefs.getString(keyDbUrl) ?? '';
     if (atual.isEmpty) return null;
     if (idBanco(atual) == idBanco(novaUrl)) return null;
+    final banco = idBanco(atual);
     final pendentes =
-        prefs.getInt('${keyGravacoesPendentes}_${idBanco(atual)}') ??
-        prefs.getInt(keyGravacoesPendentes) ??
-        0;
+        (prefs.getInt('${keyGravacoesPendentes}_$banco') ??
+            prefs.getInt(keyGravacoesPendentes) ??
+            0) +
+        // A fila do galpão/barracão: o que ainda não subiu também é deste
+        // banco, e depois da troca não teria para onde ir.
+        OperacaoPendente.decodificarLista(
+          prefs.getString(chaveFilaGravacao),
+        ).where((o) => o.banco == banco).length;
     if (pendentes <= 0) return null;
     final plural = pendentes == 1 ? 'gravação' : 'gravações';
-    return '$pendentes $plural deste banco ainda não subiram. Sincronize '
-        'antes de trocar a URL — depois da troca não há como enviá-las.';
+    return '$pendentes $plural deste banco ainda não subiram. Espere '
+        'subirem (ou sincronize) antes de trocar a URL — depois da troca não '
+        'há como enviá-las.';
   }
 
   /// Tranca o app em recuperação e GRAVA a marca antes de devolver: é ela que
@@ -947,6 +1004,71 @@ class TursoService {
   // Acessor para serviços satélite (ex: EstoqueLocalizadoService) reaproveitarem
   // esta mesma conexão, em vez de abrir uma segunda.
   LibsqlClient? get client => _client;
+
+  /// Identidade (ver [idBanco]) do banco em uso, ou null antes do init.
+  String? get identidadeAtiva => _identidadeAtiva;
+
+  /// Identificador deste aparelho (ver [_dispositivoAtual]).
+  Future<String> dispositivo() => _dispositivoAtual();
+
+  // ── Gravação em uma requisição ────────────────────────────────────────────
+
+  /// Conexão SÓ de escrita, separada da de leitura ([_client]) e descartada a
+  /// cada falha.
+  ///
+  /// Separada porque o libsql usa um stream Hrana só por conexão, atrás de um
+  /// mutex: uma leitura grande presa na rede ruim (o catálogo de 5000 linhas,
+  /// por exemplo) seguraria a gravação atrás dela. Descartável porque o mesmo
+  /// stream guarda o "baton" da última conversa com o servidor, e uma
+  /// requisição cortada no meio pode deixá-lo vencido — daí em diante TODA
+  /// requisição daquela conexão volta com erro, até reabrir o app. E porque o
+  /// cliente HTTP do libsql não tem prazo: uma requisição sem resposta fica
+  /// pendurada segurando o mutex. Conexão nova = stream novo, sem nada disso.
+  LibsqlClient? _clienteEscrita;
+
+  /// Prazo de UMA gravação, do envio à resposta. Folgado para a rede da loja
+  /// (inclui o handshake TLS de uma conexão nova); estourou, a fila tenta de
+  /// novo com o mesmo UUID, sem risco de gravar duas vezes.
+  static const Duration timeoutGravacao = Duration(seconds: 25);
+
+  /// Roda [comandos] como UMA requisição: BEGIN IMMEDIATE; …; COMMIT (ver
+  /// gravacao_lote.dart). Volta normalmente só quando o servidor confirmou o
+  /// COMMIT; qualquer outro desfecho vira [FalhaGravacao], já classificada
+  /// entre "reenviar resolve" e "não adianta reenviar".
+  ///
+  /// Não passa pelo mutex do coordenador de propósito: a escrita é uma
+  /// transação inteira no servidor, com prazo próprio, e esperar na fila
+  /// atrás de uma gravação antiga sem prazo recriaria o "fica só gravando".
+  Future<void> executarLote(
+    List<String> comandos, {
+    Duration limite = timeoutGravacao,
+  }) async {
+    if (!await _garantirConexao() || _urlAtiva == null || _tokenAtivo == null) {
+      throw const FalhaGravacao(
+        TipoFalhaGravacao.rede,
+        'Sem conexão com o banco online.',
+      );
+    }
+    final texto = textoDoLote(comandos);
+    LibsqlClient? cliente = _clienteEscrita;
+    try {
+      if (cliente == null) {
+        cliente = LibsqlClient.remote(_urlAtiva!, authToken: _tokenAtivo);
+        await cliente.connect().timeout(limite);
+        _clienteEscrita = cliente;
+      }
+      await cronometrar('lote', () => cliente!.batch(texto).timeout(limite));
+      consultasEmitidas++;
+    } catch (e) {
+      // Qualquer falha aposenta a conexão (ver [_clienteEscrita]). A próxima
+      // tentativa abre outra; a requisição que ficou pendurada, se um dia
+      // completar, completa no vazio — e o UUID impede que valha duas vezes.
+      if (cliente != null && identical(_clienteEscrita, cliente)) {
+        _clienteEscrita = null;
+      }
+      throw classificarFalhaGravacao(e);
+    }
+  }
 
   Future<bool> garantirConexao() => _garantirConexao();
 
@@ -1073,6 +1195,8 @@ class TursoService {
 
     _connected = false;
     _client = null;
+    // A de escrita foi aberta com as credenciais antigas.
+    _clienteEscrita = null;
     _urlAtiva = null;
     _tokenAtivo = null;
     _cacheLocalAtivo = null;
@@ -1108,11 +1232,11 @@ class TursoService {
     try {
       // Modo remoto (Web ou falha ao abrir o arquivo local): cria o esquema
       // e conecta direto ao remoto, como antes.
-      await _criarEsquema(client);
-      await _migrarEsquemaLabelsEstante3(client);
-      await _migrarPaletesCadastroDinamico(client);
-      await migrarGalpaoParaUnidades(client);
-      await migrarBarracaoParaLayout2x2(client);
+      // Com prazo: o HTTP do libsql não tem nenhum, e um init pendurado na
+      // rede ruim segura tudo que espera conexão — a fila de gravação
+      // inclusive. Estourou, o init falha como falharia sem rede, e a
+      // próxima chamada tenta de novo com cliente novo.
+      await _prepararBanco(client).timeout(_timeoutPreparoBanco);
       _client = client;
       _connected = true;
       _modoLocal = false;
@@ -1126,7 +1250,10 @@ class TursoService {
       // PaleteRegistry().ativos). Numa replica sem base a tabela pode ainda
       // não existir — carregar() engole a falha e _estabelecerBaseLocal
       // recarrega quando a base chegar.
-      await PaleteRegistry().carregar();
+      await PaleteRegistry().carregar().timeout(
+        _timeoutConexao,
+        onTimeout: () {},
+      );
     } catch (_) {
       _connected = false;
       _client = null;
@@ -1138,6 +1265,14 @@ class TursoService {
   // app indefinidamente — estourou, cai no fallback (remoto) ou falha o botão
   // de sincronizar com aviso, mantendo os dados locais intactos.
   static const Duration _timeoutConexao = Duration(seconds: 20);
+  // Esquema + migrações no init. Com as migrações em dia é uma requisição só;
+  // a primeira abertura num aparelho confere todas (~12 idas), e na rede da
+  // loja isso passa dos 20 s da conexão.
+  static const Duration _timeoutPreparoBanco = Duration(seconds: 45);
+  // Uma leitura com cópia em cache (consultarComCache). Folgado porque há
+  // leituras de milhares de linhas; o que ele pega é a requisição que nunca
+  // volta, e que antes prendia a conexão de leitura até reabrir o app.
+  static const Duration _timeoutLeitura = Duration(seconds: 45);
   // Baixar a base pela primeira vez é outra ordem de grandeza: é o banco
   // INTEIRO vindo do Turso, não uma consulta. Medido em campo, 90s não bastou
   // nem em wi-fi — e estourar aqui não devolve um erro visível, devolve o
@@ -1196,11 +1331,7 @@ class TursoService {
     if (await _replicaNoFrameZero() && !await _remotoAlcancavel()) {
       throw const BaseLocalNaoBaixada();
     }
-    await _criarEsquema(client);
-    await _migrarEsquemaLabelsEstante3(client);
-    await _migrarPaletesCadastroDinamico(client);
-    await migrarGalpaoParaUnidades(client);
-    await migrarBarracaoParaLayout2x2(client);
+    await _prepararBanco(client);
     _basePendente = false;
     _coordenador.definirEstado(EstadoReplica.pronta);
     final prefs = await SharedPreferences.getInstance();
@@ -1410,8 +1541,23 @@ class TursoService {
     }
   }
 
-  Future<void> _criarEsquema(LibsqlClient client) async {
-    await client.execute('''
+  /// Tabelas e índices do app — numa requisição só.
+  ///
+  /// Eram ~20 `CREATE … IF NOT EXISTS` em fila, cada um uma ida e volta (duas,
+  /// com o `describe` do libsql), a cada abertura do app e a cada reconexão.
+  /// Na rede da loja isso segurava o init por dezenas de segundos — e tudo
+  /// que grava ou lê espera o init. Juntos num `batch`, viram um pipeline
+  /// Hrana único. Continua sendo a primeira conversa com o servidor, então
+  /// também é ela que prova que há conexão.
+  ///
+  /// [migracoesEmDia] pula a migração da identidade do rack (que precisa ler
+  /// o esquema antes de alterar): ver [_migracoesEmDia].
+  Future<void> _criarEsquema(
+    LibsqlClient client, {
+    bool migracoesEmDia = false,
+  }) async {
+    final esquema = <String>[];
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS gondola_layout (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         gondola_num INTEGER NOT NULL,
@@ -1424,7 +1570,7 @@ class TursoService {
         registrado_em TEXT NOT NULL
       )
     ''');
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS estante_layout (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         estante_num INTEGER NOT NULL,
@@ -1437,7 +1583,7 @@ class TursoService {
         registrado_em TEXT NOT NULL
       )
     ''');
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS app_migrations (
         nome TEXT PRIMARY KEY,
         aplicada_em TEXT NOT NULL
@@ -1448,7 +1594,7 @@ class TursoService {
     // as duas chegam ao servidor, ou nenhuma. Achar o UUID numa consulta AO
     // REMOTO é a única prova de que o push saiu — o frame não prova (um pull
     // também o move) e a ausência de exceção não prova nada.
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS app_mutacoes_aplicadas (
         uuid TEXT PRIMARY KEY,
         aplicada_em TEXT NOT NULL,
@@ -1459,7 +1605,7 @@ class TursoService {
     // Quantidade de cada produto por endereço físico (gôndola ou estante).
     // Chave por endereço lógico — não referencia gondola_layout.id/estante_layout.id
     // porque salvarLayout/salvarLayoutEstante são destrutivos (DELETE + INSERT).
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS estoque_localizado (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         produto_codigo TEXT NOT NULL,
@@ -1472,7 +1618,7 @@ class TursoService {
         UNIQUE(produto_codigo, local_tipo, local_num, face_ou_coluna, andar_ou_nivel)
       )
     ''');
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS contagens_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         produto_codigo TEXT NOT NULL,
@@ -1489,7 +1635,7 @@ class TursoService {
     // execute DELETE FROM paletes: apagar linha desativada libera o número
     // para reciclagem e o palete novo herdaria os endereços velhos em
     // estoque_localizado. Palete que sai da loja vira ativo = 0.
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS paletes (
         num        INTEGER PRIMARY KEY,
         apelido    TEXT    NOT NULL DEFAULT '',
@@ -1507,7 +1653,7 @@ class TursoService {
     // É espelho de GalpaoConfig (a autoridade das coordenadas continua sendo
     // o código, ver galpao_config.dart) para que os apps irmãos consigam ler
     // a planta sem embutir a tabela de novo. Populada por seed idempotente.
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS galpao_posicoes (
         numero INTEGER PRIMARY KEY,
         rua    INTEGER NOT NULL,
@@ -1521,7 +1667,7 @@ class TursoService {
     // nunca aparece dentro de um código de endereço textual. O UNIQUE
     // (posicao, ordem) é o que garante pilha sem buraco nem duplicata; a
     // renumeração ao esvaziar acontece em transação (ver GalpaoService).
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS galpao_racks (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         posicao        INTEGER NOT NULL,
@@ -1534,24 +1680,6 @@ class TursoService {
       )
     ''');
 
-    final migracaoRack = await client.transaction();
-    try {
-      final colunasRack = await migracaoRack.query(
-        'PRAGMA table_info(galpao_racks)',
-      );
-      if (!colunasRack.any((c) => c['name'] == 'rack_uuid')) {
-        await migracaoRack.execute(
-          'ALTER TABLE galpao_racks ADD COLUMN rack_uuid TEXT',
-        );
-      }
-      for (final sql in migracaoRackIdentidade) {
-        await migracaoRack.execute(sql);
-      }
-      await migracaoRack.commit();
-    } catch (_) {
-      await migracaoRack.rollback();
-      rethrow;
-    }
 
     // Endereços do BARRACÃO: uma linha por palete no chão (ver
     // barracao_config.dart). Uma tabela só, e não o par estrutura + ocupação
@@ -1564,7 +1692,7 @@ class TursoService {
     // etiquetado no palete — dois 'BAR-07' no mesmo barracão não são endereço,
     // são ambiguidade. pos_x/pos_z estão em CENTÍMETROS, a unidade da planta
     // do barracão (a loja e o galpão usam metros).
-    await client.execute('''
+    esquema.add('''
       CREATE TABLE IF NOT EXISTS barracao_enderecos (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         rotulo         TEXT    NOT NULL UNIQUE,
@@ -1581,47 +1709,117 @@ class TursoService {
     // scan em fetchLayout / fetchLayoutEstante / buscarProdutoEstante e na
     // busca global. IF NOT EXISTS torna idempotente; estoque_localizado já tem
     // o índice implícito do seu UNIQUE(produto_codigo, ...).
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_gondola_layout_num '
       'ON gondola_layout (gondola_num)',
     );
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_estante_layout_num '
       'ON estante_layout (estante_num)',
     );
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_estante_layout_produto '
       'ON estante_layout (produto_codigo)',
     );
     // Espelha o índice de estante acima: buscarProduto e o SELECT DISTINCT do
     // Modo Conferência filtram gondola_layout por produto_codigo e até aqui
     // faziam varredura completa.
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_gondola_layout_produto '
       'ON gondola_layout (produto_codigo)',
     );
     // As buscas de badge filtram por endereço físico. O índice implícito do
     // UNIQUE de estoque_localizado NÃO serve esse predicado: a coluna líder
     // dele é produto_codigo.
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_estoque_localizado_local '
       'ON estoque_localizado (local_tipo, local_num)',
     );
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_paletes_ativo ON paletes (ativo)',
     );
     // Busca "onde está este produto no galpão" — o UNIQUE(posicao, ordem) não
     // serve esse predicado, a coluna líder dele é posicao.
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_galpao_racks_produto '
       'ON galpao_racks (produto_codigo)',
     );
     // Mesmo predicado, do outro prédio: "onde está este produto no barracão".
     // O índice implícito do UNIQUE(rotulo) não serve — a coluna dele é outra.
-    await client.execute(
+    esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_barracao_enderecos_produto '
       'ON barracao_enderecos (produto_codigo)',
     );
+    await client.batch(esquema.join(';\n'));
+    if (migracoesEmDia) return;
+
+    // Identidade do rack: a coluna só é acrescentada se faltar (ALTER não tem
+    // IF NOT EXISTS), e o resto é idempotente. Uma leitura do esquema e um
+    // lote transacional, em vez de uma transação interativa comando a comando.
+    final colunasRack = await client.query('PRAGMA table_info(galpao_racks)');
+    await client.batch(
+      textoDoLote([
+        if (!colunasRack.any((c) => c['name'] == 'rack_uuid'))
+          'ALTER TABLE galpao_racks ADD COLUMN rack_uuid TEXT',
+        ...migracaoRackIdentidade,
+      ]),
+    );
+  }
+
+  /// O que [_marcarMigracoesEmDia] grava: muda sozinho quando entra migração
+  /// nova (nome novo) ou quando a da identidade do rack muda de texto — e aí
+  /// tudo roda de novo uma vez.
+  static final String _assinaturaMigracoes = [
+    'v1',
+    _migracaoEstante3,
+    _migracaoPaletes,
+    migracaoGalpaoUnidades,
+    migracaoBarracaoLayout2x2,
+    ...migracaoRackIdentidade,
+  ].join('\u0001');
+
+  /// True quando as migrações já rodaram até o fim NESTE banco, a partir deste
+  /// aparelho. Elas conferem `app_migrations` uma a uma (duas idas cada) e a
+  /// do rack ainda lê o esquema: sem esta marca, toda abertura do app pagava
+  /// essas idas para descobrir que não havia nada a fazer.
+  Future<bool> _migracoesEmDia() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_chavePorBanco('esquema_migrado')) ==
+          _assinaturaMigracoes;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _marcarMigracoesEmDia() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _chavePorBanco('esquema_migrado'),
+        _assinaturaMigracoes,
+      );
+    } catch (_) {
+      // Sem a marca, a próxima abertura só confere de novo.
+    }
+  }
+
+  /// Esquema + migrações, do jeito mais barato que o estado do aparelho
+  /// permite: com tudo em dia, uma requisição só.
+  Future<void> _prepararBanco(LibsqlClient client) async {
+    final emDia = await _migracoesEmDia();
+    await _criarEsquema(client, migracoesEmDia: emDia);
+    if (emDia) return;
+    // Todas rodam mesmo que uma falhe (cada uma se protege), e a marca só é
+    // gravada se TODAS confirmaram: uma que falhou tenta de novo na próxima
+    // abertura, como sempre foi.
+    final resultados = [
+      await _migrarEsquemaLabelsEstante3(client),
+      await _migrarPaletesCadastroDinamico(client),
+      await migrarGalpaoParaUnidades(client),
+      await migrarBarracaoParaLayout2x2(client),
+    ];
+    if (resultados.every((ok) => ok)) await _marcarMigracoesEmDia();
   }
 
   Future<void> _registrarSincronizacao() async {
@@ -1923,6 +2121,8 @@ class TursoService {
 
     _connected = false;
     _client = null;
+    // A de escrita foi aberta com as credenciais antigas.
+    _clienteEscrita = null;
     _urlAtiva = null;
     _tokenAtivo = null;
     _cacheLocalAtivo = null;
@@ -1988,7 +2188,7 @@ class TursoService {
   static const String _migracaoEstante3 =
       'estante3_esquema_labels_estendido_a_o';
 
-  Future<void> _migrarEsquemaLabelsEstante3(LibsqlClient client) async {
+  Future<bool> _migrarEsquemaLabelsEstante3(LibsqlClient client) async {
     try {
       final stmtCheck = await client.prepare(
         'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
@@ -1996,7 +2196,7 @@ class TursoService {
       final jaAplicada = (await stmtCheck.query(
         positional: [_migracaoEstante3],
       )) as List<dynamic>;
-      if (jaAplicada.isNotEmpty) return;
+      if (jaAplicada.isNotEmpty) return true;
 
       final stmtUpdate = await client.prepare(
         'UPDATE estante_layout SET nivel = nivel + 1 WHERE estante_num = 3',
@@ -2009,9 +2209,11 @@ class TursoService {
       await stmtInsert.query(
         positional: [_migracaoEstante3, DateTime.now().toIso8601String()],
       );
+      return true;
     } catch (_) {
       // Se a migração falhar, não derruba a conexão — só tenta de novo no
       // próximo init().
+      return false;
     }
   }
 
@@ -2021,7 +2223,7 @@ class TursoService {
   // no banco, seguindo o padrão da migração da Estante 3.
   static const String _migracaoPaletes = 'paletes_cadastro_dinamico_v1';
 
-  Future<void> _migrarPaletesCadastroDinamico(LibsqlClient client) async {
+  Future<bool> _migrarPaletesCadastroDinamico(LibsqlClient client) async {
     try {
       final stmtCheck = await client.prepare(
         'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
@@ -2029,7 +2231,7 @@ class TursoService {
       final jaAplicada = (await stmtCheck.query(
         positional: [_migracaoPaletes],
       )) as List<dynamic>;
-      if (jaAplicada.isNotEmpty) return;
+      if (jaAplicada.isNotEmpty) return true;
 
       final stmtInsert = await client.prepare(
         'INSERT INTO app_migrations (nome, aplicada_em) VALUES (?, ?)',
@@ -2037,9 +2239,11 @@ class TursoService {
       await stmtInsert.query(
         positional: [_migracaoPaletes, DateTime.now().toIso8601String()],
       );
+      return true;
     } catch (_) {
       // Se a migração falhar, não derruba a conexão — só tenta de novo no
       // próximo init().
+      return false;
     }
   }
 

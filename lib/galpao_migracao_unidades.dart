@@ -51,14 +51,14 @@ bool quantidadeLegadaEmLitros(String nomeProduto) {
 /// Idempotente pelo marcador em app_migrations: se já rodou, sai na hora. Se
 /// falhar no meio, a transação desfaz tudo e o marcador não é gravado — a
 /// próxima abertura tenta de novo, e nenhuma linha fica dividida duas vezes.
-Future<void> migrarGalpaoParaUnidades(LibsqlClient client) async {
+Future<bool> migrarGalpaoParaUnidades(LibsqlClient client) async {
   try {
     final stmtCheck = await client.prepare(
       'SELECT 1 FROM app_migrations WHERE nome = ? LIMIT 1',
     );
     final jaAplicada = (await stmtCheck.query(
         positional: [migracaoGalpaoUnidades])) as List<dynamic>;
-    if (jaAplicada.isNotEmpty) return;
+    if (jaAplicada.isNotEmpty) return true;
 
     final stmtRacks = await client.prepare(
       'SELECT id, posicao, ordem, produto_codigo, produto_nome, quantidade '
@@ -105,7 +105,9 @@ Future<void> migrarGalpaoParaUnidades(LibsqlClient client) async {
       await tx.rollback();
       rethrow;
     }
+    return true;
   } catch (_) {
     // Migração não derruba a conexão — tenta de novo no próximo init().
+    return false;
   }
 }

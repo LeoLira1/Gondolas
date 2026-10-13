@@ -1,22 +1,16 @@
 import 'dart:convert';
 
 import 'package:libsql_dart/libsql_dart.dart';
-// `client.transaction()` devolve um Transaction que o pacote NÃO reexporta no
-// seu libsql_dart.dart (o tipo vaza da API pública sem estar acessível). Sem
-// este import direto não dá para tipar os helpers que recebem a transação; a
-// alternativa seria passá-la como dynamic e perder a checagem nas chamadas.
-// Se um upgrade do libsql_dart mover o arquivo, é aqui que quebra.
-import 'package:libsql_dart/src/transaction.dart' show Transaction;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'codigos_vinculados.dart';
-import 'estocados_busca.dart' show codigoEhEstocado;
+import 'fila_gravacao.dart' show executarOperacao;
 import 'galpao_config.dart';
 import 'galpao_saldo.dart';
 import 'galpao_scene.dart' show RackGalpao;
-import 'models.dart' show localTipoGalpao;
+import 'gravacao_lote.dart';
 import 'turso_service.dart';
-import 'outbox.dart';
-import 'replica_coordinator.dart';
+import 'outbox.dart' show gerarUuidV4;
 
 /// Persistência do galpão: as 129 posições das duas partes (estrutura) e os
 /// racks empilhados (ocupação).
@@ -49,78 +43,63 @@ class GalpaoService {
   /// reescreve as coordenadas a cada execução de propósito: a autoridade da
   /// planta é o código (as larguras de corredor ainda são estimativas e vão
   /// ser remedidas), a tabela é só o espelho que os apps irmãos leem.
+  ///
+  /// UM upsert de várias linhas, numa requisição. Antes eram 129 upserts
+  /// dentro de uma transação interativa — ~130 idas e voltas a cada sessão,
+  /// com a trava de escrita do banco presa o tempo todo. Na rede da loja isso
+  /// levava minutos, e o lançamento de rack ficava esperando a trava atrás
+  /// dele.
+  ///
+  /// E só quando a planta do código mudou: a assinatura do upsert fica
+  /// lembrada no aparelho por banco, e com ela igual não há o que reescrever
+  /// — nem a requisição única precisa sair (ela disputaria a rede com o
+  /// primeiro lançamento do dia).
   Future<bool> garantirSeed({bool forcar = false}) async {
-    try {
-      return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _garantirSeed(forcar: forcar),
-      );
-    } on ReplicaNaoProntaParaEscrita {
-      return false;
-    }
-  }
-
-  Future<bool> _garantirSeed({bool forcar = false}) async {
     if (_seedFeito && !forcar) return true;
-    final client = await _conexao();
-    if (client == null) return false;
-    MutacaoOutbox? mutacao;
-    try {
-      final tx = await client.transaction();
-      try {
-        for (final p in GalpaoConfig.posicoes) {
-          await tx.execute(
-            'INSERT INTO galpao_posicoes (numero, rua, eixo, pos_x, pos_z) '
-            'VALUES (?, ?, ?, ?, ?) '
-            'ON CONFLICT(numero) DO UPDATE SET '
-            'rua = excluded.rua, eixo = excluded.eixo, '
-            'pos_x = excluded.pos_x, pos_z = excluded.pos_z',
-            positional: [
-              p.numero,
-              p.rua.numero,
-              p.rua.eixo == EixoRua.z ? 'z' : 'x',
-              p.x,
-              p.z,
-            ],
-          );
-        }
-        // O seed é a planta do galpão vinda do CÓDIGO (GalpaoConfig), não do
-        // usuário: são 129 upserts de constantes, idempotentes por construção.
-        // Por isso ele entra na outbox com os dois estados ausentes — a
-        // reaplicação o lê como "nada a fazer", e está certo: se a réplica for
-        // reconstruída, o próprio init roda o seed de novo. Registrar mesmo
-        // assim é o que mantém a regra "nenhuma mutação fica de fora".
-        mutacao = await TursoService().abrirMutacao(
-          operacao: 'galpao.garantirSeed',
-          tabela: 'galpao_posicoes',
-          chave: const {},
-          estadoAnterior: null,
-          estadoFinal: null,
-        );
-        await TursoService().carimbarMutacao(tx, mutacao);
-        final cacheRows = await tx.query(
-          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-          'FROM galpao_racks ORDER BY posicao, ordem',
-        );
-        await TursoService().confirmarCommit(tx, mutacao);
-        await TursoService().guardarConsulta('galpao', cacheRows);
-        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
-        // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
-      } catch (e) {
-        try {
-          await tx.rollback();
-        } catch (_) {}
-        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
-        // apaga nada —, só sai da fila de reaplicação.
-        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-        rethrow;
-      }
+    final comando = comandoSeedGalpao();
+    final assinatura = assinaturaTexto(comando);
+    if (!forcar && await _seedLembrado() == assinatura) {
       _seedFeito = true;
+      return true;
+    }
+    try {
+      await TursoService().executarLote([comando]);
+      _seedFeito = true;
+      await _lembrarSeed(assinatura);
       return true;
     } catch (_) {
       return false;
     }
   }
+
+  String? get _chaveSeed {
+    final banco = TursoService().identidadeAtiva;
+    return banco == null ? null : 'galpao_seed_$banco';
+  }
+
+  Future<int?> _seedLembrado() async {
+    final chave = _chaveSeed;
+    if (chave == null) return null;
+    try {
+      return (await SharedPreferences.getInstance()).getInt(chave);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _lembrarSeed(int assinatura) async {
+    final chave = _chaveSeed;
+    if (chave == null) return;
+    try {
+      await (await SharedPreferences.getInstance()).setInt(chave, assinatura);
+    } catch (_) {
+      // Sem a marca, a próxima sessão só reenvia o upsert idempotente.
+    }
+  }
+
+  static const String _sqlPilhas =
+      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+      'FROM galpao_racks ORDER BY posicao, ordem';
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
   ///
@@ -128,35 +107,52 @@ class GalpaoService {
   /// custaria 129 idas ao banco para pintar um frame.
   Future<Map<int, List<RackGalpao>>> carregarPilhas() async {
     try {
-      final rows = await TursoService().consultarComCache(
-        'galpao',
-        'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-            'FROM galpao_racks ORDER BY posicao, ordem',
+      return _pilhasDasLinhas(
+        await TursoService().consultarComCache('galpao', _sqlPilhas),
       );
-      final pilhas = <int, List<RackGalpao>>{};
-      for (final dynamic row in rows) {
-        final r = row as Map<String, dynamic>;
-        final posicao = r['posicao'] as int? ?? 0;
-        // Linha órfã (posição que não existe mais na planta) é ignorada, como
-        // as cenas fazem com endereço fora da grade.
-        if (GalpaoConfig.porNumero(posicao) == null) continue;
-        pilhas
-            .putIfAbsent(posicao, () => <RackGalpao>[])
-            .add(
-              RackGalpao(
-                rackUuid: r['rack_uuid'] as String?,
-                posicao: posicao,
-                ordem: r['ordem'] as int? ?? 1,
-                produtoCodigo: r['produto_codigo'] as String? ?? '',
-                produtoNome: r['produto_nome'] as String? ?? '',
-                quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
-              ),
-            );
-      }
-      return pilhas;
     } catch (_) {
       return {};
     }
+  }
+
+  /// Relê a ocupação DO SERVIDOR (sem servir a cópia) e atualiza a cópia de
+  /// leitura e a da busca. É a conferência depois que a fila de gravação
+  /// esvazia. Null quando a leitura falhou — ao contrário de [carregarPilhas],
+  /// aqui um galpão vazio por falta de rede apagaria a tela inteira.
+  Future<Map<int, List<RackGalpao>>?> recarregarPilhas() async {
+    try {
+      final rows = await TursoService().consultarComCache(
+        'galpao',
+        _sqlPilhas,
+        forceRefresh: true,
+      );
+      await TursoService().guardarConsulta('galpao', rows);
+      return _pilhasDasLinhas(rows);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<int, List<RackGalpao>> _pilhasDasLinhas(List<Map<String, dynamic>> rows) {
+    final pilhas = <int, List<RackGalpao>>{};
+    for (final dynamic row in rows) {
+      final r = row as Map<String, dynamic>;
+      final posicao = r['posicao'] as int? ?? 0;
+      // Linha órfã (posição que não existe mais na planta) é ignorada, como
+      // as cenas fazem com endereço fora da grade.
+      if (GalpaoConfig.porNumero(posicao) == null) continue;
+      pilhas.putIfAbsent(posicao, () => <RackGalpao>[]).add(
+            RackGalpao(
+              rackUuid: r['rack_uuid'] as String?,
+              posicao: posicao,
+              ordem: r['ordem'] as int? ?? 1,
+              produtoCodigo: r['produto_codigo'] as String? ?? '',
+              produtoNome: r['produto_nome'] as String? ?? '',
+              quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+            ),
+          );
+    }
+    return pilhas;
   }
 
   /// Saldo (sistema × endereçado) dos produtos que têm rack no galpão, mais
@@ -293,463 +289,107 @@ class GalpaoService {
     return total;
   }
 
-  /// Lança um rack no TOPO da pilha da posição. Devolve a nova pilha, ou null
-  /// se falhou (sem conexão, pilha cheia, corrida com outro dispositivo).
+  // ── Gravação ─────────────────────────────────────────────────────────────
+  //
+  // A tela do galpão não chama mais estes métodos: ela põe a operação na
+  // FilaGravacao, que aplica na hora e reenvia sozinha. Eles ficam para quem
+  // grava sem tela — a baixa automática — e usam o MESMO lote (uma requisição,
+  // ver gravacao_lote.dart). Devolvem true só com o COMMIT confirmado.
+
+  /// Lança um rack no TOPO da pilha da posição. A ordem é calculada no
+  /// servidor; pilha cheia é recusada.
   ///
-  /// A ordem do rack novo é lida DENTRO da transação (MAX(ordem) + 1), nunca
-  /// recebida da tela: entre o toque e a gravação, outra pessoa pode ter
-  /// lançado na mesma posição, e o que vale é o estado do banco.
-  Future<List<RackGalpao>?> lancar({
+  /// O UUID vem de `pedidoOnline`: um lançamento cuja resposta se perdeu é
+  /// reenviado com o mesmo UUID, e o lote reconhece que já está gravado.
+  Future<bool> lancar({
     required int posicao,
     required String produtoCodigo,
     required String produtoNome,
     required double quantidade,
   }) async {
     try {
-      return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _lancar(
-          posicao: posicao,
-          produtoCodigo: produtoCodigo,
-          produtoNome: produtoNome,
-          quantidade: quantidade,
-        ),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<List<RackGalpao>?> _lancar({
-    required int posicao,
-    required String produtoCodigo,
-    required String produtoNome,
-    required double quantidade,
-  }) async {
-    final client = await _conexao();
-    if (client == null) return null;
-    final chavePedido = jsonEncode([
-      'galpao.lancar',
-      posicao,
-      produtoCodigo,
-      produtoNome,
-      quantidade,
-    ]);
-    final rackUuid = await TursoService().pedidoOnline(chavePedido);
-    final agora = DateTime.now().toIso8601String();
-    // Fora do try: o catch precisa saber se já houve registro para desfazer.
-    MutacaoOutbox? mutacao;
-    try {
-      final tx = await client.transaction();
-      try {
-        final aplicado = await tx.query(
-          'SELECT uuid FROM app_mutacoes_aplicadas WHERE uuid = ?',
-          positional: [rackUuid],
-        );
-        if (aplicado.isNotEmpty) {
-          final pilha = await _lerPilha(tx, posicao);
-          await tx.rollback();
-          await TursoService().concluirPedidoOnline(chavePedido);
-          return pilha;
-        }
-        final rows = await tx.query(
-          'SELECT COALESCE(MAX(ordem), 0) AS topo FROM galpao_racks '
-          'WHERE posicao = ?',
-          positional: [posicao],
-        );
-        final topo = (rows.first['topo'] as int?) ?? 0;
-        if (topo >= GalpaoConfig.niveisMax) {
-          await tx.rollback();
-          return null;
-        }
-        final ordem = topo + 1;
-
-        await tx.execute(
-          'INSERT INTO galpao_racks (posicao, ordem, produto_codigo, '
-          'produto_nome, quantidade, atualizado_em, rack_uuid) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          positional: [
-            posicao,
-            ordem,
-            produtoCodigo,
-            produtoNome,
-            quantidade,
-            agora,
-            rackUuid,
-          ],
-        );
-        final pilha = await _lerPilha(tx, posicao);
-        await _reescreverEspelho(tx, posicao, pilha, agora);
-        await _registrarLog(
-          tx,
-          posicao,
-          ordem,
-          produtoCodigo,
-          anterior: null,
-          nova: quantidade,
-          agora: agora,
-        );
-        // Intenção registrada ANTES do commit, e o carimbo do UUID DENTRO da
-        // transação: assim o reconhecimento viaja nos mesmos frames da
-        // mutação. `atualizado_em` fica fora do estado — muda sempre, e faria
-        // toda comparação futura terminar em conflito.
-        mutacao = await TursoService().abrirMutacao(
-          operacao: 'galpao.lancar',
-          uuid: rackUuid,
-          tabela: 'galpao_racks',
-          chave: {'rack_uuid': rackUuid},
-          estadoAnterior: null, // rack novo no topo da pilha
-          estadoFinal: {
-            'produto_codigo': produtoCodigo,
-            'produto_nome': produtoNome,
-            'quantidade': quantidade,
-          },
-          produtoCodigo: produtoCodigo,
-          produtoNome: produtoNome,
-          posicao: posicao,
-          ordem: ordem,
-          quantidadePretendida: quantidade,
-        );
-        await TursoService().carimbarMutacao(tx, mutacao);
-        final cacheRows = await tx.query(
-          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-          'FROM galpao_racks ORDER BY posicao, ordem',
-        );
-        await TursoService().confirmarCommit(tx, mutacao);
-        await TursoService().guardarConsulta('galpao', cacheRows);
-        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
-        // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
-        await TursoService().concluirPedidoOnline(chavePedido);
-        return pilha;
-      } catch (e) {
-        try {
-          await tx.rollback();
-        } catch (_) {}
-        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
-        // apaga nada —, só sai da fila de reaplicação.
-        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-        rethrow;
-      }
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Troca a quantidade do rack de [ordem] — o palete continua onde está, com
-  /// o mesmo produto, só o número muda. Devolve a nova pilha, ou null se
-  /// falhou (sem conexão, rack inexistente, quantidade não positiva).
-  ///
-  /// É a correção de contagem que faltava: sem ela, acertar "57" num rack
-  /// lançado com 14 exigia esvaziar (derrubando a pilha de cima) e lançar de
-  /// novo. O espelho de estoque_localizado é reescrito pela mesma rotina do
-  /// lançamento, então o saldo do produto acompanha na mesma transação.
-  Future<List<RackGalpao>?> ajustarQuantidade({
-    required int posicao,
-    required int ordem,
-    required double quantidade,
-    String? origem,
-    String? rackUuid,
-  }) async {
-    try {
-      return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _ajustarQuantidade(
-          posicao: posicao,
-          ordem: ordem,
-          quantidade: quantidade,
-          origem: origem,
-          rackUuid: rackUuid,
-        ),
-      );
-    } on ReplicaNaoProntaParaEscrita {
-      return null;
-    }
-  }
-
-  Future<List<RackGalpao>?> _ajustarQuantidade({
-    required int posicao,
-    required int ordem,
-    required double quantidade,
-    String? origem,
-    String? rackUuid,
-  }) async {
-    if (quantidade <= 0) return null; // zerar é esvaziar, que é outra coisa
-    final client = await _conexao();
-    if (client == null) return null;
-    final agora = DateTime.now().toIso8601String();
-    // Fora do try: o catch precisa saber se já houve registro para desfazer.
-    MutacaoOutbox? mutacao;
-    try {
-      final tx = await client.transaction();
-      try {
-        final antes = await tx.query(
-          'SELECT rack_uuid, produto_codigo, produto_nome, quantidade FROM galpao_racks '
-          'WHERE posicao = ? AND ordem = ? LIMIT 1',
-          positional: [posicao, ordem],
-        );
-        if (antes.isEmpty ||
-            rackUuid == null ||
-            antes.first['rack_uuid'] != rackUuid) {
-          await tx.rollback();
-          return null;
-        }
-        final codigo = antes.first['produto_codigo'] as String? ?? '';
-        final qtdAntes = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
-
-        await tx.execute(
-          'UPDATE galpao_racks SET quantidade = ?, atualizado_em = ? '
-          'WHERE posicao = ? AND ordem = ?',
-          positional: [quantidade, agora, posicao, ordem],
-        );
-
-        final pilha = await _lerPilha(tx, posicao);
-        await _reescreverEspelho(tx, posicao, pilha, agora);
-        await _registrarLog(
-          tx,
-          posicao,
-          ordem,
-          codigo,
-          anterior: qtdAntes,
-          nova: quantidade,
-          agora: agora,
-          origem: origem,
-        );
-        mutacao = await TursoService().abrirMutacao(
-          operacao: 'galpao.ajustarQuantidade',
-          tabela: 'galpao_racks',
-          chave: {'rack_uuid': antes.first['rack_uuid']},
-          estadoAnterior: {'produto_codigo': codigo, 'quantidade': qtdAntes},
-          estadoFinal: {'produto_codigo': codigo, 'quantidade': quantidade},
-          produtoCodigo: codigo,
-          produtoNome: antes.first['produto_nome'] as String?,
-          posicao: posicao,
-          ordem: ordem,
-          quantidadeAnterior: qtdAntes,
-          quantidadePretendida: quantidade,
-        );
-        await TursoService().carimbarMutacao(tx, mutacao);
-        final cacheRows = await tx.query(
-          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-          'FROM galpao_racks ORDER BY posicao, ordem',
-        );
-        await TursoService().confirmarCommit(tx, mutacao);
-        await TursoService().guardarConsulta('galpao', cacheRows);
-        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
-        // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
-        return pilha;
-      } catch (e) {
-        try {
-          await tx.rollback();
-        } catch (_) {}
-        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
-        // apaga nada —, só sai da fila de reaplicação.
-        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-        rethrow;
-      }
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Esvazia o rack de [ordem] e DESCE a pilha: os de cima descem um nível
-  /// cada e a ordem é renumerada, tudo numa transação. Devolve a nova pilha,
-  /// ou null se falhou.
-  Future<List<RackGalpao>?> esvaziar({
-    required int posicao,
-    required int ordem,
-    String? origem,
-    String? rackUuid,
-  }) async {
-    try {
-      return await TursoService().garantirReplicaProntaParaEscrita(
-        () => _esvaziar(
-          posicao: posicao,
-          ordem: ordem,
-          origem: origem,
-          rackUuid: rackUuid,
-        ),
-      );
-    } on ReplicaNaoProntaParaEscrita {
-      return null;
-    }
-  }
-
-  Future<List<RackGalpao>?> _esvaziar({
-    required int posicao,
-    required int ordem,
-    String? origem,
-    String? rackUuid,
-  }) async {
-    final client = await _conexao();
-    if (client == null) return null;
-    final agora = DateTime.now().toIso8601String();
-    // Fora do try: o catch precisa saber se já houve registro para desfazer.
-    MutacaoOutbox? mutacao;
-    try {
-      final tx = await client.transaction();
-      try {
-        final antes = await tx.query(
-          'SELECT rack_uuid, produto_codigo, produto_nome, quantidade FROM galpao_racks '
-          'WHERE posicao = ? AND ordem = ? LIMIT 1',
-          positional: [posicao, ordem],
-        );
-        if (antes.isEmpty ||
-            rackUuid == null ||
-            antes.first['rack_uuid'] != rackUuid) {
-          await tx.rollback();
-          return null;
-        }
-        final codigo = antes.first['produto_codigo'] as String? ?? '';
-        final qtdAntes = (antes.first['quantidade'] as num?)?.toDouble() ?? 0;
-
-        await tx.execute(
-          'DELETE FROM galpao_racks WHERE posicao = ? AND ordem = ?',
-          positional: [posicao, ordem],
-        );
-
-        // Renumeração em DOIS passos, via negativos. Um único
-        // `SET ordem = ordem - 1` esbarraria no UNIQUE(posicao, ordem) no meio
-        // do UPDATE: o SQLite valida linha a linha, e nada garante que a linha
-        // de ordem menor seja processada primeiro. O intervalo negativo é
-        // território livre, então a ida e a volta nunca colidem.
-        await tx.execute(
-          'UPDATE galpao_racks SET ordem = -(ordem - 1) '
-          'WHERE posicao = ? AND ordem > ?',
-          positional: [posicao, ordem],
-        );
-        await tx.execute(
-          'UPDATE galpao_racks SET ordem = -ordem, atualizado_em = ? '
-          'WHERE posicao = ? AND ordem < 0',
-          positional: [agora, posicao],
-        );
-
-        final pilha = await _lerPilha(tx, posicao);
-        await _reescreverEspelho(tx, posicao, pilha, agora);
-        await _registrarLog(
-          tx,
-          posicao,
-          ordem,
-          codigo,
-          anterior: qtdAntes,
-          nova: 0,
-          agora: agora,
-          origem: origem,
-        );
-        mutacao = await TursoService().abrirMutacao(
-          operacao: 'galpao.esvaziar',
-          tabela: 'galpao_racks',
-          chave: {'rack_uuid': antes.first['rack_uuid']},
-          estadoAnterior: {'produto_codigo': codigo, 'quantidade': qtdAntes},
-          estadoFinal: null, // o rack deixa de existir e a pilha desce
-          produtoCodigo: codigo,
-          produtoNome: antes.first['produto_nome'] as String?,
-          posicao: posicao,
-          ordem: ordem,
-          quantidadeAnterior: qtdAntes,
-          quantidadePretendida: 0,
-        );
-        await TursoService().carimbarMutacao(tx, mutacao);
-        final cacheRows = await tx.query(
-          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-          'FROM galpao_racks ORDER BY posicao, ordem',
-        );
-        await TursoService().confirmarCommit(tx, mutacao);
-        await TursoService().guardarConsulta('galpao', cacheRows);
-        // Frame novo no arquivo local esperando o próximo Sincronizar — sem
-        // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
-        return pilha;
-      } catch (e) {
-        try {
-          await tx.rollback();
-        } catch (_) {}
-        // Rollback: nada foi gravado. O registro não é apagado — a outbox não
-        // apaga nada —, só sai da fila de reaplicação.
-        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
-        rethrow;
-      }
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<List<RackGalpao>> _lerPilha(Transaction tx, int posicao) async {
-    final rows = await tx.query(
-      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-      'FROM galpao_racks WHERE posicao = ? ORDER BY ordem',
-      positional: [posicao],
-    );
-    return [
-      for (final r in rows)
-        RackGalpao(
-          rackUuid: r['rack_uuid'] as String?,
-          posicao: r['posicao'] as int? ?? posicao,
-          ordem: r['ordem'] as int? ?? 1,
-          produtoCodigo: r['produto_codigo'] as String? ?? '',
-          produtoNome: r['produto_nome'] as String? ?? '',
-          quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
-        ),
-    ];
-  }
-
-  /// Reescreve as linhas de estoque_localizado da posição a partir da pilha
-  /// resultante (ver a nota na doc da classe sobre por que é reescrita, e não
-  /// atualização linha a linha).
-  Future<void> _reescreverEspelho(
-    Transaction tx,
-    int posicao,
-    List<RackGalpao> pilha,
-    String agora,
-  ) async {
-    await tx.execute(
-      'DELETE FROM estoque_localizado WHERE local_tipo = ? AND local_num = ?',
-      positional: [localTipoGalpao, posicao],
-    );
-    for (final rack in pilha) {
-      // Material de cooperado já saiu do sistema: não entra no saldo.
-      if (codigoEhEstocado(rack.produtoCodigo)) continue;
-      await tx.execute(
-        'INSERT INTO estoque_localizado (produto_codigo, local_tipo, '
-        'local_num, face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '
-        'VALUES (?, ?, ?, 0, ?, ?, ?)',
-        positional: [
-          rack.produtoCodigo,
-          localTipoGalpao,
-          posicao,
-          rack.ordem,
-          rack.quantidade,
-          agora,
-        ],
-      );
-    }
-  }
-
-  /// Uma linha em contagens_log por gravação do galpão. [origem] só é
-  /// passada por quem NÃO é a tela — hoje a baixa automática, que precisa
-  /// ficar separada do que uma pessoa digitou no painel do rack.
-  Future<void> _registrarLog(
-    Transaction tx,
-    int posicao,
-    int ordem,
-    String produtoCodigo, {
-    required double? anterior,
-    required double nova,
-    required String agora,
-    String? origem,
-  }) async {
-    await tx.execute(
-      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
-      'qtd_nova, origem, registrado_em) VALUES (?, ?, ?, ?, ?, ?)',
-      positional: [
+      final chavePedido = jsonEncode([
+        'galpao.lancar',
+        posicao,
         produtoCodigo,
-        'GALPAO·$posicao·N$ordem',
-        anterior,
-        nova,
-        origem ??
-            (nova == 0
-                ? 'gondolas_app_galpao_exclusao'
-                : 'gondolas_app_galpao'),
-        agora,
-      ],
-    );
+        produtoNome,
+        quantidade,
+      ]);
+      final uuid = await TursoService().pedidoOnline(chavePedido);
+      await executarOperacao(
+        OperacaoPendente(
+          uuid: uuid,
+          tipo: TipoOperacao.galpaoLancar,
+          banco: TursoService().identidadeAtiva ?? '',
+          criadaEm: DateTime.now(),
+          local: posicao,
+          produtoCodigo: produtoCodigo,
+          produtoNome: produtoNome,
+          quantidade: quantidade,
+        ),
+      );
+      await TursoService().concluirPedidoOnline(chavePedido);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Troca a quantidade de um rack — o palete continua onde está, com o
+  /// mesmo produto, só o número muda. O rack é o de [rackUuid] (o nível pode
+  /// ter mudado desde a leitura; o palete não). Quantidade não positiva é
+  /// recusada: zerar é [esvaziar].
+  Future<bool> ajustarQuantidade({
+    required int posicao,
+    required int ordem,
+    required double quantidade,
+    String? origem,
+    String? rackUuid,
+  }) async {
+    if (quantidade <= 0 || rackUuid == null) return false;
+    try {
+      await executarOperacao(
+        OperacaoPendente(
+          uuid: gerarUuidV4(),
+          tipo: TipoOperacao.galpaoAjustar,
+          banco: TursoService().identidadeAtiva ?? '',
+          criadaEm: DateTime.now(),
+          local: posicao,
+          rackUuid: rackUuid,
+          quantidade: quantidade,
+          origem: origem,
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Esvazia o rack de [rackUuid] e DESCE a pilha: os de cima descem um nível
+  /// cada, tudo na mesma transação.
+  Future<bool> esvaziar({
+    required int posicao,
+    required int ordem,
+    String? origem,
+    String? rackUuid,
+  }) async {
+    if (rackUuid == null) return false;
+    try {
+      await executarOperacao(
+        OperacaoPendente(
+          uuid: gerarUuidV4(),
+          tipo: TipoOperacao.galpaoEsvaziar,
+          banco: TursoService().identidadeAtiva ?? '',
+          criadaEm: DateTime.now(),
+          local: posicao,
+          rackUuid: rackUuid,
+          origem: origem,
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 }
