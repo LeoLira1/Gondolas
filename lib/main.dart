@@ -1,19 +1,30 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'baixa_por_contagem.dart';
+import 'baixa_por_contagem_service.dart';
+import 'baixa_por_contagem_ui.dart';
+import 'barracao_page.dart';
 import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_parede_scene.dart';
 import 'estante_scene.dart';
+import 'estocados_busca.dart' show chaveDestaque;
 import 'estoque_localizado_service.dart';
+import 'fila_gravacao.dart';
 import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
 import 'expositor_nellore_scene.dart';
+import 'galpao_page.dart';
+import 'galpao_scene.dart' show corCamda;
 import 'gondola_scene.dart';
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
 import 'models.dart';
+import 'palete_registry.dart';
+import 'palete_scene.dart';
 import 'quantidade_dialog.dart';
+import 'replica_local.dart' show resumoDoSync;
 import 'turso_service.dart';
 
 void main() => runApp(const CamdaApp());
@@ -104,7 +115,7 @@ class LojaPage extends StatefulWidget {
   State<LojaPage> createState() => _LojaPageState();
 }
 
-class _LojaPageState extends State<LojaPage> {
+class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   int?               _selecionadoIdx;
   ProdutoEncontrado? _produtoSelecionado;
   Vec3?              _focarEm;
@@ -116,6 +127,7 @@ class _LojaPageState extends State<LojaPage> {
   bool                    _buscando       = false;
   bool                    _semResultados  = false;
   Timer?                  _debounce;
+  int _buscaVersao = 0;
 
   // Modo Conferência (Fase 3): transforma a lista de pendentes do dia numa
   // rota visual no mapa. _conferencia é null até a primeira carga.
@@ -125,9 +137,30 @@ class _LojaPageState extends State<LojaPage> {
 
   bool _sincronizando = false;
 
+  // Baixa automática do que foi vendido (ver baixa_por_contagem.dart). Roda
+  // uma vez, assim que a conexão sobe, e deixa a faixa que explica o mapa que
+  // mudou. Null = não rodou ainda, ou não havia o que baixar.
+  ResumoBaixa? _resumoBaixa;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(TursoService().atualizarConsultas());
+      // Voltar ao app costuma ser voltar ao sinal: a gravação que estava
+      // esperando a próxima tentativa vai já.
+      FilaGravacao().tentarAgora();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    TursoService().dataRevision.addListener(_atualizarBuscaVisivel);
+    // Bonecos caminhando pelo mapa (0 = desligado, 1 ou 2): quem escolhe a
+    // quantidade é a tela de Configuração; aqui só carregamos o valor salvo e
+    // deixamos o notifier de PreferenciasMapa reconstruir a cena.
+    PreferenciasMapa.lerBonecos();
     _searchFocus.addListener(() {
       if (!_searchFocus.hasFocus) {
         setState(() {
@@ -137,7 +170,21 @@ class _LojaPageState extends State<LojaPage> {
       }
     });
 
-    TursoService().init();
+    // Prewarm: assim que a conexão sobe, carrega layouts e catálogo enquanto o
+    // usuário ainda está se situando no mapa. LojaPage é a home e não emite
+    // consulta própria, então essa janela é livre — e é ela que faz a PRIMEIRA
+    // abertura de uma gôndola/prateleira custar o mesmo que as seguintes.
+    // Gravações do galpão/barracão que ficaram na fila (rede ruim, app
+    // fechado no meio) voltam a ser enviadas já na abertura, sem esperar
+    // alguém abrir o galpão.
+    unawaited(FilaGravacao().carregar());
+    unawaited(TursoService().init().then((_) {
+      unawaited(TursoService().prewarm());
+      // Junto do prewarm: a baixa é a primeira coisa que precisa acontecer no
+      // dia, porque é ela que tira do mapa o azul do que já foi vendido. Roda
+      // sozinha e sem segurar a tela — o mapa abre enquanto ela trabalha.
+      return _rodarBaixaAutomatica();
+    }));
 
     if (widget.itemTipoInicial != null && widget.itemNumeroInicial != null) {
       final numeroMapa =
@@ -153,13 +200,24 @@ class _LojaPageState extends State<LojaPage> {
 
   @override
   void dispose() {
+    TursoService().dataRevision.removeListener(_atualizarBuscaVisivel);
     _debounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
+
+  /// Roda a baixa automática da contagem e mostra a faixa quando ela tirou
+  /// quantidade de algum endereço. Silenciosa quando não há nada a baixar:
+  /// abrir o app não é notícia.
+  Future<void> _rodarBaixaAutomatica() async {
+    final resumo = await BaixaPorContagemService().rodarSeAutomatica();
+    if (!mounted || resumo.semBaixas) return;
+    setState(() => _resumoBaixa = resumo);
+  }
 
   void _onSelecionado(int? idx) {
     setState(() {
@@ -172,7 +230,14 @@ class _LojaPageState extends State<LojaPage> {
     _searchFocus.unfocus();
   }
 
+  void _atualizarBuscaVisivel() {
+    if (mounted && _searchCtrl.text.trim().length >= 2) {
+      _onSearchChanged(_searchCtrl.text);
+    }
+  }
+
   void _onSearchChanged(String q) {
+    final versao = ++_buscaVersao;
     _debounce?.cancel();
     if (q.trim().isEmpty) {
       setState(() {
@@ -183,10 +248,10 @@ class _LojaPageState extends State<LojaPage> {
       });
       return;
     }
-    setState(() { _buscando = true; _semResultados = false; });
+    setState(() { _buscando = _sugestoes.isEmpty; _semResultados = false; });
     _debounce = Timer(const Duration(milliseconds: 300), () async {
       final resultados = await TursoService().buscarProdutoGlobal(q.trim());
-      if (!mounted) return;
+      if (!mounted || versao != _buscaVersao) return;
       setState(() {
         _sugestoes     = resultados;
         _showSugestoes = resultados.isNotEmpty;
@@ -213,27 +278,38 @@ class _LojaPageState extends State<LojaPage> {
     _searchFocus.unfocus();
   }
 
-  Future<void> _verDetalhes(int idx) async {
-    final item = itensLoja[idx];
+  /// Abre a cena da estrutura selecionada. [idx] é o índice em [itensLoja]
+  /// quando o toque veio do mapa; quando é null, a estrutura do produto
+  /// encontrado na busca NÃO tem maquete no mapa (paletes e estante 5, que só
+  /// existem no carrossel de detalhes) e o endereço do próprio produto é o que
+  /// diz onde abrir — sem isso o "Ver detalhes" ficava inalcançável para esses
+  /// endereços, mesmo a busca achando o produto.
+  Future<void> _verDetalhes([int? idx]) async {
+    final item   = idx != null ? itensLoja[idx] : null;
+    final tipo   = item?.tipo   ?? _produtoSelecionado?.tipo;
+    final numero = item?.numero ?? _produtoSelecionado?.numero;
+    if (tipo == null || numero == null) return;
+    await _abrirEstrutura(tipo, numero);
+  }
 
+  Future<void> _abrirEstrutura(String tipo, int numero) async {
     if (_modoConferencia) {
       // O retângulo da parede representa as 6 seções (13–18): acende os
       // pendentes de todas ao abrir a cena pela seção 1.
       final codigos = <String>{};
-      if (item.tipo == 'estante' && ehEstanteParede(item.numero)) {
+      if (tipo == 'estante' && ehEstanteParede(numero)) {
         for (var n = estanteParedeMin; n <= estanteParedeMax; n++) {
           codigos.addAll(
               _conferencia?.estruturas['estante:$n']?.codigos ?? const {});
         }
       } else {
-        codigos.addAll(_conferencia
-                ?.estruturas['${item.tipo}:${item.numero}']?.codigos ??
-            const {});
+        codigos.addAll(
+            _conferencia?.estruturas['$tipo:$numero']?.codigos ?? const {});
       }
       await Navigator.push(context, MaterialPageRoute(
-        builder: (_) => item.tipo == 'gondola'
-            ? GondolaPage(gondolaInicial: item.numero, codigosConferencia: codigos)
-            : EstantePage(estanteInicial: item.numero, codigosConferencia: codigos),
+        builder: (_) => tipo == 'gondola'
+            ? GondolaPage(gondolaInicial: numero, codigosConferencia: codigos)
+            : EstantePage(estanteInicial: numero, codigosConferencia: codigos),
       ));
       // O usuário pode ter confirmado itens no app de contagem enquanto
       // estava na cena — recarrega pra refletir o estado atual ao voltar.
@@ -252,10 +328,32 @@ class _LojaPageState extends State<LojaPage> {
             andar:         _produtoSelecionado!.andar,
           )
         : null;
-    if (item.tipo == 'gondola') {
+    if (tipo == localTipoGalpao) {
+      // O galpão não tem maquete no mapa da loja (é outro prédio): a busca
+      // leva direto à tela dele, marcando a posição escolhida na lista e
+      // acendendo TODAS as posições do produto — ele quase nunca está num
+      // palete só, e a busca devolve uma linha por endereço.
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => GalpaoPage(
+          posicaoInicial:  numero,
+          codigoDestacado: produto == null
+              ? null
+              : chaveDestaque(produto.produtoCodigo, produto.nome),
+        ),
+      ));
+    } else if (tipo == localTipoBarracao) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => BarracaoPage(
+          enderecoInicialId: numero,
+          codigoDestacado: produto == null
+              ? null
+              : chaveDestaque(produto.produtoCodigo, produto.nome),
+        ),
+      ));
+    } else if (tipo == 'gondola') {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GondolaPage(
-          gondolaInicial:   item.numero,
+          gondolaInicial:   numero,
           produtoDestacado: produto,
         ),
       ));
@@ -264,7 +362,7 @@ class _LojaPageState extends State<LojaPage> {
       // sem produto, o retângulo da parede abre pela seção 1 (E13).
       final estanteInicial = produto != null && produto.tipo == 'estante'
           ? produto.numero
-          : item.numero;
+          : numero;
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => EstantePage(
           estanteInicial:   estanteInicial,
@@ -302,6 +400,42 @@ class _LojaPageState extends State<LojaPage> {
       _conferencia           = resultado;
       _carregandoConferencia = false;
     });
+  }
+
+  /// Abre o galpão já com o Modo Conferência ligado — o galpão é outro prédio,
+  /// então os pendentes que moram lá (herbicida, adubo, óleo) não têm retângulo
+  /// para acender no mapa da loja: o atalho do banner é o que liga uma rota à
+  /// outra.
+  Future<void> _abrirGalpaoEmConferencia() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const GalpaoPage(conferenciaAoAbrir: true),
+    ));
+    // Confirmações feitas no app de contagem enquanto o galpão estava aberto
+    // valem para os dois prédios — o mesmo recarregar de _abrirEstrutura.
+    if (mounted && _modoConferencia) _carregarConferencia();
+  }
+
+  Future<void> _abrirBarracaoEmConferencia() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const BarracaoPage(conferenciaAoAbrir: true),
+    ));
+    if (mounted && _modoConferencia) _carregarConferencia();
+  }
+
+  /// Estruturas com pendentes que não têm maquete no mapa (paletes, estante 5).
+  /// O badge delas não tem retângulo onde pousar, então sumiriam do Modo
+  /// Conferência sem sequer cair na lista "sem endereço" — elas TÊM endereço
+  /// cadastrado. Viram um atalho próprio no banner.
+  List<EstruturaConferencia> get _estruturasForaDoMapa {
+    final conferencia = _conferencia;
+    if (conferencia == null) return const [];
+    final fora = conferencia.estruturas.values.where((e) {
+      final numeroMapa = numeroNoMapaLoja(e.tipo, e.numero);
+      return !itensLoja
+          .any((it) => it.tipo == e.tipo && it.numero == numeroMapa);
+    }).toList();
+    fora.sort((a, b) => a.numero.compareTo(b.numero));
+    return fora;
   }
 
   // idx (em itensLoja) → nº de pendentes na estrutura, pronto pro painter.
@@ -394,14 +528,108 @@ class _LojaPageState extends State<LojaPage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
     if (ok && _modoConferencia) _carregarConferencia();
+  }
+
+  void _mostrarForaDoMapa() {
+    final estruturas = _estruturasForaDoMapa;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF141a22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Fora do mapa geral',
+                style: TextStyle(
+                    color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Estruturas com pendentes que não são desenhadas no mapa '
+                '(paletes e estante 5). Toque para abrir a cena.',
+                style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: estruturas.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: Color(0xFF232f3a), height: 8),
+                  itemBuilder: (_, i) {
+                    final e = estruturas[i];
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _abrirEstrutura(e.tipo, e.numero);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: corConferenciaCiano.withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                rotuloCurtoEstrutura(e.tipo, e.numero),
+                                style: const TextStyle(
+                                    color: corConferenciaCiano,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${nomeEstrutura(e.tipo, e.numero)} · '
+                                '${e.itens.length} pendente(s)',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 13),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right,
+                                color: Color(0xFF8a9aa8), size: 20),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _limparBusca() {
@@ -422,19 +650,29 @@ class _LojaPageState extends State<LojaPage> {
   @override
   Widget build(BuildContext context) {
     final item = _selecionadoIdx != null ? itensLoja[_selecionadoIdx!] : null;
+    // O card também aparece quando a busca achou o produto numa estrutura sem
+    // maquete no mapa (item == null): é a única porta de entrada para os
+    // detalhes de paletes e da estante 5.
+    final mostrarCard = item != null || _produtoSelecionado != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0b0c0e),
       body: Stack(
         children: [
           // ── Cena 3D (fundo) ─────────────────────────────────────────────
-          LojaScene(
-            selecionadoIdx:       _selecionadoIdx,
-            onSelecionado:        _onSelecionado,
-            onVerDetalhes:        _verDetalhes,
-            focarEm:              _focarEm,
-            modoConferencia:      _modoConferencia,
-            contagemConferencia:  _contagemPorIdx,
+          // A quantidade de bonecos vem da tela de Configuração: o notifier
+          // reconstrói só a cena quando o usuário troca a opção por lá.
+          ValueListenableBuilder<int>(
+            valueListenable: PreferenciasMapa.bonecos,
+            builder: (_, bonecos, __) => LojaScene(
+              selecionadoIdx:       _selecionadoIdx,
+              onSelecionado:        _onSelecionado,
+              onVerDetalhes:        _verDetalhes,
+              focarEm:              _focarEm,
+              modoConferencia:      _modoConferencia,
+              contagemConferencia:  _contagemPorIdx,
+              bonecos:              bonecos,
+            ),
           ),
 
           // ── HUD superior: busca + legenda + título ───────────────────────
@@ -446,38 +684,68 @@ class _LojaPageState extends State<LojaPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Linha: campo de busca + legenda + toggle conferência
+                    // O campo de busca fica SOZINHO na linha, ocupando a
+                    // largura toda. Ele dividia a linha com três botões de
+                    // 46 px e a legenda, e num celular sobrava tão pouco que
+                    // o nome do produto não cabia — os nomes cadastrados são
+                    // longos ('HERBICIDA BORAL 500 SC 20L'), então é a busca
+                    // que precisa do espaço, não os botões.
+                    _SearchBox(
+                      controller:    _searchCtrl,
+                      focusNode:     _searchFocus,
+                      sugestoes:     _sugestoes,
+                      showSugestoes: _showSugestoes,
+                      buscando:      _buscando,
+                      semResultados: _semResultados,
+                      onChanged:     _onSearchChanged,
+                      onSelecionar:  _selecionarProduto,
+                      onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
+                    ),
+                    const SizedBox(height: 8),
+                    // Segunda linha: ações e legenda. Sincronizar, galpão e
+                    // conferência à esquerda; a legenda encostada à direita.
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: _SearchBox(
-                            controller:    _searchCtrl,
-                            focusNode:     _searchFocus,
-                            sugestoes:     _sugestoes,
-                            showSugestoes: _showSugestoes,
-                            buscando:      _buscando,
-                            semResultados: _semResultados,
-                            onChanged:     _onSearchChanged,
-                            onSelecionar:  _selecionarProduto,
-                            onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
                         _SyncButton(
                           sincronizando: _sincronizando,
                           onTap: _sincronizar,
+                        ),
+                        const SizedBox(width: 10),
+                        _GalpaoButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const GalpaoPage()),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        _BarracaoButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const BarracaoPage()),
+                          ),
                         ),
                         const SizedBox(width: 10),
                         _ModoConferenciaToggle(
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
                         ),
-                        const SizedBox(width: 10),
+                        const Spacer(),
                         const _LegendRow(),
                       ],
                     ),
                     const SizedBox(height: 8),
+                    // Antes do banner de conferência: a baixa fala do mapa que
+                    // acabou de mudar, e é a primeira pergunta de quem abre o
+                    // app e vê uma gôndola com número diferente do de ontem.
+                    if (_resumoBaixa != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: FaixaBaixaAutomatica(
+                          resumo:   _resumoBaixa!,
+                          onFechar: () => setState(() => _resumoBaixa = null),
+                        ),
+                      ),
                     if (_modoConferencia)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
@@ -486,6 +754,10 @@ class _LojaPageState extends State<LojaPage> {
                           resultado:  _conferencia,
                           onRefresh:  _carregarConferencia,
                           onVerSemEndereco: _mostrarSemEndereco,
+                          foraDoMapa: _estruturasForaDoMapa,
+                          onVerForaDoMapa: _mostrarForaDoMapa,
+                          onVerGalpao: _abrirGalpaoEmConferencia,
+                          onVerBarracao: _abrirBarracaoEmConferencia,
                         ),
                       ),
                     // Título / dica
@@ -504,7 +776,7 @@ class _LojaPageState extends State<LojaPage> {
           ),
 
           // ── Card inferior ────────────────────────────────────────────────
-          if (item != null && !_modoConferencia)
+          if (mostrarCard && !_modoConferencia)
             Positioned(
               bottom: 24,
               left: 20,
@@ -512,7 +784,7 @@ class _LojaPageState extends State<LojaPage> {
               child: _LocationCard(
                 item:    item,
                 produto: _produtoSelecionado,
-                onVerDetalhes: () => _verDetalhes(_selecionadoIdx!),
+                onVerDetalhes: () => _verDetalhes(_selecionadoIdx),
               ),
             ),
         ],
@@ -675,6 +947,65 @@ class _SyncButton extends StatelessWidget {
   }
 }
 
+// ── _GalpaoButton ────────────────────────────────────────────────────────────
+
+/// Porta de entrada do mapa do galpão. Fica na barra do mapa da loja, e não
+/// como uma estrutura desenhada nele, porque o galpão é outro prédio — não
+/// uma peça a mais do salão.
+class _GalpaoButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _GalpaoButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color:        const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: const Icon(Icons.warehouse_outlined,
+            color: Color(0xFF8a877f), size: 20),
+      ),
+    );
+  }
+}
+
+// ── _BarracaoButton ──────────────────────────────────────────────────────────
+
+/// Porta de entrada do mapa do barracão. Fica ao lado da do galpão, e pelo
+/// mesmo motivo: o barracão é um terceiro prédio, não uma peça a mais do
+/// salão. O ícone é o de caixas empilhadas, e não o de galpão — os dois botões
+/// são vizinhos, e dois desenhos iguais lado a lado não dizem qual é qual.
+class _BarracaoButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _BarracaoButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        width:  46,
+        decoration: BoxDecoration(
+          color:        const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: const Icon(Icons.inventory_2_outlined,
+            color: Color(0xFF8a877f), size: 20),
+      ),
+    );
+  }
+}
+
 // ── _ModoConferenciaToggle ──────────────────────────────────────────────────
 
 class _ModoConferenciaToggle extends StatelessWidget {
@@ -718,22 +1049,41 @@ class _BannerConferencia extends StatelessWidget {
   final ModoConferenciaResultado? resultado;
   final VoidCallback              onRefresh;
   final VoidCallback              onVerSemEndereco;
+  // Estruturas com pendentes que não são desenhadas no mapa (paletes,
+  // estante 5): não têm retângulo pra piscar, então ganham um atalho próprio.
+  final List<EstruturaConferencia> foraDoMapa;
+  final VoidCallback               onVerForaDoMapa;
+  // Pendentes com rack no galpão: outro prédio, outro mapa — atalho próprio,
+  // que abre o galpão já em Modo Conferência.
+  final VoidCallback               onVerGalpao;
+  final VoidCallback               onVerBarracao;
 
   const _BannerConferencia({
     required this.carregando,
     required this.resultado,
     required this.onRefresh,
     required this.onVerSemEndereco,
+    this.foraDoMapa = const [],
+    required this.onVerForaDoMapa,
+    required this.onVerGalpao,
+    required this.onVerBarracao,
   });
 
   @override
   Widget build(BuildContext context) {
-    final r     = resultado;
-    final vazio = !carregando && (r == null || r.vazioHoje);
-    final temSemEndereco = r != null && r.semEndereco.isNotEmpty;
-    final temFiltrados   = r != null && r.totalFiltradosDeposito > 0;
-    final filtradosTexto =
-        temFiltrados ? ' · ${r.totalFiltradosDeposito} depósito (filtrados)' : '';
+    final r = resultado;
+    // "Nada hoje" agora exige os dois prédios vazios: com o galpão no app, um
+    // dia só de herbicida e adubo tem conferência de verdade, ainda que nenhuma
+    // estrutura da loja acenda.
+    final vazio = !carregando && (r == null ||
+        (r.vazioHoje && r.galpaoVazioHoje && r.barracaoVazioHoje));
+    final temSemEndereco = !carregando && r != null && r.semEndereco.isNotEmpty;
+    final temFiltrados   = !carregando && r != null && r.totalFiltradosDeposito > 0;
+    final temForaDoMapa  = !carregando && foraDoMapa.isNotEmpty;
+    final noGalpao       = r == null ? 0 : r.totalProdutosGalpao;
+    final temGalpao      = !carregando && noGalpao > 0;
+    final noBarracao     = r == null ? 0 : r.totalProdutosBarracao;
+    final temBarracao    = !carregando && noBarracao > 0;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -742,40 +1092,156 @@ class _BannerConferencia extends StatelessWidget {
         border: Border.all(color: corConferenciaCiano.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(children: [
-        Icon(
-          vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
-          color: corConferenciaCiano,
-          size: 15,
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: carregando
-              ? const Text(
-                  'Carregando conferência do dia...',
-                  style: TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
-                )
-              : GestureDetector(
-                  onTap: (temSemEndereco || temFiltrados) ? onVerSemEndereco : null,
-                  child: Text(
-                    vazio
-                        ? 'Nenhuma conferência pendente hoje 🎉$filtradosTexto'
-                        : 'Conferência do dia: ${r!.totalProdutos} produto(s) · '
-                          '${r.totalEstruturas} estrutura(s)'
-                          '${temSemEndereco ? ' · ${r.semEndereco.length} sem endereço' : ''}'
-                          '$filtradosTexto',
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
+      // Texto e atalhos em LINHAS SEPARADAS de propósito. Com os dois na mesma
+      // linha, os chips (largura fixa) comiam a largura do texto e a frase
+      // quebrava uma letra por linha — o banner virava uma coluna de 500 px de
+      // altura e cobria justamente as gôndolas que ele manda conferir.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(children: [
+            Icon(
+              vazio ? Icons.celebration_outlined : Icons.fact_check_outlined,
+              color: corConferenciaCiano,
+              size: 15,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                carregando
+                    ? 'Carregando conferência do dia...'
+                    : vazio
+                        ? 'Nenhuma conferência pendente hoje 🎉'
+                        : r!.vazioHoje
+                            // Nenhuma estrutura da loja acesa, mas o galpão tem
+                            // racks a conferir: o chip abaixo é o caminho.
+                            ? 'Nada a conferir na loja hoje — veja os '
+                              'depósitos abaixo'
+                            // Só os dois números que valem para o mapa: o resto
+                            // virou chip, e chip não empurra o texto.
+                            : 'Conferência do dia: '
+                              '${pluralizar(r.totalProdutos, 'produto')} · '
+                              '${pluralizar(r.totalEstruturas, 'estrutura')}',
+                // Teto de altura: mesmo na tela mais estreita o banner não
+                // passa de duas linhas de texto.
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: carregando ? const Color(0xFFb0ada8) : Colors.white,
+                  fontSize: 12,
                 ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
+              onPressed: carregando ? null : onRefresh,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              tooltip: 'Atualizar',
+            ),
+          ]),
+          if (temGalpao || temBarracao || temForaDoMapa ||
+              temSemEndereco || temFiltrados)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (temGalpao)
+                    _ChipBanner(
+                      icone:   Icons.warehouse_outlined,
+                      texto:   '$noGalpao no galpão',
+                      cor:     corConferenciaCiano,
+                      corFundo: corConferenciaCiano.withValues(alpha: 0.16),
+                      corBorda: corConferenciaCiano.withValues(alpha: 0.6),
+                      onTap:   onVerGalpao,
+                    ),
+                  if (temBarracao)
+                    _ChipBanner(
+                      icone: Icons.inventory_2_outlined,
+                      texto: '$noBarracao no barracão',
+                      cor: corConferenciaCiano,
+                      corFundo: corConferenciaCiano.withValues(alpha: 0.16),
+                      corBorda: corConferenciaCiano.withValues(alpha: 0.6),
+                      onTap: onVerBarracao,
+                    ),
+                  if (temForaDoMapa)
+                    _ChipBanner(
+                      icone:   Icons.location_off_outlined,
+                      texto:   '${foraDoMapa.length} fora do mapa',
+                      cor:     const Color(0xFFd9a441),
+                      corFundo: const Color(0x33d9a441),
+                      corBorda: const Color(0x99d9a441),
+                      onTap:   onVerForaDoMapa,
+                    ),
+                  // Os dois contadores que antes viviam no fim da frase: como
+                  // abrem a mesma folha de detalhes, viraram chips do mesmo
+                  // toque em vez de texto comprido.
+                  if (temSemEndereco)
+                    _ChipBanner(
+                      icone:   Icons.help_outline,
+                      texto:   '${r.semEndereco.length} sem endereço',
+                      cor:     const Color(0xFFa8b6c2),
+                      corFundo: const Color(0x22a8b6c2),
+                      corBorda: const Color(0x66a8b6c2),
+                      onTap:   onVerSemEndereco,
+                    ),
+                  if (temFiltrados)
+                    _ChipBanner(
+                      icone:   Icons.filter_alt_outlined,
+                      texto:   '${r.totalFiltradosDeposito} de depósito',
+                      cor:     const Color(0xFF7c8b98),
+                      corFundo: const Color(0x1A7c8b98),
+                      corBorda: const Color(0x557c8b98),
+                      onTap:   onVerSemEndereco,
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Atalho do banner de conferência: pílula com ícone e contagem. Os dois
+/// atalhos (galpão e fora do mapa) só diferem em cor e texto, então dividem a
+/// mesma forma — assim eles não podem sair de sintonia.
+class _ChipBanner extends StatelessWidget {
+  final IconData     icone;
+  final String       texto;
+  final Color        cor, corFundo, corBorda;
+  final VoidCallback onTap;
+
+  const _ChipBanner({
+    required this.icone,
+    required this.texto,
+    required this.cor,
+    required this.corFundo,
+    required this.corBorda,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color:  corFundo,
+          border: Border.all(color: corBorda),
+          borderRadius: BorderRadius.circular(999),
         ),
-        IconButton(
-          icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF8a9aa8)),
-          onPressed: carregando ? null : onRefresh,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          tooltip: 'Atualizar',
-        ),
-      ]),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icone, size: 12, color: cor),
+          const SizedBox(width: 4),
+          Text(texto, style: TextStyle(color: cor, fontSize: 11)),
+        ]),
+      ),
     );
   }
 }
@@ -879,7 +1345,9 @@ class _SearchBox extends StatelessWidget {
                             Divider(height: 1, color: Colors.white.withValues(alpha: 0.05)),
                         itemBuilder: (_, i) {
                           final p   = sugestoes[i];
-                          final cor = p.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
+                          final cor = p.tipo == 'gondola' ? corGondolaLoja
+                              : p.tipo == localTipoGalpao || p.tipo == localTipoBarracao
+                                  ? corCamda : corEstanteLoja;
                           return InkWell(
                             onTap: () => onSelecionar(p),
                             child: Padding(
@@ -903,7 +1371,10 @@ class _SearchBox extends StatelessWidget {
                                           const SizedBox(width: 5),
                                           Flexible(
                                             child: Text(
-                                              '${p.tipo == 'gondola' ? 'Gôndola' : 'Estante'} nº ${p.numero} · ${p.nivelDescricao}',
+                                              p.tipo == localTipoBarracao
+                                                  ? 'Barracão · ${p.nivelDescricao}'
+                                                  : '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
+                                                    ' nº ${p.numero} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
                                             ),
@@ -1000,7 +1471,9 @@ class _HexClipper extends CustomClipper<Path> {
 // ── _LocationCard ─────────────────────────────────────────────────────────────
 
 class _LocationCard extends StatelessWidget {
-  final ItemLoja           item;
+  // null quando a estrutura do produto encontrado não é desenhada no mapa
+  // (paletes e estante 5): aí o endereço do próprio produto descreve o card.
+  final ItemLoja?          item;
   final ProdutoEncontrado? produto;
   final VoidCallback?      onVerDetalhes;
 
@@ -1008,25 +1481,55 @@ class _LocationCard extends StatelessWidget {
     required this.item,
     this.produto,
     this.onVerDetalhes,
-  });
+  }) : assert(item != null || produto != null);
 
   @override
   Widget build(BuildContext context) {
-    final cor    = item.tipo == 'gondola' ? corGondolaLoja : corEstanteLoja;
-    final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
-    final ehParede = item.tipo == 'estante' && ehEstanteParede(item.numero);
-    final tipoLabel = item.tipo == 'gondola'
+    final foraDoMapa = item == null;
+    final tipo       = item?.tipo   ?? produto!.tipo;
+    final numero     = item?.numero ?? produto!.numero;
+
+    final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
+    final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
+    final ehGalpaoAqui = tipo == localTipoGalpao;
+    final ehBarracaoAqui = tipo == localTipoBarracao;
+    final cor = tipo == 'gondola'
+        ? corGondolaLoja
+        : ehGalpaoAqui || ehBarracaoAqui
+            ? corCamda
+            : corEstanteLoja;
+    // No galpão o número JÁ é o endereço (1–129, único no galpão inteiro, as
+    // duas partes na mesma contagem), sem letra na frente — é assim que a
+    // etiqueta física está no chão.
+    final prefixo = tipo == 'gondola'
+        ? 'G'
+        : ehGalpaoAqui
+            ? ''
+            : ehBarracaoAqui
+                ? ''
+            : ehPaleteAqui
+                ? 'P'
+                : 'E';
+    final tipoLabel = tipo == 'gondola'
         ? 'Gôndola'
-        : ehParede
-            ? 'Estante Parede'
-            : 'Estante';
+        : ehGalpaoAqui
+            ? 'Galpão'
+            : ehBarracaoAqui
+                ? 'Barracão'
+            : ehPaleteAqui
+                ? 'Palete'
+                : ehParede
+                    ? 'Estante Parede'
+                    : 'Estante';
     // O retângulo da parede cobre as 6 seções; o número exibido acompanha o
     // resultado da busca quando há produto selecionado.
-    final numeroTitulo = ehParede
+    final numeroTitulo = ehBarracaoAqui && produto != null
+        ? produto!.nivelDescricao
+        : ehParede
         ? 'E$estanteParedeMin–E$estanteParedeMax'
-        : '$prefixo${item.numero}';
+        : '$prefixo$numero';
     final numeroTexto =
-        produto != null && produto!.tipo == item.tipo ? produto!.numero : item.numero;
+        produto != null && produto!.tipo == tipo ? produto!.numero : numero;
 
     return Container(
       decoration: BoxDecoration(
@@ -1064,10 +1567,12 @@ class _LocationCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             produto != null
-                ? '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
+                ? ehBarracaoAqui
+                    ? '${produto!.nome} · $tipoLabel · ${produto!.nivelDescricao}'
+                    : '${produto!.nome} · $tipoLabel nº $numeroTexto · ${produto!.nivelDescricao}'
                 : ehParede
                     ? '$tipoLabel · 6 seções · P1–P12'
-                    : '$tipoLabel nº ${item.numero}',
+                    : '$tipoLabel nº $numero',
             style: const TextStyle(
               color: Color(0xFFb0ada8),
               fontSize: 12,
@@ -1076,6 +1581,34 @@ class _LocationCard extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
+          // Sem maquete no mapa não há retângulo piscando pra guiar o olho:
+          // o aviso explica por que nada acendeu e o botão abaixo continua
+          // levando à cena da estrutura.
+          if (foraDoMapa) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0x33d9a441),
+                border: Border.all(color: const Color(0x66d9a441)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.info_outline, size: 13, color: Color(0xFFd9a441)),
+                  SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Esta estrutura não é desenhada no mapa geral — '
+                      'abra os detalhes para ver a posição.',
+                      style: TextStyle(color: Color(0xFFd9a441), fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (onVerDetalhes != null) ...[
             const SizedBox(height: 12),
             SizedBox(
@@ -1137,6 +1670,7 @@ class _GondolaPageState extends State<GondolaPage> {
   // produtos, então o endereço sozinho não identifica qual foi selecionada.
   CaixaColocada? _caixaSelecionada;
 
+  final Set<int> _editadas = {};
   final Map<int, List<CaixaColocada>> _caixas = {};
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
@@ -1175,13 +1709,37 @@ class _GondolaPageState extends State<GondolaPage> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  List<Produto> get _catalogoAtual =>
-      _produtos.isNotEmpty ? _produtos : _catalogoMock;
+  // Só cai no catálogo de exemplo quando NÃO há banco configurado — que é o
+  // caso para o qual ele existe (o banner "usando dados de exemplo"). Com banco
+  // conectado, o catálogo agora chega depois da cena (ver _inicializar), e
+  // deixar o mock valer nessa janela pintaria as caixas com códigos falsos.
+  List<Produto> get _catalogoAtual => _produtos.isNotEmpty
+      ? _produtos
+      : (_dbConectado ? const <Produto>[] : _catalogoMock);
 
   List<CaixaColocada> get _caixasAtuais => _caixas[_gondolaAtual] ?? const [];
 
-  Map<String, Color> get _corPorProduto =>
-      {for (final p in _catalogoAtual) p.codigo: p.cor};
+  // Cor e nome que vêm nas PRÓPRIAS linhas de gondola_layout: chegam junto com
+  // o layout, então a cena pinta certo no primeiro frame, sem esperar o
+  // catálogo. Também servem de rede de segurança ao salvar — ver _salvarLayout.
+  Map<String, String> _hexDoLayout   = const {};
+  Map<String, String> _nomesDoLayout = const {};
+
+  // Derivados do catálogo, recalculados só quando o catálogo ou o layout mudam.
+  // Eram getters avaliados a cada build() — com 854 produtos, isso era um mapa
+  // de 854 entradas remontado (e 854 hex reparseados) a cada setState, e a
+  // identidade nova do Map ainda derrubava as comparações rio abaixo.
+  Map<String, Color>   _corPorProduto    = const {};
+  Map<String, Produto> _produtoPorCodigo = const {};
+
+  void _recomputarCatalogoDerivado() {
+    final catalogo = _catalogoAtual;
+    _corPorProduto = mesclarCores(
+      {for (final e in _hexDoLayout.entries) e.key: corDeHex(e.value)},
+      catalogo,
+    );
+    _produtoPorCodigo = {for (final p in catalogo) p.codigo: p};
+  }
 
   List<Produto> _filtrarProdutos(String query) {
     if (query.length < 2) return [];
@@ -1224,38 +1782,60 @@ class _GondolaPageState extends State<GondolaPage> {
       _dbConectado        = false;
     });
 
+    unawaited(_carregarLayout(_gondolaAtual));
+    unawaited(_carregarCatalogo());
     await TursoService().init();
     if (!mounted) return;
 
     final conectado = TursoService().isConnected;
     setState(() => _dbConectado = conectado);
 
-    if (conectado) {
-      // Catálogo, layout e endereços desatualizados em paralelo: corta idas
-      // ao servidor do caminho crítico de abertura da página.
-      final layoutFuture = _carregarLayout(_gondolaAtual);
-      final desatualizadosFuture = _carregarDesatualizados();
-      final produtos = await TursoService().fetchProdutos();
-      if (!mounted) return;
+    if (!conectado) {
       setState(() {
-        _produtos           = produtos;
         _carregandoProdutos = false;
+        _recomputarCatalogoDerivado();
       });
-      await Future.wait([layoutFuture, desatualizadosFuture]);
-    } else {
-      setState(() {
-        _produtos           = [];
-        _carregandoProdutos = false;
-      });
+      return;
     }
+
+    // Só o layout é esperado: ele já traz cor e nome de cada caixa, então a
+    // cena aparece completa e nas cores certas. O catálogo (estoque_mestre) só
+    // é preciso para o autocomplete do "Adicionar" e para o contador — esperar
+    // por ele aqui era o que deixava as caixas cinzas até a consulta voltar,
+    // atrás ainda das duas consultas de badge na fila do banco.
+    await _carregarLayout(_gondolaAtual);
+    unawaited(_carregarDesatualizados());
+    unawaited(_carregarCatalogo());
+  }
+
+  Future<void> _carregarCatalogo() async {
+    final produtos = await TursoService().fetchProdutos();
+    if (!mounted) return;
+    setState(() {
+      _produtos           = produtos;
+      _carregandoProdutos = false;
+      _recomputarCatalogoDerivado();
+      // Reaplica o filtro no que já estava digitado: sem isso, quem começou a
+      // buscar antes do catálogo chegar teria de reescrever para ver sugestão.
+      if (_ctrl1.text.length >= 2) _sugestoes1 = _filtrarProdutos(_ctrl1.text);
+      if (_ctrl2.text.length >= 2) _sugestoes2 = _filtrarProdutos(_ctrl2.text);
+    });
   }
 
   // Recarrega a cena quando uma sincronização (carga inicial em segundo plano
-  // ou botão Sincronizar) traz dados novos, sem travar a abertura.
+  // ou botão Sincronizar) traz dados novos, sem travar a abertura. É o ÚNICO
+  // caminho de recarga pós-sync — o botão Sincronizar não chama _inicializar,
+  // senão tudo rodaria em dobro.
   void _aoAtualizarDados() {
     if (!mounted) return;
+    // Descarta só as OUTRAS estruturas: limpar a atual aqui (fora de setState,
+    // com o reload assíncrono) daria um frame com a gôndola vazia.
+    _caixas.removeWhere((k, _) => k != _gondolaAtual && !_editadas.contains(k));
     _carregarLayout(_gondolaAtual);
-    _carregarDesatualizados(forceRefresh: true);
+    unawaited(_carregarDesatualizados(forceRefresh: true));
+    // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
+    // era o que o _inicializar do botão Sincronizar fazia.
+    unawaited(_carregarCatalogo());
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -1276,15 +1856,44 @@ class _GondolaPageState extends State<GondolaPage> {
   // ── Actions ────────────────────────────────────────────────────────────────
 
   void _trocarGondola(int delta) {
+    if (_salvando) return;
     final nova = (_gondolaAtual + delta).clamp(1, 12);
     setState(() {
       _gondolaAtual     = nova;
       // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
       // a barra de progresso só aparece na primeira visita à gôndola.
-      _carregandoLayout = _dbConectado && !_caixas.containsKey(nova);
+      final semeou = _semearDoCache(nova);
+      _carregandoLayout =
+          !semeou && _dbConectado && !_caixas.containsKey(nova);
       _caixaSelecionada = null;
     });
-    if (_dbConectado) _carregarLayout(nova);
+    _carregarLayout(nova);
+  }
+
+  /// Preenche a gôndola a partir do cache do serviço, se ela já tiver sido
+  /// lida. Síncrono: é o que permite o carrossel trocar de estrutura dentro do
+  /// mesmo frame do toque, sem passar pelo banco.
+  ///
+  /// Deve ser chamado de dentro de um setState.
+  bool _semearDoCache(int gondolaNum) {
+    if (_editadas.contains(gondolaNum)) return true;
+    final cache = TursoService().layoutEmCache(gondolaNum);
+    if (cache == null) return false;
+    _aplicarLayout(gondolaNum, cache);
+    return true;
+  }
+
+  /// Aplica as linhas do banco à cena: as caixas e, junto, o mapa de cores e
+  /// nomes que vem nas próprias linhas. Deve ser chamado de dentro de setState.
+  void _aplicarLayout(int gondolaNum, List<CaixaLayout> layouts) {
+    if (_editadas.contains(gondolaNum)) return;
+    _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
+    if (gondolaNum == _gondolaAtual) {
+      _hexDoLayout   = {for (final l in layouts) l.produtoCodigo: l.corHex};
+      _nomesDoLayout = {for (final l in layouts) l.produtoCodigo: l.produtoNome};
+      _recomputarCatalogoDerivado();
+      _carregandoLayout = false;
+    }
   }
 
   // Caixas gravadas na era do octógono podem cair fora do hexágono novo
@@ -1303,15 +1912,12 @@ class _GondolaPageState extends State<GondolaPage> {
 
   Future<void> _carregarLayout(int gondolaNum) async {
     final layouts = await TursoService().fetchLayout(gondolaNum);
-    if (!mounted) return;
-    setState(() {
-      _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
-      if (_gondolaAtual == gondolaNum) _carregandoLayout = false;
-    });
+    if (!mounted || _salvando || _editadas.contains(gondolaNum)) return;
+    setState(() => _aplicarLayout(gondolaNum, layouts));
   }
 
   void _onTapAndar(int andar, double x, double z) {
-    if (_produtoSelecionadoId == null) return;
+    if (_salvando || _produtoSelecionadoId == null) return;
     final nova = CaixaColocada(
       andar:     andar,
       produtoId: _produtoSelecionadoId!,
@@ -1319,6 +1925,7 @@ class _GondolaPageState extends State<GondolaPage> {
       z:         z,
     );
     setState(() {
+      _editadas.add(_gondolaAtual);
       _caixas[_gondolaAtual] = [..._caixasAtuais, nova];
       _faceSelecionada  = faceFromPos(x, z);
       _andarSelecionado = andar;
@@ -1383,14 +1990,16 @@ class _GondolaPageState extends State<GondolaPage> {
         ? selecionada
         : _caixaEm(_faceSelecionada!, _andarSelecionado!);
     if (caixa == null) return null;
-    final matches = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
-    if (matches.isNotEmpty) return matches.first;
-    // Produto fora do catálogo carregado: mostra ao menos o código.
+    final doCatalogo = _produtoPorCodigo[caixa.produtoId];
+    if (doCatalogo != null) return doCatalogo;
+    // Produto fora do catálogo carregado (ou catálogo ainda a caminho): usa o
+    // nome e a cor que vieram na própria linha do layout, caindo no código só
+    // se nem isso houver.
     return Produto(
       codigo:    caixa.produtoId,
-      nome:      caixa.produtoId,
+      nome:      _nomesDoLayout[caixa.produtoId] ?? caixa.produtoId,
       categoria: '',
-      corHex:    '#888888',
+      corHex:    _hexDoLayout[caixa.produtoId] ?? '#888888',
     );
   }
 
@@ -1401,9 +2010,9 @@ class _GondolaPageState extends State<GondolaPage> {
     required int faceOuColuna,
     required int andarOuNivel,
   }) async {
-    final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
-    final produtoNome =
-        produto.isNotEmpty ? produto.first.nome : produtoCodigo;
+    final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
+        _nomesDoLayout[produtoCodigo] ??
+        produtoCodigo;
     await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
@@ -1418,10 +2027,16 @@ class _GondolaPageState extends State<GondolaPage> {
     _carregarDesatualizados();
   }
 
-  void _limparGondola() => setState(() => _caixas.remove(_gondolaAtual));
+  void _limparGondola() => setState(() {
+    if (_salvando) return;
+    _editadas.add(_gondolaAtual);
+    _caixas.remove(_gondolaAtual);
+  });
 
   void _limparPorProduto(String produtoId) {
+    if (_salvando) return;
     setState(() {
+      _editadas.add(_gondolaAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
       if (restantes.isEmpty) {
         _caixas.remove(_gondolaAtual);
@@ -1506,9 +2121,15 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   Future<void> _salvarLayout() async {
+    if (_salvando) return;
+    if (!_dbConectado) {
+      await TursoService().init();
+      if (!mounted) return;
+      _dbConectado = TursoService().isConnected;
+    }
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Configure o banco em ⚙️ para salvar no Turso'),
+        content: Text('Gravação não confirmada. Confira a conexão e a configuração do banco.'),
         backgroundColor: Color(0xFF1a3040),
         duration: Duration(seconds: 3),
       ));
@@ -1517,29 +2138,38 @@ class _GondolaPageState extends State<GondolaPage> {
 
     setState(() => _salvando = true);
 
-    final produtoMap = {for (final p in _produtos) p.codigo: p};
+    // Nome e cor vêm do catálogo quando ele já chegou; senão, do que a própria
+    // linha já tinha no banco. Essa segunda fonte importa porque o catálogo
+    // agora carrega depois da cena: salvar dentro dessa janela sem ela gravaria
+    // o código no lugar do nome e cinza no lugar da cor.
     final itens = _caixasAtuais.map((c) {
-      final produto = produtoMap[c.produtoId];
+      final produto = _produtoPorCodigo[c.produtoId];
       return CaixaLayout(
         gondolaNum:    _gondolaAtual,
         andar:         c.andar,
         produtoCodigo: c.produtoId,
-        produtoNome:   produto?.nome ?? c.produtoId,
+        produtoNome:   produto?.nome ?? _nomesDoLayout[c.produtoId] ?? c.produtoId,
         posX:          c.x,
         posZ:          c.z,
-        corHex:        produto?.corHex ?? '#888888',
+        corHex:        produto?.corHex ?? _hexDoLayout[c.produtoId] ?? '#888888',
       );
     }).toList();
 
-    // Produtos que estavam no layout persistido e saíram nesta edição: os
+    // Produtos que estavam no layout PERSISTIDO e saíram nesta edição: os
     // endereços ZERADOS deles nesta gôndola são apagados junto (quantidades
     // > 0 são estoque contado e só somem pela lixeira do dialog).
-    final antes = (await TursoService().fetchLayout(_gondolaAtual))
-        .map((c) => c.produtoCodigo)
-        .toSet();
+    //
+    // Tem de ser o layout persistido, não `_caixasAtuais`: este último é a
+    // edição em curso, e comparado consigo mesmo nunca acusaria remoção
+    // nenhuma. O cache do serviço guarda exatamente as linhas persistidas, daí
+    // dar para pular a releitura quando ele está quente.
+    final persistido = TursoService().layoutEmCache(_gondolaAtual) ??
+        await TursoService().fetchLayout(_gondolaAtual);
+    final antes = persistido.map((c) => c.produtoCodigo).toSet();
 
     final ok = await TursoService().salvarLayout(_gondolaAtual, itens);
     if (ok) {
+      _editadas.remove(_gondolaAtual);
       final depois = itens.map((i) => i.produtoCodigo).toSet();
       for (final codigo in antes.difference(depois)) {
         await EstoqueLocalizadoService().deleteEnderecosZerados(
@@ -1553,7 +2183,7 @@ class _GondolaPageState extends State<GondolaPage> {
     setState(() => _salvando = false);
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok ? 'Layout salvo ✓' : 'Erro ao salvar'),
+      content: Text(ok ? 'Layout salvo ✓' : 'Gravação não confirmada. Verifique a conexão e tente salvar novamente.'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: const Duration(seconds: 2),
     ));
@@ -1566,19 +2196,24 @@ class _GondolaPageState extends State<GondolaPage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
-    if (ok) {
-      // Descarta os layouts em memória e recarrega tudo do banco recém-
-      // sincronizado (edições não salvas são substituídas).
-      _caixas.clear();
-      _inicializar();
-    }
+    // A recarga pós-sync NÃO é feita aqui: sincronizar() incrementa
+    // dataRevision, e o listener _aoAtualizarDados já descarta os layouts em
+    // memória e recarrega tudo (edições não salvas são substituídas). Chamar
+    // _inicializar também, como antes, fazia cada consulta rodar duas vezes.
   }
 
   Future<void> _buscarProduto(Produto produto) async {
@@ -1609,10 +2244,18 @@ class _GondolaPageState extends State<GondolaPage> {
             List.generate(nivProduto, (i) => 'Nível ${i + 1}');
         final colNomes   =
             List.generate(maxColunas, (i) => 'Col. ${i + 1}');
-        final locEstante =
-            '📦 ${produto.nome}\n'
-            'Estante ${naEstante.estanteNum} · ${colNomes[naEstante.coluna.clamp(0, maxColunas - 1)]} · '
-            '${nivelNomes[naEstante.nivel.clamp(0, nivProduto - 1)]} · Slot ${naEstante.slot + 1}';
+        final col = naEstante.coluna.clamp(0, maxColunas - 1);
+        final niv = naEstante.nivel.clamp(0, nivProduto - 1);
+        // No palete o endereço é uma posição só (1–15) e o slot é sempre 0, então
+        // decompor em Col./Nível/Slot não diria nada ao usuário: ele procura pela
+        // etiqueta no chão.
+        final locEstante = ehPalete(naEstante.estanteNum)
+            ? '📦 ${produto.nome}\n'
+                'Palete ${naEstante.estanteNum} · posição '
+                '${letraEstanteCelula(naEstante.estanteNum, col, niv)}'
+            : '📦 ${produto.nome}\n'
+                'Estante ${naEstante.estanteNum} · ${colNomes[col]} · '
+                '${nivelNomes[niv]} · Slot ${naEstante.slot + 1}';
         setState(() => _resultadoBusca = locEstante);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(locEstante.replaceAll('\n', ' — ')),
@@ -1649,19 +2292,23 @@ class _GondolaPageState extends State<GondolaPage> {
     final andar     = encontrado.andar.clamp(0, 2);
     final andarNome = ['Base', 'Meio', 'Topo'][andar];
     final face      = faceFromPos(encontrado.posX, encontrado.posZ);
-    final caixasNovas = layouts.map(_caixaDoLayout).toList();
-    CaixaColocada? caixaEncontrada;
-    for (final c in caixasNovas) {
-      if (c.produtoId == produto.codigo &&
-          c.andar == andar &&
-          faceFromPos(c.x, c.z) == face) {
-        caixaEncontrada = c;
-        break;
-      }
-    }
     setState(() {
-      _caixas[encontrado.gondolaNum] = caixasNovas;
-      _carregandoLayout = false;
+      // Via _aplicarLayout para as cores/nomes da linha entrarem junto — sem
+      // isso, saltar direto da busca para outra gôndola deixaria a cena com o
+      // mapa de cores da anterior.
+      _aplicarLayout(encontrado.gondolaNum, layouts);
+      // A caixa destacada tem de ser a MESMA instância que foi para _caixas:
+      // CaixaColocada não sobrescreve ==, e _produtoNoEnderecoSelecionado
+      // confere a seleção com `_caixasAtuais.contains(...)`.
+      CaixaColocada? caixaEncontrada;
+      for (final c in _caixas[encontrado.gondolaNum] ?? const <CaixaColocada>[]) {
+        if (c.produtoId == produto.codigo &&
+            c.andar == andar &&
+            faceFromPos(c.x, c.z) == face) {
+          caixaEncontrada = c;
+          break;
+        }
+      }
       _destacadoCodigo  = produto.codigo;
       _faceSelecionada  = face;
       _andarSelecionado = andar;
@@ -1706,12 +2353,14 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   Future<void> _abrirConfiguracoes() async {
+    if (_salvando) return;
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
     );
     // Reset after possible credential change
     setState(() {
+      _editadas.clear();
       _caixas.clear();
       _produtoSelecionadoId = null;
       _produtoChip          = null;
@@ -2066,10 +2715,17 @@ class _GondolaPageState extends State<GondolaPage> {
               _sugestoes1           = [];
               _ctrl1.clear();
             }),
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl1.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
+
+  /// True quando não há sugestão a mostrar só porque o catálogo ainda não
+  /// chegou — e não porque a busca realmente não deu resultado.
+  bool _catalogoAindaChegando(String texto) =>
+      _carregandoProdutos && _dbConectado && texto.length >= 2;
 
   // ── Conteúdo Expander 2 ────────────────────────────────────────────────────
 
@@ -2091,7 +2747,9 @@ class _GondolaPageState extends State<GondolaPage> {
               _ctrl2.clear();
               _buscarProduto(p);
             },
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl2.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
@@ -2143,6 +2801,40 @@ class _CampoAutocomplete extends StatelessWidget {
 }
 
 // ── Lista de sugestões ────────────────────────────────────────────────────────
+
+/// Aviso no lugar da lista de sugestões enquanto o catálogo ainda está sendo
+/// carregado.
+///
+/// O catálogo passou a chegar DEPOIS da cena (a cena não depende dele para
+/// pintar). Nessa janela, quem digitasse no autocomplete veria uma lista vazia
+/// — indistinguível de "produto não existe". Isto diz que é só esperar.
+class _AvisoCatalogoCarregando extends StatelessWidget {
+  const _AvisoCatalogoCarregando();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161b22),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF2a3441)),
+      ),
+      child: Row(children: [
+        const SizedBox(
+          width: 12,
+          height: 12,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Color(0xFF8a9aa8)),
+        ),
+        const SizedBox(width: 10),
+        const Text('Carregando catálogo...',
+            style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 12)),
+      ]),
+    );
+  }
+}
 
 class _SugestoesList extends StatelessWidget {
   final List<Produto>            sugestoes;
@@ -2476,6 +3168,7 @@ class _EstantePageState extends State<EstantePage> {
   int? _nivelSelecionado;
   int? _slotSelecionado;
 
+  final Set<int> _editadas = {};
   final Map<int, List<CaixaColocadaEstante>> _caixas = {};
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
@@ -2511,14 +3204,31 @@ class _EstantePageState extends State<EstantePage> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  List<Produto> get _catalogoAtual =>
-      _produtos.isNotEmpty ? _produtos : _catalogoMock;
+  // Ver a nota do gêmeo em _GondolaPageState: com banco conectado o catálogo
+  // chega depois da cena, e o mock nessa janela pintaria códigos falsos.
+  List<Produto> get _catalogoAtual => _produtos.isNotEmpty
+      ? _produtos
+      : (_dbConectado ? const <Produto>[] : _catalogoMock);
 
   List<CaixaColocadaEstante> get _caixasAtuais =>
       _caixas[_estanteAtual] ?? const [];
 
-  Map<String, Color> get _corPorProduto =>
-      {for (final p in _catalogoAtual) p.codigo: p.cor};
+  // Cor e nome vindos das próprias linhas de estante_layout — ver o gêmeo em
+  // _GondolaPageState.
+  Map<String, String> _hexDoLayout   = const {};
+  Map<String, String> _nomesDoLayout = const {};
+
+  Map<String, Color>   _corPorProduto    = const {};
+  Map<String, Produto> _produtoPorCodigo = const {};
+
+  void _recomputarCatalogoDerivado() {
+    final catalogo = _catalogoAtual;
+    _corPorProduto = mesclarCores(
+      {for (final e in _hexDoLayout.entries) e.key: corDeHex(e.value)},
+      catalogo,
+    );
+    _produtoPorCodigo = {for (final p in catalogo) p.codigo: p};
+  }
 
   List<Produto> _filtrarProdutos(String query) {
     if (query.length < 2) return [];
@@ -2558,36 +3268,49 @@ class _EstantePageState extends State<EstantePage> {
       _dbConectado        = false;
     });
 
+    unawaited(_carregarLayout(_estanteAtual));
+    unawaited(_carregarCatalogo());
     await TursoService().init();
     if (!mounted) return;
 
     final conectado = TursoService().isConnected;
     setState(() => _dbConectado = conectado);
 
-    if (conectado) {
-      final layoutFuture = _carregarLayout(_estanteAtual);
-      final desatualizadosFuture = _carregarDesatualizados();
-      final produtos = await TursoService().fetchProdutos();
-      if (!mounted) return;
+    if (!conectado) {
       setState(() {
-        _produtos           = produtos;
         _carregandoProdutos = false;
+        _recomputarCatalogoDerivado();
       });
-      await Future.wait([layoutFuture, desatualizadosFuture]);
-    } else {
-      setState(() {
-        _produtos           = [];
-        _carregandoProdutos = false;
-      });
+      return;
     }
+
+    // Só o layout é esperado — ver a nota do gêmeo em _GondolaPageState.
+    await _carregarLayout(_estanteAtual);
+    unawaited(_carregarDesatualizados());
+    unawaited(_carregarCatalogo());
+  }
+
+  Future<void> _carregarCatalogo() async {
+    final produtos = await TursoService().fetchProdutos();
+    if (!mounted) return;
+    setState(() {
+      _produtos           = produtos;
+      _carregandoProdutos = false;
+      _recomputarCatalogoDerivado();
+      if (_ctrl1.text.length >= 2) _sugestoes1 = _filtrarProdutos(_ctrl1.text);
+      if (_ctrl2.text.length >= 2) _sugestoes2 = _filtrarProdutos(_ctrl2.text);
+    });
   }
 
   // Recarrega a cena quando uma sincronização (carga inicial em segundo plano
-  // ou botão Sincronizar) traz dados novos, sem travar a abertura.
+  // ou botão Sincronizar) traz dados novos, sem travar a abertura. É o ÚNICO
+  // caminho de recarga pós-sync — ver a nota do gêmeo em _GondolaPageState.
   void _aoAtualizarDados() {
     if (!mounted) return;
+    _caixas.removeWhere((k, _) => k != _estanteAtual && !_editadas.contains(k));
     _carregarLayout(_estanteAtual);
-    _carregarDesatualizados(forceRefresh: true);
+    unawaited(_carregarDesatualizados(forceRefresh: true));
+    unawaited(_carregarCatalogo());
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -2612,6 +3335,7 @@ class _EstantePageState extends State<EstantePage> {
   int get _idxNavegacao => ordemNavegacaoEstantes.indexOf(_estanteAtual);
 
   void _trocarEstante(int delta) {
+    if (_salvando) return;
     final idx  = _idxNavegacao;
     final nova = idx == -1
         ? ordemNavegacaoEstantes.first
@@ -2621,29 +3345,51 @@ class _EstantePageState extends State<EstantePage> {
       _estanteAtual     = nova;
       // Com layout em cache, mostra na hora e atualiza em silêncio por trás;
       // a barra de progresso só aparece na primeira visita à estante.
-      _carregandoLayout = _dbConectado && !_caixas.containsKey(nova);
+      final semeou = _semearDoCache(nova);
+      _carregandoLayout =
+          !semeou && _dbConectado && !_caixas.containsKey(nova);
       // Células mudam de geometria entre estantes: seleção antiga não vale.
       _colunaSelecionada = null;
       _nivelSelecionado  = null;
       _slotSelecionado   = null;
     });
-    if (_dbConectado) _carregarLayout(nova);
+    _carregarLayout(nova);
+  }
+
+  /// Preenche a estante a partir do cache do serviço, se ela já tiver sido
+  /// lida. Ver o gêmeo em _GondolaPageState. Chamar de dentro de setState.
+  bool _semearDoCache(int estanteNum) {
+    if (_editadas.contains(estanteNum)) return true;
+    final cache = TursoService().layoutEstanteEmCache(estanteNum);
+    if (cache == null) return false;
+    _aplicarLayout(estanteNum, cache);
+    return true;
+  }
+
+  /// Aplica as linhas do banco à cena, junto com as cores e nomes que vêm
+  /// nelas. Chamar de dentro de setState.
+  void _aplicarLayout(int estanteNum, List<CaixaLayoutEstante> layouts) {
+    if (_editadas.contains(estanteNum)) return;
+    _caixas[estanteNum] = layouts
+        .map((l) => CaixaColocadaEstante(
+              coluna:    l.coluna,
+              nivel:     l.nivel,
+              slot:      l.slot,
+              produtoId: l.produtoCodigo,
+            ))
+        .toList();
+    if (estanteNum == _estanteAtual) {
+      _hexDoLayout   = {for (final l in layouts) l.produtoCodigo: l.corHex};
+      _nomesDoLayout = {for (final l in layouts) l.produtoCodigo: l.produtoNome};
+      _recomputarCatalogoDerivado();
+      _carregandoLayout = false;
+    }
   }
 
   Future<void> _carregarLayout(int estanteNum) async {
     final layouts = await TursoService().fetchLayoutEstante(estanteNum);
-    if (!mounted) return;
-    setState(() {
-      _caixas[estanteNum] = layouts
-          .map((l) => CaixaColocadaEstante(
-                coluna:    l.coluna,
-                nivel:     l.nivel,
-                slot:      l.slot,
-                produtoId: l.produtoCodigo,
-              ))
-          .toList();
-      if (_estanteAtual == estanteNum) _carregandoLayout = false;
-    });
+    if (!mounted || _salvando || _editadas.contains(estanteNum)) return;
+    setState(() => _aplicarLayout(estanteNum, layouts));
   }
 
   ({int maxSlots, double xMin, double wCaixa, double gap}) _geometriaCelula(
@@ -2696,6 +3442,20 @@ class _EstantePageState extends State<EstantePage> {
         maxSlots: 1,
         xMin:     celula.xCenter - ExpositorMonitorGeometry.wCaixa / 2,
         wCaixa:   ExpositorMonitorGeometry.wCaixa,
+        gap:      0.0,
+      );
+    }
+    // Palete: uma caixa por posição, slot sempre 0. Precisa de entrada própria
+    // aqui (como cada uma das outras geometrias) porque o fallback lá embaixo
+    // usa EstanteGeometry, que tem 3 colunas fixas e estouraria no firstWhere
+    // nas colunas 3 e 4 do palete.
+    if (ehPalete(_estanteAtual)) {
+      final celula = PaleteGeometry.celulas()
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      return (
+        maxSlots: 1,
+        xMin:     celula.xCenter - PaleteGeometry.wCaixa / 2,
+        wCaixa:   PaleteGeometry.wCaixa,
         gap:      0.0,
       );
     }
@@ -2768,20 +3528,24 @@ class _EstantePageState extends State<EstantePage> {
         c.slot   == _slotSelecionado);
     if (matches.isEmpty) return null;
     final caixa = matches.first;
-    final produtos = _catalogoAtual.where((p) => p.codigo == caixa.produtoId);
-    if (produtos.isNotEmpty) return produtos.first;
-    // Produto fora do catálogo carregado: mostra ao menos o código.
+    final doCatalogo = _produtoPorCodigo[caixa.produtoId];
+    if (doCatalogo != null) return doCatalogo;
+    // Produto fora do catálogo carregado (ou catálogo ainda a caminho): usa o
+    // nome e a cor que vieram na própria linha do layout.
     return Produto(
       codigo:    caixa.produtoId,
-      nome:      caixa.produtoId,
+      nome:      _nomesDoLayout[caixa.produtoId] ?? caixa.produtoId,
       categoria: '',
-      corHex:    '#888888',
+      corHex:    _hexDoLayout[caixa.produtoId] ?? '#888888',
     );
   }
 
   String get _enderecoSelecionadoTexto {
     final letra = letraEstanteCelula(
         _estanteAtual, _colunaSelecionada!, _nivelSelecionado!);
+    // No palete o prefixo é P (não E) e não há slot a mostrar — uma caixa por
+    // posição —, então o chip fica só 'P102 · 7', igual à etiqueta no chão.
+    if (ehPalete(_estanteAtual)) return 'P$_estanteAtual · $letra';
     // Na parede o chip mostra também a posição global P1–P12 (derivada),
     // ex.: 'E15 · AH · Slot 2 (P6)'.
     final sufixoParede = ehEstanteParede(_estanteAtual)
@@ -2799,9 +3563,9 @@ class _EstantePageState extends State<EstantePage> {
     required int faceOuColuna,
     required int andarOuNivel,
   }) async {
-    final produto = _catalogoAtual.where((p) => p.codigo == produtoCodigo);
-    final produtoNome =
-        produto.isNotEmpty ? produto.first.nome : produtoCodigo;
+    final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
+        _nomesDoLayout[produtoCodigo] ??
+        produtoCodigo;
     await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
@@ -2817,7 +3581,7 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   void _onTapCelula(int coluna, int nivel, double hx) {
-    if (_produtoSelecionadoId == null) return;
+    if (_salvando || _produtoSelecionadoId == null) return;
 
     final geo = _geometriaCelula(coluna, nivel);
     final maxSlots = geo.maxSlots;
@@ -2854,6 +3618,7 @@ class _EstantePageState extends State<EstantePage> {
     }
 
     setState(() {
+      _editadas.add(_estanteAtual);
       _caixas[_estanteAtual] = [
         ..._caixasAtuais,
         CaixaColocadaEstante(
@@ -2869,10 +3634,16 @@ class _EstantePageState extends State<EstantePage> {
     });
   }
 
-  void _limparEstante() => setState(() => _caixas.remove(_estanteAtual));
+  void _limparEstante() => setState(() {
+    if (_salvando) return;
+    _editadas.add(_estanteAtual);
+    _caixas.remove(_estanteAtual);
+  });
 
   void _limparEstantePorProduto(String produtoId) {
+    if (_salvando) return;
     setState(() {
+      _editadas.add(_estanteAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
       if (restantes.isEmpty) {
         _caixas.remove(_estanteAtual);
@@ -2957,9 +3728,15 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   Future<void> _salvarLayout() async {
+    if (_salvando) return;
+    if (!_dbConectado) {
+      await TursoService().init();
+      if (!mounted) return;
+      _dbConectado = TursoService().isConnected;
+    }
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Configure o banco em ⚙️ para salvar no Turso'),
+        content: Text('Gravação não confirmada. Confira a conexão e a configuração do banco.'),
         backgroundColor: Color(0xFF1a3040),
         duration: Duration(seconds: 3),
       ));
@@ -2968,29 +3745,33 @@ class _EstantePageState extends State<EstantePage> {
 
     setState(() => _salvando = true);
 
-    final produtoMap = {for (final p in _produtos) p.codigo: p};
+    // Nome e cor do catálogo quando já chegou; senão, do que a linha já tinha.
+    // Ver a nota do gêmeo em _GondolaPageState._salvarLayout.
     final itens = _caixasAtuais.map((c) {
-      final produto = produtoMap[c.produtoId];
+      final produto = _produtoPorCodigo[c.produtoId];
       return CaixaLayoutEstante(
         estanteNum:    _estanteAtual,
         coluna:        c.coluna,
         nivel:         c.nivel,
         slot:          c.slot,
         produtoCodigo: c.produtoId,
-        produtoNome:   produto?.nome ?? c.produtoId,
-        corHex:        produto?.corHex ?? '#888888',
+        produtoNome:   produto?.nome ?? _nomesDoLayout[c.produtoId] ?? c.produtoId,
+        corHex:        produto?.corHex ?? _hexDoLayout[c.produtoId] ?? '#888888',
       );
     }).toList();
 
-    // Produtos que estavam no layout persistido e saíram nesta edição: os
+    // Produtos que estavam no layout PERSISTIDO e saíram nesta edição: os
     // endereços ZERADOS deles nesta estante são apagados junto (quantidades
-    // > 0 são estoque contado e só somem pela lixeira do dialog).
-    final antes = (await TursoService().fetchLayoutEstante(_estanteAtual))
-        .map((c) => c.produtoCodigo)
-        .toSet();
+    // > 0 são estoque contado e só somem pela lixeira do dialog). Tem de ser o
+    // persistido, não `_caixasAtuais` — ver a nota do gêmeo em
+    // _GondolaPageState._salvarLayout.
+    final persistido = TursoService().layoutEstanteEmCache(_estanteAtual) ??
+        await TursoService().fetchLayoutEstante(_estanteAtual);
+    final antes = persistido.map((c) => c.produtoCodigo).toSet();
 
     final ok = await TursoService().salvarLayoutEstante(_estanteAtual, itens);
     if (ok) {
+      _editadas.remove(_estanteAtual);
       final depois = itens.map((i) => i.produtoCodigo).toSet();
       for (final codigo in antes.difference(depois)) {
         await EstoqueLocalizadoService().deleteEnderecosZerados(
@@ -3004,7 +3785,7 @@ class _EstantePageState extends State<EstantePage> {
     setState(() => _salvando = false);
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok ? 'Layout salvo ✓' : 'Erro ao salvar'),
+      content: Text(ok ? 'Layout salvo ✓' : 'Gravação não confirmada. Verifique a conexão e tente salvar novamente.'),
       backgroundColor:
           ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
       duration: const Duration(seconds: 2),
@@ -3018,19 +3799,23 @@ class _EstantePageState extends State<EstantePage> {
     if (!mounted) return;
     setState(() => _sincronizando = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      // O aviso só aparece quando o sync deu certo depois de reconstruir a
+      // replica local divergente: o usuário precisa saber que o cache foi
+      // refeito do zero, senão some gravação sem explicação.
       content: Text(ok
-          ? 'Sincronizado com o banco online ✓'
+          ? (TursoService().ultimoAvisoSync ??
+              resumoDoSync(
+              modoLocal: TursoService().modoLocal,
+              enviadas:  TursoService().enviadasNoUltimoSync))
           : 'Não foi possível sincronizar — '
               '${TursoService().ultimoErroSync ?? 'verifique a conexão'}'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
-      duration: Duration(seconds: ok ? 2 : 6),
+      duration: Duration(
+          seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
-    if (ok) {
-      // Descarta os layouts em memória e recarrega tudo do banco recém-
-      // sincronizado (edições não salvas são substituídas).
-      _caixas.clear();
-      _inicializar();
-    }
+    // A recarga pós-sync é feita só pelo listener _aoAtualizarDados (disparado
+    // pelo dataRevision que sincronizar() incrementa) — ver a nota do gêmeo em
+    // _GondolaPageState._sincronizar.
   }
 
   Future<void> _buscarProduto(Produto produto) async {
@@ -3092,15 +3877,10 @@ class _EstantePageState extends State<EstantePage> {
 
     _highlightTimer?.cancel();
     setState(() {
-      _caixas[encontrado.estanteNum] = layouts
-          .map((l) => CaixaColocadaEstante(
-                coluna:    l.coluna,
-                nivel:     l.nivel,
-                slot:      l.slot,
-                produtoId: l.produtoCodigo,
-              ))
-          .toList();
-      _carregandoLayout  = false;
+      // Via _aplicarLayout para as cores/nomes da linha entrarem junto — sem
+      // isso, saltar da busca para outra estante deixaria a cena com o mapa de
+      // cores da anterior.
+      _aplicarLayout(encontrado.estanteNum, layouts);
       _destacadoCodigo   = produto.codigo;
       _colunaSelecionada = encontrado.coluna
           .clamp(0, numColunasPara(encontrado.estanteNum) - 1);
@@ -3155,11 +3935,13 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   Future<void> _abrirConfiguracoes() async {
+    if (_salvando) return;
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
     );
     setState(() {
+      _editadas.clear();
       _caixas.clear();
       _produtoSelecionadoId = null;
       _produtoChip          = null;
@@ -3407,6 +4189,20 @@ class _EstantePageState extends State<EstantePage> {
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:    _destacadosCodigos,
                       )
+                : ehPalete(_estanteAtual)
+                    ? PaleteScene(
+                        estanteAtual:         _estanteAtual,
+                        caixas:               _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:        _corPorProduto,
+                        onTapCelula:          _onTapCelula,
+                        onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                        destacadoCodigo:      _destacadoCodigo,
+                        desatualizados:       _desatualizados,
+                        divergentes:          _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
+                        destacadosCodigos:    _destacadosCodigos,
+                      )
                 : EstanteScene(
                     estanteAtual:         _estanteAtual,
                     caixas:               _caixasAtuais,
@@ -3580,10 +4376,17 @@ class _EstantePageState extends State<EstantePage> {
               _sugestoes1           = [];
               _ctrl1.clear();
             }),
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl1.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
+
+  /// True quando não há sugestão a mostrar só porque o catálogo ainda não
+  /// chegou — e não porque a busca realmente não deu resultado.
+  bool _catalogoAindaChegando(String texto) =>
+      _carregandoProdutos && _dbConectado && texto.length >= 2;
 
   // ── Conteúdo Expander 2 ────────────────────────────────────────────────────
 
@@ -3605,7 +4408,9 @@ class _EstantePageState extends State<EstantePage> {
               _ctrl2.clear();
               _buscarProduto(p);
             },
-          ),
+          )
+        else if (_catalogoAindaChegando(_ctrl2.text))
+          const _AvisoCatalogoCarregando(),
       ],
     );
   }
@@ -3624,6 +4429,16 @@ class _EstanteSelector extends StatelessWidget {
     required this.onNext,
   });
 
+  // O palete não tem geometria própria no mapa, então o apelido é a única
+  // pista de QUAL palete da loja é este — vai no subtítulo. O rótulo "PALETE"
+  // já está no título, então aqui entra só o apelido; sem apelido, fica a
+  // contagem pura em vez de mostrar um separador solto.
+  static String _subtituloPalete(int num) {
+    final apelido = PaleteRegistry().byNum(num)?.apelido ?? '';
+    final base    = 'de ${ordemNavegacaoEstantes.length}';
+    return apelido.isEmpty ? base : '$base · $apelido';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -3635,9 +4450,11 @@ class _EstanteSelector extends StatelessWidget {
           _ArrowBtn(icon: Icons.chevron_left,  onTap: onPrev),
           const SizedBox(width: 24),
           Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text(
-              'ESTANTE',
-              style: TextStyle(
+            // O carrossel mistura estantes e paletes: o título acompanha o que
+            // está na tela, senão um palete aparece rotulado como "ESTANTE".
+            Text(
+              ehPalete(estanteAtual) ? 'PALETE' : 'ESTANTE',
+              style: const TextStyle(
                 color: Color(0xFF8a9aa8),
                 fontSize: 10,
                 letterSpacing: 2.0,
@@ -3660,7 +4477,9 @@ class _EstanteSelector extends StatelessWidget {
                       'P${posicaoGlobalParede(estanteAtual, colunasParede - 1)}'
                   : estanteAtual == estanteEdr300TriplaNum
                       ? 'de ${ordemNavegacaoEstantes.length} · 3× EDR-300'
-                      : 'de ${ordemNavegacaoEstantes.length}',
+                      : ehPalete(estanteAtual)
+                          ? _subtituloPalete(estanteAtual)
+                          : 'de ${ordemNavegacaoEstantes.length}',
               style: const TextStyle(
                 color: Color(0xFF5a6a78),
                 fontSize: 10,

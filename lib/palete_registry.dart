@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'models.dart';
 import 'turso_service.dart';
+import 'outbox.dart';
+import 'replica_coordinator.dart';
 
 /// Palete de madeira do piso, cadastrado em RUNTIME na tabela `paletes` —
 /// diferente das estantes e expositores, que são const em tempo de
@@ -128,11 +130,21 @@ class PaleteRegistry {
   /// estantes 3 e 4, ver estantesRemovidas). A garantia só se sustenta se as
   /// linhas desativadas PERMANECEREM na tabela — um DELETE FROM paletes
   /// quebra a não-reciclagem.
-  Future<int?> criar({
-    String apelido = '',
-    required double posX,
-    required double posZ,
-    double rotacao = 0,
+  /// posX/posZ/rotacao ficam em 0 por padrão: o palete não é desenhado no mapa
+  /// da loja (como a estante 5, ele só existe no carrossel de detalhes), então
+  /// não há posição a informar. Os parâmetros continuam aqui para o dia em que
+  /// o palete ganhar geometria no mapa — aí é só passar os valores, sem mudar
+  /// a assinatura nem a tabela.
+  Future<int?> criar({String apelido = '', double posX = 0,
+      double posZ = 0, double rotacao = 0}) async {
+    if (modoMemoria) return _criar(apelido: apelido, posX: posX, posZ: posZ, rotacao: rotacao);
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _criar(apelido: apelido, posX: posX, posZ: posZ, rotacao: rotacao)); }
+    on ReplicaNaoProntaParaEscrita { return null; }
+  }
+
+  Future<int?> _criar({
+    String apelido = '', double posX = 0, double posZ = 0, double rotacao = 0,
   }) async {
     if (modoMemoria) {
       final num = _maxNumEmMemoria() + 1;
@@ -155,22 +167,60 @@ class PaleteRegistry {
           (rows.first as Map<String, dynamic>)['proximo'] as int? ?? 0;
       if (num < paleteNumMin) return null;
 
-      final stmtIns = await client.prepare(
-        'INSERT INTO paletes '
-        '(num, apelido, pos_x, pos_z, rotacao, colunas, fileiras, ativo, criado_em) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)',
-      );
-      await stmtIns.query(positional: [
-        num,
-        apelido,
-        posX,
-        posZ,
-        rotacao,
-        colunasPalete,
-        fileirasPalete,
-        DateTime.now().toIso8601String(),
-      ]);
+      // Transação (antes eram statements soltos) para o carimbo do UUID entrar
+      // junto com o INSERT: reconhecimento que viaje sem a mutação não
+      // reconhece nada.
+      final tx = await client.transaction();
+      MutacaoOutbox? mutacao;
+      try {
+        await tx.execute(
+          'INSERT INTO paletes '
+          '(num, apelido, pos_x, pos_z, rotacao, colunas, fileiras, ativo, criado_em) '
+          'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)',
+          positional: [
+            num,
+            apelido,
+            posX,
+            posZ,
+            rotacao,
+            colunasPalete,
+            fileirasPalete,
+            DateTime.now().toIso8601String(),
+          ],
+        );
+        // `num` foi decidido AQUI e entra na chave. Se a réplica for
+        // reconstruída e o remoto já tiver outro palete com este número, a
+        // comparação acusa conflito em vez de sobrescrever — que é o certo.
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'palete.criar',
+          tabela:   'paletes',
+          chave:    {'num': num},
+          estadoAnterior: null,
+          estadoFinal: {
+            'apelido': apelido,
+            'pos_x':   posX,
+            'pos_z':   posZ,
+            'rotacao': rotacao,
+            'ativo':   1,
+          },
+          // Colunas NOT NULL que não entram na comparação. Sem elas, recriar
+          // o palete no remoto morreria no INSERT.
+          extrasParaInsercao: {
+            'colunas':   colunasPalete,
+            'fileiras':  fileirasPalete,
+            'criado_em': DateTime.now().toIso8601String(),
+          },
+          posicao: num,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
+        await tx.commit();
+      } catch (e) {
+        await tx.rollback();
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
+        rethrow;
+      }
       await carregar();
+      await TursoService().marcarGravacaoLocal();
       return num;
     } catch (_) {
       return null;
@@ -182,6 +232,13 @@ class PaleteRegistry {
 
   /// Atualiza apelido/posição/rotação (e demais campos) do palete.
   Future<bool> atualizar(Palete p) async {
+    if (modoMemoria) return _atualizar(p);
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _atualizar(p)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _atualizar(Palete p) async {
     if (modoMemoria) {
       substituirEmMemoria(
           [for (final q in _paletes) q.num == p.num ? p : q]);
@@ -189,21 +246,64 @@ class PaleteRegistry {
     }
     if (!await TursoService().garantirConexao()) return false;
     try {
-      final stmt = await TursoService().client!.prepare(
-        'UPDATE paletes SET apelido = ?, pos_x = ?, pos_z = ?, rotacao = ?, '
-        'colunas = ?, fileiras = ?, ativo = ? WHERE num = ?',
-      );
-      await stmt.query(positional: [
-        p.apelido,
-        p.posX,
-        p.posZ,
-        p.rotacao,
-        p.colunas,
-        p.fileiras,
-        p.ativo ? 1 : 0,
-        p.num,
-      ]);
+      final tx = await TursoService().client!.transaction();
+      MutacaoOutbox? mutacao;
+      try {
+        final antes = await tx.query(
+          'SELECT apelido, pos_x, pos_z, rotacao, ativo FROM paletes '
+          'WHERE num = ? LIMIT 1',
+          positional: [p.num],
+        );
+        await tx.execute(
+          'UPDATE paletes SET apelido = ?, pos_x = ?, pos_z = ?, rotacao = ?, '
+          'colunas = ?, fileiras = ?, ativo = ? WHERE num = ?',
+          positional: [
+            p.apelido,
+            p.posX,
+            p.posZ,
+            p.rotacao,
+            p.colunas,
+            p.fileiras,
+            p.ativo ? 1 : 0,
+            p.num,
+          ],
+        );
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'palete.atualizar',
+          tabela:   'paletes',
+          chave:    {'num': p.num},
+          estadoAnterior: antes.isEmpty
+              ? null
+              : {
+                  'apelido': antes.first['apelido'],
+                  'pos_x':   antes.first['pos_x'],
+                  'pos_z':   antes.first['pos_z'],
+                  'rotacao': antes.first['rotacao'],
+                  'ativo':   antes.first['ativo'],
+                },
+          estadoFinal: {
+            'apelido': p.apelido,
+            'pos_x':   p.posX,
+            'pos_z':   p.posZ,
+            'rotacao': p.rotacao,
+            'ativo':   p.ativo ? 1 : 0,
+          },
+          extrasParaInsercao: {
+            'colunas':   p.colunas,
+            'fileiras':  p.fileiras,
+            'criado_em': DateTime.now().toIso8601String(),
+          },
+          posicao: p.num,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
+        await tx.commit();
+      } catch (e) {
+        await tx.rollback();
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
+        rethrow;
+      }
       await carregar();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;
@@ -216,6 +316,13 @@ class PaleteRegistry {
   /// do palete em estoque_localizado continuam no banco, como nos removidos
   /// da parede — o produto deve ser recadastrado em outro endereço.
   Future<bool> desativar(int num) async {
+    if (modoMemoria) return _desativar(num);
+    try { return await TursoService().garantirReplicaProntaParaEscrita(
+        () => _desativar(num)); }
+    on ReplicaNaoProntaParaEscrita { return false; }
+  }
+
+  Future<bool> _desativar(int num) async {
     if (modoMemoria) {
       substituirEmMemoria([
         for (final q in _paletes) q.num == num ? q.copyWith(ativo: false) : q
@@ -224,11 +331,32 @@ class PaleteRegistry {
     }
     if (!await TursoService().garantirConexao()) return false;
     try {
-      final stmt = await TursoService().client!.prepare(
-        'UPDATE paletes SET ativo = 0 WHERE num = ?',
-      );
-      await stmt.query(positional: [num]);
+      final tx = await TursoService().client!.transaction();
+      MutacaoOutbox? mutacao;
+      try {
+        await tx.execute(
+          'UPDATE paletes SET ativo = 0 WHERE num = ?',
+          positional: [num],
+        );
+        // Desativar é idempotente e a chave é o próprio número, que nunca é
+        // reciclado (ver o comentário de desativar): reaplicável sozinho.
+        mutacao = await TursoService().abrirMutacao(
+          operacao: 'palete.desativar',
+          tabela:   'paletes',
+          chave:    {'num': num},
+          estadoAnterior: const {'ativo': 1},
+          estadoFinal:    const {'ativo': 0},
+          posicao: num,
+        );
+        await TursoService().carimbarMutacao(tx, mutacao);
+        await tx.commit();
+      } catch (e) {
+        await tx.rollback();
+        if (mutacao != null) await TursoService().abortarMutacao(mutacao);
+        rethrow;
+      }
       await carregar();
+      await TursoService().marcarGravacaoLocal();
       return true;
     } catch (_) {
       return false;

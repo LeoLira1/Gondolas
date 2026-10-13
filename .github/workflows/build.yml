@@ -5,8 +5,25 @@ on:
     branches:
       - main
       - "claude/gondola-3d-flutter-prototype-9637uw"
+      - "claude/dreamy-hopper-k1q8ac"
+      - "claude/warehouse-sold-pallets-count-3jub8j"
       - "claude/new-session-n5jyhk"
       - "claude/turso-direct-libsql-dart-vw93za"
+      - "claude/warehouse-search-highlight-all-wm1deu"
+      - "claude/pallet-product-quantity-ou6pq0"
+      - "claude/quantidade-sistema-discrepancia-bnuoum"
+      - "claude/rack-quantity-edit-61ezd7"
+      - "claude/local-cache-error-kuoiu8"
+      - "claude/galpao-segunda-parte-jd5mpt"
+      - "claude/gondola-1-counting-mode-qfm26n"
+      - "claude/auto-sync-inventory-count-bx9jdg"
+      - "claude/investigar-travamento-ambne8"
+      - "claude/product-sync-efficiency-x3udku"
+      - "claude/estantes-madeira-edr300-5a604x"
+      - "claude/barracao-camda-3d-scene-cd1b73"
+      - "claude/new-session-okic0g"
+      - "claude/workflow-failure-fix-a418bh"
+      - "claude/galpao-concrete-floor-texture-pxhp8w"
   workflow_dispatch:
 
 jobs:
@@ -66,6 +83,12 @@ jobs:
         # Gera os mipmaps do ícone do app (mapa.png na raiz, config no
         # pubspec.yaml) dentro do android/ recém-scaffoldado.
         run: dart run flutter_launcher_icons
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
 
       - name: Build APK release
         # TODO: configure um keystore fixo via secrets para evitar o erro

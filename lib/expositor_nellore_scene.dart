@@ -7,6 +7,7 @@ import 'gondola_scene.dart'
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, colunasNivelNellore,
          corConferenciaCiano, expositorNelloreNum, letraEstanteCelula;
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Expositor Nellore Isoflex/Avant — estrutura amarela com painel slatwall
@@ -673,15 +674,12 @@ class ExpositorNelloreScene extends StatefulWidget {
 }
 
 class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, SceneGestureGuard<ExpositorNelloreScene> {
   late Ticker _ticker;
   late Camera _camera;
 
   final _painterKey = GlobalKey();
-  Offset? _gestureOrigin;
   Camera? _cameraAtStart;
-  bool    _isDragging = false;
-  static const double _dragThreshold = 6.0;
 
   @override
   void initState() {
@@ -719,19 +717,22 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin = d.focalPoint;
+    beginGesture(d);
     _cameraAtStart = _camera;
-    _isDragging    = false;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtStart;
     if (origin == null || c0 == null) return;
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
     setState(() {
       _camera = c0.copyWith(
         rotY: c0.rotY - delta.dx * 0.008,
@@ -739,15 +740,6 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
         dist: (c0.dist / d.scale).clamp(1.2, 8.0),
       );
     });
-  }
-
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin = null;
-    _cameraAtStart = null;
-    _isDragging    = false;
   }
 
   void _tryFireTap(Offset globalTap) {
@@ -867,17 +859,21 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
       }
     }
 
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _painterKey,
-        painter: ExpositorNellorePainter(_camera, widget.geometry,
-            wireframe:  widget.wireframe,
-            showLabels: widget.showLabels,
-            extraFaces: extraFaces),
-        child:   const SizedBox.expand(),
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryFireTap(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _painterKey,
+          painter: ExpositorNellorePainter(_camera, widget.geometry,
+              wireframe:  widget.wireframe,
+              showLabels: widget.showLabels,
+              extraFaces: extraFaces),
+          child:   const SizedBox.expand(),
+        ),
       ),
     );
   }

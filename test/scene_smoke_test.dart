@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/gondola_scene.dart';
+import 'package:gondola_camda/balcao_scene.dart';
 import 'package:gondola_camda/estante_edr300_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
@@ -279,6 +280,30 @@ void main() {
     expect(letraEstanteCelula(18, 1, 0), '72');
   });
 
+  test('estante parede: 6 slots por número, cabendo na largura da coluna', () {
+    expect(EstanteParedeGeometry.maxSlots, 6);
+
+    const w   = EstanteParedeGeometry.maxSlots;
+    final wCx = EstanteParedeGeometry.wCaixa;
+    final gap = EstanteParedeGeometry.gap;
+    expect(wCx, greaterThan(0));
+    expect(gap, greaterThan(0));
+
+    for (final celula in EstanteParedeGeometry.celulas()) {
+      final x0Primeiro = EstanteParedeGeometry.xSlot0(celula);
+      final x1Ultimo   = x0Primeiro + (w - 1) * (wCx + gap) + wCx;
+      // As 6 caixas ficam dentro da posição, sem vazar para a vizinha.
+      expect(x0Primeiro, greaterThanOrEqualTo(celula.xMin));
+      expect(x1Ultimo,   lessThanOrEqualTo(celula.xMax));
+      // E sem se sobrepor: o x0 de cada slot começa depois do x1 do anterior.
+      for (var s = 1; s < w; s++) {
+        final x0Atual     = x0Primeiro + s * (wCx + gap);
+        final x1Anterior  = x0Primeiro + (s - 1) * (wCx + gap) + wCx;
+        expect(x0Atual, greaterThan(x1Anterior));
+      }
+    }
+  });
+
   test('estante parede: posição global P1–P12 derivada de seção + coluna', () {
     expect(posicaoGlobalParede(13, 0), 1);
     expect(posicaoGlobalParede(13, 1), 2);
@@ -352,6 +377,51 @@ void main() {
     );
     expect(itensLoja.any((it) => it.tipo == 'estante' && it.numero == 3), isFalse);
     expect(itensLoja.any((it) => it.tipo == 'estante' && it.numero == 4), isFalse);
+  });
+
+  test('balcão: perfil em T, dois recortes e mais baixo que as estantes', () {
+    final balcao = itensLoja.firstWhere((it) => it.numero == balcaoNum);
+    final faces = <Face>[];
+    balcaoLoja(faces, balcao.x, balcao.z, balcao.w, balcao.d, corBalcaoCorpo,
+        corTampo: corBalcaoTampo);
+
+    // Peça de duas cores: corpo verde e tampo de mármore marrom. É a única
+    // estrutura do mapa que não é chapada numa cor só.
+    expect(faces.map((f) => f.color).toSet(),
+        {corBalcaoCorpo, corBalcaoTampo});
+
+    // O comprimento corre em Z e o balcão ENCOSTA na parede da entrada: a ponta
+    // de z alto bate na face interna dela, sem fresta, e os 7,95 m correm dali
+    // para dentro da loja.
+    final xs = faces.expand((f) => f.verts).map((v) => v.x);
+    final ys = faces.expand((f) => f.verts).map((v) => v.y);
+    final zs = faces.expand((f) => f.verts).map((v) => v.z);
+    expect(xs.reduce(math.min), closeTo(1.15, 1e-9));
+    expect(xs.reduce(math.max), closeTo(1.75, 1e-9));
+    expect(zs.reduce(math.max), closeTo(lojaH - 0.18, 1e-9));
+    expect(zs.reduce(math.max) - zs.reduce(math.min), closeTo(7.95, 1e-9));
+
+    // Mais baixo que as demais estruturas do mapa: é esse degrau de altura que
+    // faz o balcão ler como balcão, e não como mais uma estante.
+    expect(ys.reduce(math.max), lessThan(0.85));
+
+    // Silhueta da vista de frente: só cinco alturas aparecem — o piso, o topo
+    // do corpo (cheio e rebaixado) e o topo do tampo (idem). Se o rebaixo do
+    // recorte sumisse, sobrariam três.
+    final alturas = ys.map((y) => (y * 1e4).round() / 1e4).toSet().toList()
+      ..sort();
+    expect(alturas.length, 5);
+    // O corpo rebaixado fica a 57% do cheio (o recorte come 43% dele).
+    expect(alturas[1] / alturas[3], closeTo(0.57, 1e-3));
+    // O tampo tem a mesma espessura nos dois casos e acompanha o rebaixo.
+    expect(alturas[2] - alturas[1], closeTo(alturas[4] - alturas[3], 1e-9));
+
+    // Corpo mais fino que o tampo: quem toca o piso são só os 18 cm do corpo,
+    // e o tampo (0,60 m) avança 21 cm para cada lado — o "T" visto de frente.
+    final xsNoPiso =
+        faces.expand((f) => f.verts).where((v) => v.y == 0).map((v) => v.x);
+    expect(xsNoPiso.reduce(math.max) - xsNoPiso.reduce(math.min),
+        closeTo(0.18, 1e-9));
   });
 
   testWidgets('EstanteParedeScene renderiza sem exceções', (tester) async {

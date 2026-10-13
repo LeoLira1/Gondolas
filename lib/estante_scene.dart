@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'gondola_scene.dart';
 import 'models.dart';
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CelulaEstante
@@ -55,26 +56,35 @@ class EstanteGeometry {
   static double alturaNivel(int estanteNum) =>
       alturaTotal / numNiveisTotal(estanteNum);
 
-  static List<CelulaEstante> celulasPara(int estanteNum) {
-    final lista       = <CelulaEstante>[];
-    final nivProduto   = niveisProdutoPara(estanteNum);
-    final alturaNiv    = alturaNivel(estanteNum);
-    for (var col = 0; col < numColunas; col++) {
-      final xMin =
-          -larguraTotal / 2 + espessura * (col + 1) + larguraColuna * col;
-      final xMax = xMin + larguraColuna;
-      for (var niv = 0; niv < nivProduto; niv++) {
-        lista.add(CelulaEstante(
-          coluna: col,
-          nivel:  niv,
-          yTop:   espessura + alturaNiv * niv + espessura,
-          xMin:   xMin,
-          xMax:   xMax,
-        ));
-      }
-    }
-    return lista;
-  }
+  // A grade de células é função pura do número da estante (numColunas é
+  // constante de compilação e niveisProdutoPara só compara faixas de número),
+  // então dá para memoizar. Sem isso, `build` chamava celulasPara UMA VEZ POR
+  // CAIXA — cada chamada realocando a grade inteira antes do firstWhere — e
+  // _drawLabels e _hitTest realocavam de novo a cada invocação.
+  static final Map<int, List<CelulaEstante>> _memoCelulas = {};
+
+  static List<CelulaEstante> celulasPara(int estanteNum) =>
+      _memoCelulas.putIfAbsent(estanteNum, () {
+        final lista        = <CelulaEstante>[];
+        final nivProduto   = niveisProdutoPara(estanteNum);
+        final alturaNiv    = alturaNivel(estanteNum);
+        for (var col = 0; col < numColunas; col++) {
+          final xMin =
+              -larguraTotal / 2 + espessura * (col + 1) + larguraColuna * col;
+          final xMax = xMin + larguraColuna;
+          for (var niv = 0; niv < nivProduto; niv++) {
+            lista.add(CelulaEstante(
+              coluna: col,
+              nivel:  niv,
+              yTop:   espessura + alturaNiv * niv + espessura,
+              xMin:   xMin,
+              xMax:   xMax,
+            ));
+          }
+        }
+        // Congelada: a lista agora é compartilhada entre todos os chamadores.
+        return List<CelulaEstante>.unmodifiable(lista);
+      });
 
   static int slotsPorCelula(CelulaEstante c) =>
       (c.largura / (wCaixa + gap)).floor();
@@ -277,7 +287,7 @@ class EstantePainter extends CustomPainter {
     final rimPaint = Paint()
       ..color       = camda
       ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.6;
 
     for (final celula in EstanteGeometry.celulasPara(estanteAtual)) {
       final xCenter = (celula.xMin + celula.xMax) / 2;
@@ -285,7 +295,7 @@ class EstantePainter extends CustomPainter {
       if (hit == null) continue;
 
       final (screen, cz) = hit;
-      final fontSize = 28.0 * (6.0 / cz).clamp(0.5, 1.8);
+      final fontSize = 19.0 * (6.0 / cz).clamp(0.5, 1.5);
 
       final row    = nNiveis - 1 - celula.nivel;
       final letter = letraDoIndice(letraOffset + row * nColunas + celula.coluna);
@@ -370,53 +380,110 @@ class EstanteScene extends StatefulWidget {
   State<EstanteScene> createState() => _EstanteSceneState();
 }
 
-class _EstanteSceneState extends State<EstanteScene> {
-  Camera _camera = const Camera(
-    rotY:   0.5,
-    rotX:   0.25,
-    dist:   9.0,
-    target: Vec3(0, 2.1, 0),
-  );
+class _EstanteSceneState extends State<EstanteScene>
+    with SceneGestureGuard<EstanteScene> {
+  static Camera _cameraInicial() => const Camera(
+        rotY:   0.5,
+        rotX:   0.25,
+        dist:   _distInicial,
+        target: Vec3(0, EstanteGeometry.alturaTotal / 2, 0),
+      );
+
+  Camera _camera = _cameraInicial();
   final _painterKey = GlobalKey();
 
-  Offset? _gestureOrigin;
   Camera? _cameraAtGestureStart;
-  bool    _isDragging = false;
 
-  static const double _dragThreshold = 7.0;
+  // Zoom com a mesma folga da Estante 8 (Edr300Scene): o mínimo de 0.8 é o que
+  // deixa colar numa caixa só — antes o piso era 4.0 e as caixas de uma célula
+  // ficavam indistinguíveis. O teto continua em 18 (e não nos 12 da EDR-300)
+  // porque a estante de madeira tem 6 m de largura: a 12 ela já não cabe
+  // inteira numa tela de celular em pé.
+  static const double _distMin     = 0.8;
+  static const double _distMax     = 18.0;
+  static const double _distInicial = 9.0;
 
-  void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin        = d.focalPoint;
-    _cameraAtGestureStart = _camera;
-    _isDragging           = false;
+  // Pan: o alvo não escapa de uma caixa em volta da estante, pra não ser
+  // possível arrastar até perder o modelo de vista.
+  static const double _panMargem = 0.7;
+
+  @override
+  void didUpdateWidget(EstanteScene old) {
+    super.didUpdateWidget(old);
+    // O carrossel reaproveita este State ao trocar de estante (1→2→5→…):
+    // todas têm a mesma armação, mas o pan feito na anterior deixaria a
+    // seguinte fora de quadro. Recentraliza o alvo preservando ângulo e zoom.
+    if (old.estanteAtual != widget.estanteAtual) {
+      _camera = Camera(
+        rotY:   _camera.rotY,
+        rotX:   _camera.rotX,
+        dist:   _camera.dist,
+        target: Vec3(0, EstanteGeometry.alturaTotal / 2, 0),
+      );
+    }
   }
 
+  void _onScaleStart(ScaleStartDetails d) {
+    beginGesture(d);
+    _cameraAtGestureStart = _camera;
+  }
+
+  // Mesmo esquema de câmera da Estante 8 (Edr300Scene), da Estante Parede e do
+  // mapa da loja: um dedo arrasta (pan — o ponto tocado acompanha o dedo),
+  // dois dedos orbitam e dão zoom com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtGestureStart;
     if (origin == null || c0 == null) return;
 
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtGestureStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
+
+    if (d.pointerCount >= 2) {
+      // Dois dedos: orbita (arrastar) + zoom (pinça).
+      setState(() {
+        _camera = Camera(
+          rotY:   c0.rotY - delta.dx * 0.008,
+          rotX:   (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
+          dist:   (c0.dist / d.scale).clamp(_distMin, _distMax),
+          target: _camera.target,
+        );
+      });
+      return;
+    }
+
+    // Um dedo: pan no plano da tela — converte pixels em metros pela altura do
+    // viewport e pelo FOV do painter (45°, então meia-abertura de 22,5°), e
+    // desloca o alvo ao longo dos eixos "direita" e "cima" da própria câmera.
+    final rb  = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    final hPx = rb?.size.height ?? 600.0;
+    final worldPerPx = 2 * c0.dist * math.tan(22.5 * math.pi / 180) / hPx;
+    final dxW = delta.dx * worldPerPx;
+    final dyW = delta.dy * worldPerPx;
+
+    final sinY = math.sin(c0.rotY), cosY = math.cos(c0.rotY);
+    final sinX = math.sin(c0.rotX), cosX = math.cos(c0.rotX);
+    // right = (cosY, 0, -sinY); up = (-sinY·sinX, cosX, -cosY·sinX)
+    final limXZ = EstanteGeometry.larguraTotal / 2 + _panMargem;
+    final limY  = EstanteGeometry.alturaTotal + _panMargem;
 
     setState(() {
-      _camera = c0.copyWith(
-        rotY: c0.rotY - delta.dx * 0.008,
-        rotX: (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
-        dist: (c0.dist / d.scale).clamp(4.0, 18.0),
+      _camera = Camera(
+        rotY:   c0.rotY,
+        rotX:   c0.rotX,
+        dist:   c0.dist,
+        target: Vec3(
+          (c0.target.x - cosY * dxW - sinY * sinX * dyW).clamp(-limXZ, limXZ),
+          (c0.target.y + cosX * dyW).clamp(-_panMargem, limY),
+          (c0.target.z + sinY * dxW - cosY * sinX * dyW).clamp(-limXZ, limXZ),
+        ),
       );
     });
-  }
-
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin        = null;
-    _cameraAtGestureStart = null;
-    _isDragging           = false;
   }
 
   void _tryFireTap(Offset globalTap) {
@@ -475,12 +542,19 @@ class _EstanteSceneState extends State<EstanteScene> {
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
+    // Índice (coluna, nível) → célula montado UMA vez: era um firstWhere linear
+    // sobre a grade inteira por caixa desenhada.
+    final celulas = <(int, int), CelulaEstante>{
+      for (final c in EstanteGeometry.celulasPara(widget.estanteAtual))
+        (c.coluna, c.nivel): c,
+    };
     for (final caixa in widget.caixas) {
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final celula = EstanteGeometry.celulasPara(widget.estanteAtual).firstWhere(
-        (c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel,
-      );
+      // Caixa em endereço que não existe mais nesta estante (layout antigo):
+      // antes o firstWhere estourava; agora simplesmente não desenha.
+      final celula = celulas[(caixa.coluna, caixa.nivel)];
+      if (celula == null) continue;
       final chave = chaveEnderecoEstoque(
         produtoCodigo: caixa.produtoId,
         localTipo:     'estante',
@@ -507,17 +581,21 @@ class _EstanteSceneState extends State<EstanteScene> {
           desatualizado: widget.desatualizados.contains(chave));
     }
 
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _painterKey,
-        painter: EstantePainter(_camera,
-            extraFaces:   extraFaces,
-            showLabels:   widget.showLabels,
-            estanteAtual: widget.estanteAtual),
-        child:   const SizedBox.expand(),
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryFireTap(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _painterKey,
+          painter: EstantePainter(_camera,
+              extraFaces:   extraFaces,
+              showLabels:   widget.showLabels,
+              estanteAtual: widget.estanteAtual),
+          child:   const SizedBox.expand(),
+        ),
       ),
     );
   }

@@ -7,6 +7,7 @@ import 'gondola_scene.dart'
 import 'models.dart'
     show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
         letraDoIndice;
+import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Edr300Cell — célula de produto na estante metálica
@@ -341,7 +342,7 @@ class Edr300Painter extends CustomPainter {
     final rimPaint = Paint()
       ..color       = camda
       ..style       = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.6;
 
     // Um badge por módulo × prateleira, com letras contínuas por módulo de
     // cima pra baixo (mesma régua de letraEstanteCelula): solo A–F; tripla
@@ -353,7 +354,7 @@ class Edr300Painter extends CustomPainter {
         if (hit == null) continue;
 
         final (screen, cz) = hit;
-        final fontSize = 22.0 * (3.0 / cz).clamp(0.5, 1.8);
+        final fontSize = 15.0 * (3.0 / cz).clamp(0.5, 1.5);
         final radius   = fontSize * 0.72;
 
         canvas.drawCircle(screen, radius, bgPaint);
@@ -452,15 +453,21 @@ class Edr300Scene extends StatefulWidget {
 }
 
 class _Edr300SceneState extends State<Edr300Scene>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, SceneGestureGuard<Edr300Scene> {
   late Ticker _ticker;
   late Camera _camera;
 
   final _painterKey = GlobalKey();
-  Offset? _gestureOrigin;
   Camera? _cameraAtStart;
-  bool    _isDragging = false;
-  static const double _dragThreshold = 6.0;
+
+  // Zoom: mesma folga do mapa da loja — dá pra chegar bem perto de uma caixa
+  // e também afastar até a estante inteira caber na tela.
+  static const double _distMin = 0.8;
+  static const double _distMax = 12.0;
+
+  // Pan: o alvo da câmera não escapa de uma caixa em volta da estante, pra
+  // não ser possível arrastar até perder o modelo de vista.
+  static const double _panMargem = 0.7;
 
   // Distância inicial da câmera: mais longe quanto mais módulos lado a lado,
   // pra tripla caber inteira na tela de primeira.
@@ -490,7 +497,14 @@ class _Edr300SceneState extends State<Edr300Scene>
     // (mesmo tipo de widget na mesma posição da árvore): reenquadra o zoom
     // quando o número de módulos muda.
     if (old.geometry.colunas != widget.geometry.colunas) {
-      _camera = _camera.copyWith(dist: _distPara(widget.geometry));
+      // Reenquadra e recentraliza: o pan do usuário na estante anterior não
+      // deve deixar a próxima fora de quadro.
+      _camera = Camera(
+        rotY:   _camera.rotY,
+        rotX:   _camera.rotX,
+        dist:   _distPara(widget.geometry),
+        target: Vec3(0, widget.geometry.height / 2, 0),
+      );
     }
     if (old.geometry.height != widget.geometry.height) {
       _camera = Camera(
@@ -509,35 +523,67 @@ class _Edr300SceneState extends State<Edr300Scene>
   }
 
   void _onScaleStart(ScaleStartDetails d) {
-    _gestureOrigin = d.focalPoint;
+    beginGesture(d);
     _cameraAtStart = _camera;
-    _isDragging    = false;
   }
 
+  // Mesmo esquema de câmera do mapa da loja (LojaScene): um dedo arrasta
+  // (pan — o ponto tocado acompanha o dedo), dois dedos orbitam e dão zoom
+  // com a pinça.
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    final origin = _gestureOrigin;
+    final origin = gestureOrigin;
     final c0     = _cameraAtStart;
     if (origin == null || c0 == null) return;
-    final delta = d.focalPoint - origin;
-    if (delta.distance > _dragThreshold || (d.scale - 1.0).abs() > 0.02) {
-      _isDragging = true;
+
+    if (reanchorIfPointersChanged(d)) {
+      _cameraAtStart = _camera;
+      return;
     }
+    markDragIfMoved(d);
+
+    final delta = d.focalPoint - origin;
+
+    if (d.pointerCount >= 2) {
+      // Dois dedos: orbita (arrastar) + zoom (pinça)
+      setState(() {
+        _camera = Camera(
+          rotY:   c0.rotY - delta.dx * 0.008,
+          rotX:   (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
+          dist:   (c0.dist / d.scale).clamp(_distMin, _distMax),
+          target: _camera.target,
+        );
+      });
+      return;
+    }
+
+    // Um dedo: pan no plano da tela — converte pixels em metros pela altura
+    // do viewport e pelo FOV do painter (42°), então desloca o alvo ao longo
+    // dos eixos "direita" e "cima" da própria câmera.
+    final rb  = _painterKey.currentContext?.findRenderObject() as RenderBox?;
+    final hPx = rb?.size.height ?? 600.0;
+    final worldPerPx = 2 * c0.dist * math.tan(21.0 * math.pi / 180) / hPx;
+    final dxW = delta.dx * worldPerPx;
+    final dyW = delta.dy * worldPerPx;
+
+    final sinY = math.sin(c0.rotY), cosY = math.cos(c0.rotY);
+    final sinX = math.sin(c0.rotX), cosX = math.cos(c0.rotX);
+    // right = (cosY, 0, -sinY); up = (-sinY·sinX, cosX, -cosY·sinX)
+    final geo    = widget.geometry;
+    final limXZ  = geo.larguraTotal / 2 + _panMargem;
+
     setState(() {
-      _camera = c0.copyWith(
-        rotY: c0.rotY - delta.dx * 0.008,
-        rotX: (c0.rotX + delta.dy * 0.008).clamp(-0.1, math.pi / 2 - 0.05),
-        dist: (c0.dist / d.scale).clamp(1.5, 8.0),
+      _camera = Camera(
+        rotY:   c0.rotY,
+        rotX:   c0.rotX,
+        dist:   c0.dist,
+        target: Vec3(
+          (c0.target.x - cosY * dxW - sinY * sinX * dyW).clamp(-limXZ, limXZ),
+          (c0.target.y + cosX * dyW)
+              .clamp(-_panMargem, geo.height + _panMargem),
+          (c0.target.z + sinY * dxW - cosY * sinX * dyW).clamp(-limXZ, limXZ),
+        ),
       );
     });
-  }
-
-  void _onScaleEnd(ScaleEndDetails _) {
-    if (!_isDragging && _gestureOrigin != null) {
-      _tryFireTap(_gestureOrigin!);
-    }
-    _gestureOrigin = null;
-    _cameraAtStart = null;
-    _isDragging    = false;
   }
 
   void _tryFireTap(Offset globalTap) {
@@ -627,17 +673,21 @@ class _Edr300SceneState extends State<Edr300Scene>
           desatualizado: widget.desatualizados.contains(chave));
     }
 
-    return GestureDetector(
-      onScaleStart:  _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd:    _onScaleEnd,
-      child: CustomPaint(
-        key:     _painterKey,
-        painter: Edr300Painter(_camera, widget.geometry,
-            wireframe:  widget.wireframe,
-            showLabels: widget.showLabels,
-            extraFaces: extraFaces),
-        child:   const SizedBox.expand(),
+    return Listener(
+      onPointerDown:   aoEncostarDedo,
+      onPointerUp:     (e) { if (aoSoltarDedo(e)) _tryFireTap(pontoDoToque!); },
+      onPointerCancel: aoSoltarDedo,
+      child: GestureDetector(
+        onScaleStart:  _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
+        child: CustomPaint(
+          key:     _painterKey,
+          painter: Edr300Painter(_camera, widget.geometry,
+              wireframe:  widget.wireframe,
+              showLabels: widget.showLabels,
+              extraFaces: extraFaces),
+          child:   const SizedBox.expand(),
+        ),
       ),
     );
   }

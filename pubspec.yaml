@@ -21,6 +21,11 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
+  assets:
+    # Textura do piso de concreto das cenas 3D (galpão). É uma textura
+    # ladrilhável: o renderizador a repete no plano do chão.
+    - assets/textures/
+
 # Ícone do app (mapa.png na raiz). O projeto Android é gerado pelo CI
 # (flutter create no build.yml), então os mipmaps são gerados lá com
 # `dart run flutter_launcher_icons` logo após o scaffold.

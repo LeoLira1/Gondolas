@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import 'estoque_localizado_service.dart';
 import 'models.dart';
 import 'sugestao_deducao.dart';
+import 'turso_service.dart';
 
 const List<String> _andarNomes = ['Base', 'Meio', 'Topo'];
 
@@ -20,11 +24,11 @@ Future<void> mostrarQuantidadeDialog(
     context: context,
     builder: (_) => _QuantidadeDialog(
       produtoCodigo: produtoCodigo,
-      produtoNome:   produtoNome,
-      localTipo:     localTipo,
-      localNum:      localNum,
-      faceOuColuna:  faceOuColuna,
-      andarOuNivel:  andarOuNivel,
+      produtoNome: produtoNome,
+      localTipo: localTipo,
+      localNum: localNum,
+      faceOuColuna: faceOuColuna,
+      andarOuNivel: andarOuNivel,
     ),
   );
 }
@@ -84,8 +88,8 @@ class _LinhaEndereco {
     required this.endereco,
     required this.destaque,
     this.dirty = false,
-  })  : nasceuDirty = dirty,
-        controller = TextEditingController(text: _fmtQtd(endereco.quantidade));
+  }) : nasceuDirty = dirty,
+       controller = TextEditingController(text: _fmtQtd(endereco.quantidade));
 
   double get quantidadeAtual => _parseQtd(controller.text);
 }
@@ -113,9 +117,15 @@ class _QuantidadeDialog extends StatefulWidget {
 
 class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   final _service = EstoqueLocalizadoService();
+  // Controller próprio da lista de endereços: a Scrollbar precisa dele pra
+  // manter o polegar sempre visível (thumbVisibility).
+  final _scrollController = ScrollController();
 
-  bool    _carregando = true;
-  bool    _salvando   = false;
+  bool _carregando = true;
+  bool _salvando = false;
+  bool _editou = false;
+  String? _erroCarga;
+  int _versaoCarga = 0;
   double? _qtdSistema;
   List<_LinhaEndereco> _linhas = [];
   // Sugestão de abatimento calculada uma única vez a partir dos valores
@@ -127,7 +137,14 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   @override
   void initState() {
     super.initState();
+    TursoService().dataRevision.addListener(_dadosAtualizados);
     _carregar();
+    unawaited(_carregarAvisosDesatualizados());
+  }
+
+  void _dadosAtualizados() {
+    if (!mounted || _editou || _salvando) return;
+    unawaited(_carregar());
   }
 
   // Linhas excluídas durante a sessão do dialog: os controllers não podem ser
@@ -137,38 +154,49 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
 
   @override
   void dispose() {
+    TursoService().dataRevision.removeListener(_dadosAtualizados);
     for (final l in _linhas) {
       l.controller.dispose();
     }
     for (final l in _linhasRemovidas) {
       l.controller.dispose();
     }
+    _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _carregar() async {
-    final resultados = await Future.wait([
-      _service.fetchEnderecosProduto(widget.produtoCodigo),
-      _service.buscarInfoMestre(widget.produtoCodigo),
-      _service.fetchEnderecosDesatualizados(),
-    ]);
-    final enderecos = resultados[0] as List<EnderecoLocalizado>;
-    final info      = resultados[1] as InfoEstoqueMestre?;
+    final versao = ++_versaoCarga;
+    // O saldo do sistema não bloqueia a abertura das quantidades locais.
+    unawaited(_carregarSaldo(versao));
+    List<EnderecoLocalizado> enderecos;
+    try {
+      enderecos = await _service.fetchEnderecosProduto(
+        widget.produtoCodigo,
+        usarCache: true,
+      );
+    } catch (_) {
+      if (!mounted || versao != _versaoCarga || _editou || _salvando) return;
+      setState(() {
+        _carregando = false;
+        _erroCarga =
+            'Não foi possível carregar as quantidades. Tente novamente.';
+      });
+      return;
+    }
+    if (!mounted || versao != _versaoCarga || _editou || _salvando) return;
 
     final tocado = EnderecoLocalizado(
       produtoCodigo: widget.produtoCodigo,
-      localTipo:     widget.localTipo,
-      localNum:      widget.localNum,
-      faceOuColuna:  widget.faceOuColuna,
-      andarOuNivel:  widget.andarOuNivel,
-      quantidade:    0,
+      localTipo: widget.localTipo,
+      localNum: widget.localNum,
+      faceOuColuna: widget.faceOuColuna,
+      andarOuNivel: widget.andarOuNivel,
+      quantidade: 0,
     );
     final jaExiste = enderecos.any((e) => e.mesmoEndereco(tocado));
 
-    final todos = [
-      if (!jaExiste) tocado,
-      ...enderecos,
-    ];
+    final todos = [if (!jaExiste) tocado, ...enderecos];
     todos.sort((a, b) {
       final aTocado = a.mesmoEndereco(tocado);
       final bTocado = b.mesmoEndereco(tocado);
@@ -176,11 +204,10 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
       return aTocado ? -1 : 1;
     });
 
-    final somaPersistida =
-        enderecos.fold<double>(0, (soma, e) => soma + e.quantidade);
-
     if (!mounted) return;
     setState(() {
+      _linhasRemovidas.addAll(_linhas);
+      _erroCarga = null;
       _linhas = todos.map((e) {
         final destaque = e.mesmoEndereco(tocado);
         return _LinhaEndereco(
@@ -191,15 +218,46 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
           dirty: destaque && !jaExiste,
         );
       }).toList();
-      _qtdSistema = info?.qtdSistema;
-      _sugestao = info == null
-          ? null
-          : sugerirDeducao(
-              enderecos: enderecos,
-              excesso:   somaPersistida - info.qtdSistema,
-            );
+      _recalcularSugestao();
       _carregando = false;
     });
+  }
+
+  Future<void> _carregarSaldo(int versao) async {
+    try {
+      final info = await _service.buscarInfoMestre(
+        widget.produtoCodigo,
+        usarCache: true,
+      );
+      if (!mounted || versao != _versaoCarga || _editou || _salvando) return;
+      setState(() {
+        _qtdSistema = info?.qtdSistema;
+        _recalcularSugestao();
+      });
+    } catch (_) {
+      // Saldo indisponível não é saldo zero; as quantidades seguem visíveis.
+    }
+  }
+
+  void _recalcularSugestao() {
+    final saldo = _qtdSistema;
+    final enderecos = _linhas.map((l) => l.endereco).toList();
+    _sugestao = saldo == null
+        ? null
+        : sugerirDeducao(
+            enderecos: enderecos,
+            excesso:
+                enderecos.fold<double>(0, (s, e) => s + e.quantidade) - saldo,
+          );
+  }
+
+  /// Aquece o cache de endereços desatualizados e repinta quando ele chega —
+  /// os avisos aparecem alguns instantes depois do resto do dialog, em vez de
+  /// segurarem a abertura inteira.
+  Future<void> _carregarAvisosDesatualizados() async {
+    await _service.fetchEnderecosDesatualizados();
+    if (!mounted) return;
+    setState(() {});
   }
 
   double get _totalContado =>
@@ -208,12 +266,15 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   // Endereço novo (l.endereco.atualizadoEm == null) nunca está desatualizado
   // — não há nada gravado ainda pra comparar.
   EnderecoDesatualizado? _avisoDesatualizado(EnderecoLocalizado endereco) =>
-      endereco.atualizadoEm == null ? null : _service.infoDesatualizado(endereco);
+      endereco.atualizadoEm == null
+      ? null
+      : _service.infoDesatualizado(endereco);
 
   /// Preenche os campos com as quantidades sugeridas e marca as linhas como
   /// editadas. Nada é gravado no banco até Salvar/Concluir contagem — o
   /// usuário ainda confere fisicamente.
   void _aplicarSugestao() {
+    _editou = true;
     final sugestao = _sugestao;
     if (sugestao == null) return;
     setState(() {
@@ -230,6 +291,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   }
 
   void _toggleConfirmado(_LinhaEndereco l) {
+    _editou = true;
     setState(() {
       if (l.confirmado) {
         l.confirmado = false;
@@ -247,20 +309,24 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   }
 
   void _removerLinhaLocal(_LinhaEndereco l) {
+    _editou = true;
     setState(() {
       _linhas.remove(l);
       _linhasRemovidas.add(l);
     });
     if (_linhas.isEmpty && mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Endereço excluído.'),
-        backgroundColor: Color(0xFF2a3a1a),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Endereço excluído.'),
+          backgroundColor: Color(0xFF2a3a1a),
+        ),
+      );
     }
   }
 
   Future<void> _excluirEndereco(_LinhaEndereco l) async {
+    _editou = true;
     // Endereço recém-tocado que nunca foi gravado: não existe no banco,
     // basta tirar da lista.
     if (l.endereco.atualizadoEm == null && l.endereco.id == null) {
@@ -283,11 +349,14 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
         backgroundColor: const Color(0xFF141a22),
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: const Text('Excluir endereço',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600)),
+        title: const Text(
+          'Excluir endereço',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         content: Text(
           avisos.join('\n\n'),
           style: const TextStyle(color: Color(0xFFb0ada8), fontSize: 13),
@@ -300,8 +369,9 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8b1a1a),
-                foregroundColor: Colors.white),
+              backgroundColor: const Color(0xFF8b1a1a),
+              foregroundColor: Colors.white,
+            ),
             child: const Text('Excluir'),
           ),
         ],
@@ -312,20 +382,22 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     setState(() => _salvando = true);
     final ok = await _service.deleteEndereco(
       produtoCodigo: l.endereco.produtoCodigo,
-      localTipo:     l.endereco.localTipo,
-      localNum:      l.endereco.localNum,
-      faceOuColuna:  l.endereco.faceOuColuna,
-      andarOuNivel:  l.endereco.andarOuNivel,
+      localTipo: l.endereco.localTipo,
+      localNum: l.endereco.localNum,
+      faceOuColuna: l.endereco.faceOuColuna,
+      andarOuNivel: l.endereco.andarOuNivel,
     );
     if (!mounted) return;
     setState(() => _salvando = false);
     if (ok) {
       _removerLinhaLocal(l);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Falha ao excluir o endereço.'),
-        backgroundColor: Color(0xFF5a1a1a),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Falha ao excluir o endereço.'),
+          backgroundColor: Color(0xFF5a1a1a),
+        ),
+      );
     }
   }
 
@@ -334,15 +406,62 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     for (final l in _linhas.where((l) => l.dirty)) {
       final salvo = await _service.upsertQuantidade(
         produtoCodigo: l.endereco.produtoCodigo,
-        localTipo:     l.endereco.localTipo,
-        localNum:      l.endereco.localNum,
-        faceOuColuna:  l.endereco.faceOuColuna,
-        andarOuNivel:  l.endereco.andarOuNivel,
-        quantidade:    l.quantidadeAtual,
+        localTipo: l.endereco.localTipo,
+        localNum: l.endereco.localNum,
+        faceOuColuna: l.endereco.faceOuColuna,
+        andarOuNivel: l.endereco.andarOuNivel,
+        quantidade: l.quantidadeAtual,
       );
       ok = ok && salvo;
     }
     return ok;
+  }
+
+  /// Sai do dialog sem gravar. Se houver edição pendente, confirma antes —
+  /// o botão é grande e fica ao lado das ações de gravação, então um toque
+  /// errado não pode jogar a contagem fora em silêncio.
+  Future<void> _onVoltar() async {
+    if (!_linhas.any((l) => l.dirty)) {
+      Navigator.pop(context);
+      return;
+    }
+    final descartar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          'Descartar alterações?',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        content: const Text(
+          'Você alterou quantidades e ainda não salvou. Se voltar agora, '
+          'essas alterações serão perdidas.',
+          style: TextStyle(color: Color(0xFFb0ada8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Continuar contando'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF8b1a1a),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Descartar'),
+          ),
+        ],
+      ),
+    );
+    if (descartar != true || !mounted) return;
+    Navigator.pop(context);
   }
 
   Future<void> _onSalvar() async {
@@ -354,25 +473,32 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     final ok = await _salvarEditados();
     if (!mounted) return;
     Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(
-          ok ? 'Quantidades salvas.' : 'Falha ao salvar algumas quantidades.'),
-      backgroundColor: ok ? const Color(0xFF2a3a1a) : const Color(0xFF5a1a1a),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? 'Quantidades salvas.' : 'Falha ao salvar algumas quantidades.',
+        ),
+        backgroundColor: ok ? const Color(0xFF2a3a1a) : const Color(0xFF5a1a1a),
+      ),
+    );
   }
 
   Future<void> _onConcluirContagem() async {
+    _editou = true;
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF141a22),
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: const Text('Concluir contagem',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600)),
+        title: const Text(
+          'Concluir contagem',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         content: Text(
           'Isso vai sincronizar o total contado (${_fmtQtd(_totalContado)} un) de '
           '"${widget.produtoNome}" com o inventário cíclico. Confirmar?',
@@ -386,8 +512,9 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2e6b46),
-                foregroundColor: Colors.white),
+              backgroundColor: const Color(0xFF2e6b46),
+              foregroundColor: Colors.white,
+            ),
             child: const Text('Confirmar'),
           ),
         ],
@@ -402,92 +529,204 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     Navigator.pop(context);
 
     if (resultado == null || !salvouEditados) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Falha ao concluir a contagem.'),
-        backgroundColor: Color(0xFF5a1a1a),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Falha ao concluir a contagem.'),
+          backgroundColor: Color(0xFF5a1a1a),
+        ),
+      );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(resultado.status == 'ok'
-          ? 'Contagem concluída — sem divergência.'
-          : 'Contagem concluída — divergência de ${_fmtDelta(resultado.divergencia)}.'),
-      backgroundColor: resultado.status == 'ok'
-          ? const Color(0xFF2a3a1a)
-          : const Color(0xFF5a3a1a),
-      duration: const Duration(seconds: 4),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          resultado.status == 'ok'
+              ? 'Contagem concluída — sem divergência.'
+              : 'Contagem concluída — divergência de ${_fmtDelta(resultado.divergencia)}.',
+        ),
+        backgroundColor: resultado.status == 'ok'
+            ? const Color(0xFF2a3a1a)
+            : const Color(0xFF5a3a1a),
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    // Em celular a margem padrão do AlertDialog (40 de cada lado) espreme
+    // demais os cards de endereço; 16 dá espaço pro texto respirar.
+    final larguraTela = MediaQuery.of(context).size.width;
+    final largura = larguraTela - 64 < 380 ? larguraTela - 64 : 380.0;
     return AlertDialog(
       backgroundColor: const Color(0xFF141a22),
       surfaceTintColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.produtoNome,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600)),
-          Text(widget.produtoCodigo,
-              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 12)),
+          Text(
+            widget.produtoNome,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Text(
+            widget.produtoCodigo,
+            style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 12),
+          ),
         ],
       ),
+      titlePadding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       content: SizedBox(
-        width: 380,
+        width: largura,
         child: _carregando
             ? const Padding(
                 padding: EdgeInsets.symmetric(vertical: 30),
                 child: Center(child: CircularProgressIndicator()),
               )
+            // A lista de endereços rola (com barra sempre visível) e o resumo
+            // fica fixo no rodapé: com muitos endereços o conteúdo passava da
+            // altura da tela e os últimos campos ficavam inacessíveis.
+            : _erroCarga != null
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_erroCarga!),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _carregando = true;
+                        _erroCarga = null;
+                      });
+                      unawaited(_carregar());
+                    },
+                    child: const Text('Tentar novamente'),
+                  ),
+                ],
+              )
             : Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_sugestao != null) _buildSugestaoCard(_sugestao!),
-                  ..._linhas.map(_buildLinha),
+                  Flexible(
+                    child: Scrollbar(
+                      controller: _scrollController,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        // Espaço pro polegar da barra não cobrir os cards.
+                        padding: const EdgeInsets.only(right: 10),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_sugestao != null)
+                              _buildSugestaoCard(_sugestao!),
+                            ..._linhas.map(_buildLinha),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   _buildResumo(),
                 ],
               ),
       ),
-      actions: _carregando
-          ? null
-          : [
-              TextButton(
-                onPressed: _salvando ? null : () => Navigator.pop(context),
-                child: const Text('Cancelar'),
-              ),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      // O rodapé existe desde o primeiro frame, inclusive durante a carga: com
+      // `_carregando ? null : …` o "Voltar" só nascia depois das consultas
+      // terminarem, e com o cache de badges frio o usuário ficava num modal sem
+      // saída. As ações de GRAVAÇÃO é que ficam travadas enquanto carrega —
+      // salvar antes de saber o que já existe no endereço apagaria contagem.
+      actions: [_buildAcoes()],
+    );
+  }
+
+  /// Rodapé de ações: "Voltar" ocupa toda a coluna da esquerda, com alvo alto
+  /// (92) e afastado das ações de gravação, que ficam empilhadas à direita.
+  /// O antigo "Cancelar" era um TextButton pequeno colado no "Salvar" — fácil
+  /// de errar no celular e perder a contagem.
+  Widget _buildAcoes() {
+    return Row(
+      // O rodapé fica sob altura não limitada (OverflowBar do AlertDialog),
+      // então nada de `stretch`: a altura do Voltar é fixada pra casar com a
+      // pilha Salvar + Concluir da direita (40 + 8 + 44).
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          flex: 4,
+          child: OutlinedButton.icon(
+            onPressed: _salvando ? null : _onVoltar,
+            icon: const Icon(Icons.arrow_back, size: 18),
+            label: const Text('Voltar'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFb0ada8),
+              side: const BorderSide(color: Color(0xFF3a4450)),
+              minimumSize: const Size(0, 92),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          flex: 5,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               OutlinedButton(
-                onPressed: _salvando ? null : _onSalvar,
+                onPressed: (_salvando || _carregando || _erroCarga != null)
+                    ? null
+                    : _onSalvar,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
                 child: const Text('Salvar'),
               ),
+              const SizedBox(height: 8),
               ElevatedButton(
-                onPressed: _salvando ? null : _onConcluirContagem,
+                onPressed: (_salvando || _carregando || _erroCarga != null)
+                    ? null
+                    : _onConcluirContagem,
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2e6b46),
-                    foregroundColor: Colors.white),
+                  backgroundColor: const Color(0xFF2e6b46),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
                 child: _salvando
                     ? const SizedBox(
                         width: 14,
                         height: 14,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
-                    : const Text('Concluir contagem'),
+                    : const Text(
+                        'Concluir contagem',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
               ),
             ],
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildSugestaoCard(ResultadoSugestao sugestao) {
-    final excesso = sugestao.deducoes.fold<double>(
-            0, (soma, d) => soma + d.deduzido) +
+    final excesso =
+        sugestao.deducoes.fold<double>(0, (soma, d) => soma + d.deduzido) +
         sugestao.restante;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -503,17 +742,19 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
           Text(
             '💡 Δ +${_fmtQtd(excesso)} vs sistema — sugestão (gôndola primeiro)',
             style: const TextStyle(
-                color: Color(0xFFe0a030),
-                fontSize: 12,
-                fontWeight: FontWeight.w600),
+              color: Color(0xFFe0a030),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 4),
-          ...sugestao.deducoes.map((d) => Text(
-                'Provavelmente saíram ${_fmtQtd(d.deduzido)} un de '
-                '${_labelEndereco(d.endereco)}',
-                style:
-                    const TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
-              )),
+          ...sugestao.deducoes.map(
+            (d) => Text(
+              'Provavelmente saíram ${_fmtQtd(d.deduzido)} un de '
+              '${_labelEndereco(d.endereco)}',
+              style: const TextStyle(color: Color(0xFFb0ada8), fontSize: 12),
+            ),
+          ),
           if (sugestao.restante > 0)
             Text(
               'Ainda restam ${_fmtQtd(sugestao.restante)} un não localizadas.',
@@ -523,7 +764,8 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
           Row(
             children: [
               OutlinedButton.icon(
-                onPressed: _salvando || _sugestaoAplicada || sugestao.deducoes.isEmpty
+                onPressed:
+                    _salvando || _sugestaoAplicada || sugestao.deducoes.isEmpty
                     ? null
                     : _aplicarSugestao,
                 icon: Icon(
@@ -544,11 +786,14 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                 ),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(
-                      color: _sugestaoAplicada
-                          ? const Color(0xFF2e6b46)
-                          : const Color(0xFF5a3a1a)),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    color: _sugestaoAplicada
+                        ? const Color(0xFF2e6b46)
+                        : const Color(0xFF5a3a1a),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   visualDensity: VisualDensity.compact,
                 ),
               ),
@@ -575,13 +820,14 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
         color: l.destaque
             ? const Color(0xFF162416)
             : l.confirmado
-                ? const Color(0xFF12211a)
-                : const Color(0xFF0d1117),
+            ? const Color(0xFF12211a)
+            : const Color(0xFF0d1117),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-            color: l.destaque || l.confirmado
-                ? const Color(0xFF2e6b46)
-                : const Color(0xFF262b33)),
+          color: l.destaque || l.confirmado
+              ? const Color(0xFF2e6b46)
+              : const Color(0xFF262b33),
+        ),
       ),
       child: Row(
         children: [
@@ -594,14 +840,18 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                   style: TextStyle(
                     color: l.destaque ? Colors.white : const Color(0xFFb0ada8),
                     fontSize: 13,
-                    fontWeight: l.destaque ? FontWeight.w600 : FontWeight.normal,
+                    fontWeight: l.destaque
+                        ? FontWeight.w600
+                        : FontWeight.normal,
                   ),
                 ),
                 if (l.endereco.atualizadoEm != null)
                   Text(
                     'Atualizado em ${_fmtData(l.endereco.atualizadoEm!)}',
                     style: const TextStyle(
-                        color: Color(0xFF6a7a88), fontSize: 10),
+                      color: Color(0xFF6a7a88),
+                      fontSize: 10,
+                    ),
                   ),
                 if (aviso != null)
                   Padding(
@@ -611,7 +861,9 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                       '· este endereço foi atualizado pela última vez em '
                       '${_fmtDataCurta(aviso.atualizadoEm)}',
                       style: const TextStyle(
-                          color: Color(0xFFe0a030), fontSize: 10),
+                        color: Color(0xFFe0a030),
+                        fontSize: 10,
+                      ),
                     ),
                   ),
               ],
@@ -622,7 +874,9 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
             width: 76,
             child: TextField(
               controller: l.controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               textAlign: TextAlign.right,
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: const InputDecoration(
@@ -630,10 +884,13 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                 suffixText: ' un',
                 suffixStyle: TextStyle(color: Color(0xFF6a7a88), fontSize: 11),
                 border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
               ),
               onChanged: (_) => setState(() {
+                _editou = true;
                 l.dirty = true;
                 // Edição manual invalida a confirmação de "nada mudou".
                 l.confirmado = false;
@@ -672,7 +929,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
   Widget _buildResumo() {
     final contado = _totalContado;
     final sistema = _qtdSistema;
-    final delta   = sistema == null ? null : contado - sistema;
+    final delta = sistema == null ? null : contado - sistema;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
@@ -685,14 +942,18 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
           children: [
             const TextSpan(text: 'Contado: '),
             TextSpan(
-                text: _fmtQtd(contado),
-                style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w600)),
+              text: _fmtQtd(contado),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             if (sistema != null) ...[
               const TextSpan(text: ' · Sistema: '),
               TextSpan(
-                  text: _fmtQtd(sistema),
-                  style: const TextStyle(color: Colors.white)),
+                text: _fmtQtd(sistema),
+                style: const TextStyle(color: Colors.white),
+              ),
               const TextSpan(text: ' · Δ '),
               TextSpan(
                 text: _fmtDelta(delta!),

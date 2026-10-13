@@ -109,6 +109,14 @@ const int expositorMonitorNum     = 20;
 const int colunasExpositorMonitor = 5;
 const int niveisExpositorMonitor  = 4;
 
+// O Balcão de Atendimento (7,95 m × 1,10 m, encostado no corredor da parede
+// esquerda) ganha número na mesma sequência das estruturas só para o mapa
+// saber desenhá-lo: ele NÃO tem endereços de produto e por isso fica fora de
+// ordemNavegacaoEstantes, de niveisProdutoPara e de numColunasPara. O número
+// 21 está reservado a ele de qualquer forma, para não ser reaproveitado por
+// uma estante futura que sim teria endereços.
+const int balcaoNum = 21;
+
 // A Estante Parede é uma peça física única (prateleiras verdes flutuantes
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
 // como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
@@ -139,6 +147,31 @@ const int colunasPalete    = 5;   // posições na frente (1,20 m ÷ 5 = 24 cm)
 const int fileirasPalete   = 3;   // posições na profundidade (1,00 m ÷ 3 ≈ 33 cm)
 
 bool ehPalete(int estanteNum) => estanteNum >= paleteNumMin;
+
+/// Rótulo curto de uma estrutura, do jeito que ela é etiquetada na loja:
+/// "G7", "E5", "P101". Paletes reutilizam local_tipo 'estante' no banco, mas
+/// nunca são apresentados como estante ao usuário.
+String rotuloCurtoEstrutura(String tipo, int numero) => tipo == 'gondola'
+    ? 'G$numero'
+    : ehPalete(numero)
+        ? 'P$numero'
+        : 'E$numero';
+
+/// "1 produto" / "3 produtos" — contagem já flexionada.
+///
+/// Existe porque os banners de conferência moram SOBRE os mapas: cada
+/// caractere gasto num "(s)" é mapa coberto, e um banner que cresce esconde
+/// justamente a estrutura que ele manda conferir. [plural] cobre os poucos
+/// casos em que o plural não é só um 's' ("posição" → "posições").
+String pluralizar(int n, String singular, [String? plural]) =>
+    '$n ${n == 1 ? singular : (plural ?? '${singular}s')}';
+
+/// Nome por extenso da estrutura: "Gôndola 7", "Estante 5", "Palete 101".
+String nomeEstrutura(String tipo, int numero) => tipo == 'gondola'
+    ? 'Gôndola $numero'
+    : ehPalete(numero)
+        ? 'Palete $numero'
+        : 'Estante $numero';
 
 /// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
 /// filosofia do faceFromPos): cada seção contribui com 2 posições.
@@ -305,6 +338,38 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
 // endereço desatualizado (Fase 2).
 const Color corConferenciaCiano = Color(0xFF22d3ee);
 
+/// Valor de `local_tipo` dos endereços do galpão em estoque_localizado.
+///
+/// A tabela é COMPARTILHADA com os apps irmãos (dashboard, inventariocamda,
+/// camda-estoque): é dela que saem o total do inventário cíclico e o Modo
+/// Conferência. O galpão entra nela como um terceiro tipo, ao lado de
+/// 'gondola' e 'estante' — com local_num = número da posição (1–129),
+/// face_ou_coluna = 0 (o galpão não tem face nem coluna) e andar_ou_nivel =
+/// ordem na pilha.
+///
+/// ATENÇÃO: os números de posição do galpão (1–129) SE SOBREPÕEM aos números
+/// de estante (1–21) e de palete (101+) — a parte 2 do galpão entra
+/// justamente na faixa dos paletes. Qualquer agrupamento de
+/// estoque_localizado tem de levar o local_tipo na chave, nunca só o
+/// local_num — foi assim que o galpão passou a somar quantidade dentro da
+/// estante de mesmo número.
+const String localTipoGalpao = 'galpao';
+
+/// Valor de `local_tipo` dos endereços do BARRACÃO em estoque_localizado.
+///
+/// Quarto tipo da tabela compartilhada, ao lado de 'gondola', 'estante' e
+/// 'galpao', pelo mesmo motivo que o galpão entrou nela: sem o espelho, o que
+/// está endereçado no barracão ficaria fora do inventário cíclico e do Modo
+/// Conferência dos apps irmãos.
+///
+/// `local_num` é o **id** da linha em `barracao_enderecos`, não o número do
+/// rótulo: o rótulo é texto ('BAR-07') e a coluna é inteira. face_ou_coluna e
+/// andar_ou_nivel ficam em 0 — o palete do barracão não tem face, coluna nem
+/// nível, ele É o endereço. Como no galpão, os ids se sobrepõem aos números de
+/// estante e de posição do galpão: qualquer agrupamento de estoque_localizado
+/// tem de levar o local_tipo na chave, nunca só o local_num.
+const String localTipoBarracao = 'barracao';
+
 /// Chave que identifica unicamente um endereço físico + produto, usada para
 /// casar linhas de estoque_localizado com o conjunto de endereços
 /// desatualizados (Fase 2 — aviso de endereço desatualizado).
@@ -315,6 +380,49 @@ String chaveEnderecoEstoque({
   required int faceOuColuna,
   required int andarOuNivel,
 }) => '$produtoCodigo|$localTipo|$localNum|$faceOuColuna|$andarOuNivel';
+
+/// Cor cinza dos produtos sem cor conhecida (fora do catálogo, categoria sem
+/// cor cadastrada, ou `cor_hex` inválido vindo do banco).
+const Color corProdutoDesconhecido = Color(0xFF888888);
+
+// Memo do parse de hex. São ~9 cores distintas em toda a loja (8 categorias +
+// o cinza), mas `corDeHex` é chamada uma vez por produto ao montar o mapa de
+// cores da cena — com o catálogo inteiro isso era um `int.parse` por produto,
+// a cada vez. O mapa cresce no máximo até o número de hexes distintos que o
+// banco tiver, então não precisa de limite nem de expiração.
+final Map<String, Color> _memoCores = {};
+
+/// Converte `#rrggbb` (ou `rrggbb`) na [Color] opaca correspondente,
+/// memoizando o resultado. Hex malformado devolve [corProdutoDesconhecido] —
+/// antes um `cor_hex` inválido no banco estourava dentro do `build()`.
+Color corDeHex(String hex) => _memoCores.putIfAbsent(hex, () {
+      final limpo = hex.startsWith('#') ? hex.substring(1) : hex;
+      // O comprimento tem de ser conferido: 'FF' + '' ainda é um hex válido
+      // (255), e sairia como azul transparente em vez de cair no cinza.
+      if (limpo.length != 6) return corProdutoDesconhecido;
+      final valor = int.tryParse('FF$limpo', radix: 16);
+      return valor == null ? corProdutoDesconhecido : Color(valor);
+    });
+
+/// Mapa código → cor para a cena pintar as caixas, combinando as duas fontes.
+///
+/// [doLayout] vem do `cor_hex` gravado nas próprias linhas de
+/// `gondola_layout`/`estante_layout` — chega junto com o layout, então serve
+/// para pintar já no primeiro frame, sem esperar o catálogo. [catalogo] vem do
+/// `estoque_mestre` e vence quando o produto existe nele: o `cor_hex` da linha
+/// foi gravado A PARTIR do catálogo no momento do save, então os dois só
+/// discordam se a categoria do produto mudou desde então — e aí o certo é a
+/// categoria de agora.
+Map<String, Color> mesclarCores(
+  Map<String, Color> doLayout,
+  List<Produto> catalogo,
+) {
+  final cores = <String, Color>{...doLayout};
+  for (final p in catalogo) {
+    cores[p.codigo] = p.cor;
+  }
+  return cores;
+}
 
 class Produto {
   final String codigo;
@@ -329,10 +437,30 @@ class Produto {
     required this.corHex,
   });
 
-  Color get cor {
-    final hex = corHex.replaceFirst('#', '');
-    return Color(int.parse('FF$hex', radix: 16));
+  Color get cor => corDeHex(corHex);
+}
+
+/// True quando duas leituras do catálogo trazem os mesmos produtos, na mesma
+/// ordem e com os mesmos campos.
+///
+/// Serve à revalidação em segundo plano do catálogo: a cópia em disco é
+/// devolvida na hora e o banco é lido logo atrás, mas avisar as telas
+/// (`dataRevision`) a cada abertura do app recarregaria todas as cenas sem
+/// motivo. Só há o que avisar quando o catálogo REALMENTE mudou.
+///
+/// A cor fica de fora porque é derivada da categoria (ver `categoriaCores`):
+/// comparar as duas seria comparar a mesma informação duas vezes.
+bool catalogosIguais(List<Produto> a, List<Produto> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i].codigo    != b[i].codigo ||
+        a[i].nome      != b[i].nome   ||
+        a[i].categoria != b[i].categoria) {
+      return false;
+    }
   }
+  return true;
 }
 
 /// Produtos com caixa num local (gôndola ou estante) para o dialog
