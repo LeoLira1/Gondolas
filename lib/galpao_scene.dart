@@ -16,6 +16,7 @@ import 'gondola_scene.dart'
         luzCena,
         corEnderecoDivergente,
         corEnderecoDivergentePositiva;
+import 'estocados_busca.dart' show chaveDestaque;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 import 'textura_piso.dart';
@@ -145,6 +146,7 @@ const Color _corVazioFraco = Color(0x1FFFFFFF);
 /// casaria com ele e acenderia o galpão todo.
 Color corRackGalpao({
   required String produtoCodigo,
+  String produtoNome = '',
   Map<String, Color> corPorProduto = const {},
   String? destacadoCodigo,
   bool modoConferencia = false,
@@ -159,7 +161,7 @@ Color corRackGalpao({
   }
   if (destacadoCodigo != null &&
       destacadoCodigo.isNotEmpty &&
-      produtoCodigo == destacadoCodigo) {
+      chaveDestaque(produtoCodigo, produtoNome) == destacadoCodigo) {
     return corCamda;
   }
   if (mostrarSaldo) {
@@ -400,6 +402,7 @@ class GalpaoPainter extends CustomPainter {
           // rota tem precedência, como nas estantes.
           final cor = corRackGalpao(
             produtoCodigo: rack.produtoCodigo,
+            produtoNome: rack.produtoNome,
             corPorProduto: corPorProduto,
             destacadoCodigo: codigoAceso,
             modoConferencia: modoConferencia,
@@ -410,7 +413,8 @@ class GalpaoPainter extends CustomPainter {
           final destacadoAceso =
               !modoConferencia &&
               codigoAceso != null &&
-              rack.produtoCodigo == codigoAceso;
+              chaveDestaque(rack.produtoCodigo, rack.produtoNome) ==
+                  codigoAceso;
           _desenharCubo(
             canvas,
             proj,

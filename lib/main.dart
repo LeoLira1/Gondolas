@@ -9,6 +9,7 @@ import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_parede_scene.dart';
 import 'estante_scene.dart';
+import 'estocados_busca.dart' show chaveDestaque;
 import 'estoque_localizado_service.dart';
 import 'fila_gravacao.dart';
 import 'expositor_magnojet_scene.dart';
@@ -335,14 +336,18 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GalpaoPage(
           posicaoInicial:  numero,
-          codigoDestacado: produto?.produtoCodigo,
+          codigoDestacado: produto == null
+              ? null
+              : chaveDestaque(produto.produtoCodigo, produto.nome),
         ),
       ));
     } else if (tipo == localTipoBarracao) {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => BarracaoPage(
           enderecoInicialId: numero,
-          codigoDestacado: produto?.produtoCodigo,
+          codigoDestacado: produto == null
+              ? null
+              : chaveDestaque(produto.produtoCodigo, produto.nome),
         ),
       ));
     } else if (tipo == 'gondola') {

@@ -7,6 +7,7 @@ import 'package:gondola_camda/barracao_config.dart';
 import 'package:gondola_camda/barracao_page.dart';
 import 'package:gondola_camda/barracao_scene.dart';
 import 'package:gondola_camda/barracao_service.dart';
+import 'package:gondola_camda/estocados_busca.dart' show chaveDestaque;
 import 'package:gondola_camda/gondola_scene.dart' show Camera, Vec3;
 import 'package:gondola_camda/models.dart' show Produto;
 
@@ -241,6 +242,26 @@ void main() {
           destacadoCodigo: 'X1',
         ),
         corCamdaBarracao,
+      );
+    });
+
+    test('estocado acende só o bag do cooperado buscado', () {
+      final chave = chaveDestaque('EST:49000', 'ZAPP QI 620 20L · JOAO');
+      expect(
+        corBagBarracao(
+          produtoCodigo:   'EST:49000',
+          produtoNome:     'ZAPP QI 620 20L · JOAO',
+          destacadoCodigo: chave,
+        ),
+        corCamdaBarracao,
+      );
+      expect(
+        corBagBarracao(
+          produtoCodigo:   'EST:49000',
+          produtoNome:     'ZAPP QI 620 20L · MARIA',
+          destacadoCodigo: chave,
+        ),
+        const Color(0xFF888888),
       );
     });
 
