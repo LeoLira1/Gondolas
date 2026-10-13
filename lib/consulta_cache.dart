@@ -120,7 +120,14 @@ class ConsultaCache {
 
   void expirar(String chave) => _ultimaTentativa.remove(chave);
 
-  void invalidarConsultasEmAndamento() => _geracao++;
+  /// Depois de um commit: a consulta que já estava no ar não pode mais
+  /// sobrescrever a cópia, e quem pedir atualização daqui para frente ganha
+  /// uma consulta NOVA — pegar carona na antiga devolveria o estado de antes
+  /// da gravação para quem pediu justamente para conferir a gravação.
+  void invalidarConsultasEmAndamento() {
+    _geracao++;
+    _emAndamento.clear();
+  }
 
   Future<void> atualizar() async {
     if (atualizando) return;

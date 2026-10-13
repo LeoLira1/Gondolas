@@ -8,11 +8,15 @@ import 'estocados_sheet.dart';
 import 'barracao_config.dart';
 import 'barracao_scene.dart' show BarracaoScene, corCamdaBarracao;
 import 'barracao_service.dart';
+import 'fila_gravacao.dart';
+import 'fila_gravacao_ui.dart';
+import 'gravacao_lote.dart';
 import 'galpao_page.dart'
     show LancamentoRecente, PainelEnderecoGalpao;
 import 'galpao_scene.dart' show RackGalpao, ToqueGalpao;
 import 'modo_conferencia_service.dart';
 import 'models.dart' show Produto, corConferenciaCiano, pluralizar;
+import 'outbox.dart' show gerarUuidV4;
 import 'turso_service.dart';
 
 /// Mapa 3D do BARRACÃO da CAMDA.
@@ -107,7 +111,13 @@ class _BarracaoPageState extends State<BarracaoPage> {
         _selecionadoId = widget.enderecoInicialId;
       }
     } else {
-      unawaited(_carregarEnderecos());
+      // Antes da leitura: o que ficou na fila entra por cima do banco.
+      _fila.addListener(_aoMudarFila);
+      _eventosFila = _fila.eventos.listen(_aoEventoFila);
+      _filaTinhaPendentes = _temPendentesBarracao;
+      unawaited(_fila.carregar().then((_) {
+        if (mounted) unawaited(_carregarEnderecos());
+      }));
     }
 
     final sementeCatalogo = widget.catalogoInicial;
@@ -130,6 +140,9 @@ class _BarracaoPageState extends State<BarracaoPage> {
   @override
   void dispose() {
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    if (_persistindo) _fila.removeListener(_aoMudarFila);
+    unawaited(_eventosFila?.cancel());
+    _recargaAposFila?.cancel();
     _buscaCtrl.dispose();
     super.dispose();
   }
@@ -144,6 +157,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
   }
 
   Future<void> _carregarEnderecos() async {
+    final versao = _versaoEnderecos;
     setState(() => _carregandoEnderecos = true);
     // Lê primeiro (cópia local responde na hora); o seed só entra quando o
     // cadastro está vazio, que é o único caso em que há o que semear.
@@ -152,6 +166,18 @@ class _BarracaoPageState extends State<BarracaoPage> {
       enderecos = await BarracaoService().carregarEnderecos();
     }
     if (!mounted) return;
+    if (versao != _versaoEnderecos) {
+      // Gravação confirmada no meio da leitura (ver galpão): a recarga do fim
+      // da fila traz o estado certo.
+      setState(() => _carregandoEnderecos = false);
+      return;
+    }
+    _aplicarEnderecosDoBanco(enderecos);
+  }
+
+  /// O banco + o que ainda está na fila, por cima.
+  void _aplicarEnderecosDoBanco(List<EnderecoBarracao> doBanco) {
+    final enderecos = aplicarPendentesBarracao(doBanco, _fila.pendentes);
     setState(() {
       _enderecos = List.unmodifiable(enderecos);
       _carregandoEnderecos = false;
@@ -219,20 +245,63 @@ class _BarracaoPageState extends State<BarracaoPage> {
   }
 
   // ── Gravação ───────────────────────────────────────────────────────────────
+  //
+  // Como no galpão: aplica na tela e põe na FilaGravacao, que leva ao banco em
+  // UMA requisição por palete e reenvia sozinha se a rede falhar. Só o que o
+  // banco recusa de verdade volta atrás, com aviso.
 
-  /// Grava um produto e uma quantidade no palete.
-  ///
-  /// Escreve na tela primeiro e no banco em seguida (UI otimista), como o
-  /// galpão: o barracão é usado em pé, com carga chegando, e esperar a ida ao
-  /// banco a cada palete travaria o ritmo. Se a gravação falhar, o estado
-  /// local volta atrás e o aviso é explícito — nunca fica um palete
-  /// "endereçado" só na tela.
-  Future<void> _gravar(
+  final FilaGravacao _fila = FilaGravacao();
+  StreamSubscription<EventoFila>? _eventosFila;
+  bool _filaTinhaPendentes = false;
+  Timer? _recargaAposFila;
+
+  /// Muda quando uma gravação do barracão é confirmada — leitura iniciada
+  /// antes disso é descartada.
+  int _versaoEnderecos = 0;
+
+  static bool _doBarracao(OperacaoPendente op) =>
+      op.tipo == TipoOperacao.barracaoAtribuir ||
+      op.tipo == TipoOperacao.barracaoEsvaziar;
+
+  bool get _temPendentesBarracao => _fila.pendentes.any(_doBarracao);
+
+  void _aoMudarFila() {
+    if (!mounted) return;
+    final tem = _temPendentesBarracao;
+    if (_filaTinhaPendentes && !tem) {
+      _recargaAposFila?.cancel();
+      _recargaAposFila = Timer(
+        const Duration(milliseconds: 800),
+        () => unawaited(_recarregarDoBanco()),
+      );
+    }
+    _filaTinhaPendentes = tem;
+    setState(() {});
+  }
+
+  void _aoEventoFila(EventoFila evento) {
+    if (!mounted || !_doBarracao(evento.operacao)) return;
+    _versaoEnderecos++;
+    if (evento.gravada) return;
+    _avisar(mensagemFalhaFila(evento));
+    unawaited(_recarregarDoBanco());
+  }
+
+  Future<void> _recarregarDoBanco() async {
+    final versao = _versaoEnderecos;
+    final enderecos = await BarracaoService().recarregarEnderecos();
+    if (!mounted || enderecos == null || versao != _versaoEnderecos) return;
+    _aplicarEnderecosDoBanco(enderecos);
+  }
+
+  /// Grava um produto e uma quantidade no palete: na tela agora, no banco
+  /// pela fila.
+  void _gravar(
     int id, {
     required String codigo,
     required String nome,
     required double quantidade,
-  }) async {
+  }) {
     final antes = _porId(id);
     if (antes == null) return;
 
@@ -242,20 +311,19 @@ class _BarracaoPageState extends State<BarracaoPage> {
           quantidade:    quantidade,
         )));
     if (!_persistindo) return;
-
-    final gravado = await BarracaoService().atribuir(
-      id:            id,
+    unawaited(_fila.enfileirar(OperacaoPendente(
+      uuid:          gerarUuidV4(),
+      tipo:          TipoOperacao.barracaoAtribuir,
+      banco:         TursoService().identidadeAtiva ?? '',
+      criadaEm:      DateTime.now(),
+      local:         id,
       produtoCodigo: codigo,
       produtoNome:   nome,
       quantidade:    quantidade,
-    );
-    if (!mounted) return;
-    if (gravado == null) {
-      setState(() => _substituir(antes));
-      _avisar('Não deu para gravar no banco — confira a conexão em ⚙️.');
-    } else {
-      setState(() => _substituir(gravado));
-    }
+      quantidadeAnterior:
+          antes.produtoCodigo == codigo ? antes.quantidade : null,
+      rotulo:        antes.rotulo,
+    )));
   }
 
   /// Lança um produto num palete livre.
@@ -264,7 +332,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
   /// palete, e o produto recém-lançado fica nos últimos lançados — o atalho
   /// de quando chega carga e o mesmo produto vai para vários endereços
   /// seguidos.
-  Future<void> _lancar(int id, Produto produto, double quantidade) async {
+  void _lancar(int id, Produto produto, double quantidade) {
     setState(() {
       _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
       _recentes.insert(
@@ -272,7 +340,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
       if (_recentes.length > _maxRecentes) _recentes.removeLast();
       _selecionadoId = null;
     });
-    await _gravar(id,
+    _gravar(id,
         codigo: produto.codigo, nome: produto.nome, quantidade: quantidade);
   }
 
@@ -284,17 +352,17 @@ class _BarracaoPageState extends State<BarracaoPage> {
   /// Ao contrário de [_lancar], NÃO mexe nos últimos lançados nem fecha o
   /// painel: corrigir uma contagem não é distribuir carga, e quem acabou de
   /// corrigir quer ver o número novo no lugar.
-  Future<void> _ajustar(int id, double quantidade) async {
+  void _ajustar(int id, double quantidade) {
     final atual = _porId(id);
     if (atual == null || !atual.ocupado || quantidade <= 0) return;
     if (quantidade == atual.quantidade) return;
-    await _gravar(id,
+    _gravar(id,
         codigo:     atual.produtoCodigo,
         nome:       atual.produtoNome,
         quantidade: quantidade);
   }
 
-  Future<void> _esvaziar(int id) async {
+  void _esvaziar(int id) {
     final antes = _porId(id);
     if (antes == null) return;
     setState(() {
@@ -302,15 +370,17 @@ class _BarracaoPageState extends State<BarracaoPage> {
       _selecionadoId = null;
     });
     if (!_persistindo) return;
-
-    final gravado = await BarracaoService().esvaziar(id: id);
-    if (!mounted) return;
-    if (gravado == null) {
-      setState(() => _substituir(antes));
-      _avisar('Não deu para esvaziar no banco — confira a conexão em ⚙️.');
-    } else {
-      setState(() => _substituir(gravado));
-    }
+    unawaited(_fila.enfileirar(OperacaoPendente(
+      uuid:               gerarUuidV4(),
+      tipo:               TipoOperacao.barracaoEsvaziar,
+      banco:              TursoService().identidadeAtiva ?? '',
+      criadaEm:           DateTime.now(),
+      local:              id,
+      produtoCodigo:      antes.produtoCodigo,
+      produtoNome:        antes.produtoNome,
+      quantidadeAnterior: antes.quantidade,
+      rotulo:             antes.rotulo,
+    )));
   }
 
   // ── Busca de paletes ───────────────────────────────────────────────────────
@@ -380,6 +450,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(mensagem),
       behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6),
     ));
   }
 
@@ -421,6 +492,9 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final aberto = toque == null ? null : _porId(toque.posicao);
 
     return Scaffold(
+      bottomNavigationBar: _persistindo && !_fila.vazia
+          ? BarraFilaGravacao(fila: _fila)
+          : null,
       backgroundColor: const Color(0xFF0b0c0e),
       body: Stack(
         children: [

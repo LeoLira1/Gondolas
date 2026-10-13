@@ -18,3 +18,4 @@ jobs:
       - run: flutter test
       - run: dart tool/verify_recovery.dart
       - run: python3 tool/verify_rack_sql.py "$(command -v dart)"
+      - run: python3 tool/verify_gravacao_sql.py "$(command -v dart)"

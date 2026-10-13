@@ -404,20 +404,18 @@ class BaixaPorContagemService {
       if (a.endereco.rackUuid == null) return false;
       final ok = a.esvazia
           ? await GalpaoService().esvaziar(
-                  rackUuid: a.endereco.rackUuid,
-                  posicao: a.endereco.localNum,
-                  ordem: a.endereco.andarOuNivel,
-                  origem: origemLog,
-                ) !=
-                null
+              rackUuid: a.endereco.rackUuid,
+              posicao: a.endereco.localNum,
+              ordem: a.endereco.andarOuNivel,
+              origem: origemLog,
+            )
           : await GalpaoService().ajustarQuantidade(
-                  rackUuid: a.endereco.rackUuid,
-                  posicao: a.endereco.localNum,
-                  ordem: a.endereco.andarOuNivel,
-                  quantidade: a.qtdNova,
-                  origem: origemLog,
-                ) !=
-                null;
+              rackUuid: a.endereco.rackUuid,
+              posicao: a.endereco.localNum,
+              ordem: a.endereco.andarOuNivel,
+              quantidade: a.qtdNova,
+              origem: origemLog,
+            );
       if (!ok) return false;
     }
 

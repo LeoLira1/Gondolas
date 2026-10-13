@@ -72,15 +72,16 @@ void main() {
       expect(await GalpaoService().garantirSeed(forcar: true), isFalse);
     });
 
-    test('lancar e esvaziar devolvem null (a página desfaz e avisa)', () async {
+    test('lancar e esvaziar devolvem false (quem chamou sabe que não gravou)',
+        () async {
       expect(
         await GalpaoService().lancar(
             posicao: 1, produtoCodigo: 'X', produtoNome: 'X', quantidade: 1),
-        isNull,
+        isFalse,
       );
       expect(
-        await GalpaoService().esvaziar(posicao: 1, ordem: 1),
-        isNull,
+        await GalpaoService().esvaziar(posicao: 1, ordem: 1, rackUuid: 'r'),
+        isFalse,
       );
     });
   });

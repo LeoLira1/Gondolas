@@ -1,4 +1,5 @@
 import 'galpao_config.dart';
+import 'gravacao_lote.dart';
 import 'rack_model.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,17 +18,24 @@ import 'rack_model.dart';
 // transação do banco sem reescrever nada.
 
 /// Pilha com um rack novo no topo, ou null se a pilha já está cheia.
+///
+/// [rackUuid] é a identidade que o rack terá no banco — a tela já a conhece
+/// porque é ela que a sorteia (ver OperacaoPendente.uuid), e é com ela que um
+/// ajuste feito logo em seguida, antes de o lançamento chegar ao servidor,
+/// acha o rack certo.
 List<RackGalpao>? pilhaAposLancar(
   List<RackGalpao> pilha, {
   required int posicao,
   required String produtoCodigo,
   required String produtoNome,
   required double quantidade,
+  String? rackUuid,
 }) {
   if (pilha.length >= GalpaoConfig.niveisMax) return null;
   return [
     ...pilha,
     RackGalpao(
+      rackUuid: rackUuid,
       posicao: posicao,
       ordem: pilha.length + 1,
       produtoCodigo: produtoCodigo,
@@ -90,4 +98,61 @@ List<RackGalpao> pilhaAposAjustar(
           quantidade: quantidade,
         ),
   ];
+}
+
+/// O galpão como a pessoa o vê: o que veio do banco com as gravações ainda na
+/// fila aplicadas por cima, na ordem em que foram feitas.
+///
+/// É o que deixa a tela recarregar do banco a qualquer momento — sincronização
+/// de outro aparelho, volta do app, fim da fila — sem um rack lançado offline
+/// sumir até a rede deixar enviá-lo. Cada operação é aplicada pelo rack que
+/// ela nomeia (o UUID), nunca pelo nível: o nível do banco pode já ser outro.
+///
+/// Operação que já está no banco não é aplicada duas vezes: o lançamento cujo
+/// rack já veio na leitura é pulado, e ajuste/esvaziamento são absolutos (o
+/// rack ausente simplesmente não é tocado).
+Map<int, List<RackGalpao>> aplicarPendentesGalpao(
+  Map<int, List<RackGalpao>> pilhas,
+  Iterable<OperacaoPendente> pendentes,
+) {
+  final resultado = {
+    for (final e in pilhas.entries) e.key: List<RackGalpao>.of(e.value),
+  };
+  for (final op in pendentes) {
+    if (!op.tipo.doGalpao) continue;
+    final pilha = resultado[op.local] ?? const <RackGalpao>[];
+    switch (op.tipo) {
+      case TipoOperacao.galpaoLancar:
+        if (pilha.any((r) => r.rackUuid == op.uuid)) continue;
+        final nova = pilhaAposLancar(
+          pilha,
+          posicao: op.local,
+          produtoCodigo: op.produtoCodigo,
+          produtoNome: op.produtoNome,
+          quantidade: op.quantidade,
+          rackUuid: op.uuid,
+        );
+        if (nova != null) resultado[op.local] = nova;
+      case TipoOperacao.galpaoAjustar:
+        final i = pilha.indexWhere((r) => r.rackUuid == op.rackUuid);
+        if (i < 0) continue;
+        resultado[op.local] = pilhaAposAjustar(
+          pilha,
+          pilha[i].ordem,
+          op.quantidade,
+        );
+      case TipoOperacao.galpaoEsvaziar:
+        final i = pilha.indexWhere((r) => r.rackUuid == op.rackUuid);
+        if (i < 0) continue;
+        final nova = pilhaAposEsvaziar(pilha, pilha[i].ordem);
+        if (nova.isEmpty) {
+          resultado.remove(op.local);
+        } else {
+          resultado[op.local] = nova;
+        }
+      default:
+        continue;
+    }
+  }
+  return resultado;
 }
