@@ -38,8 +38,13 @@ class ConsultaCache {
   /// uma tentativa que falhou não deixa a cópia mais nova.
   final _sucessoEm = <String, DateTime>{};
 
-  /// Última vez que alguém (fora do prewarm) leu a chave.
-  final _ultimoUso = <String, DateTime>{};
+  /// Chaves que alguém (fora do prewarm) leu nesta sessão.
+  final _usadas = <String>{};
+
+  /// Quantas vezes a idade de cada chave foi apagada ([expirar],
+  /// [esquecerCarimboEmDisco]). Uma leitura que começou antes disso não pode
+  /// devolver a idade à cópia: ela pode ter saído antes da gravação.
+  final _esquecimentos = <String, int>{};
   final _persistencias = <String, Future<void>>{};
   final _janelas = <String, Duration>{};
   final _somenteLeitura = <String>{};
@@ -99,7 +104,7 @@ class ConsultaCache {
     } else {
       _semAviso.add(chave);
     }
-    if (Zone.current[zonaSemUso] != true) _ultimoUso[chave] = DateTime.now();
+    if (Zone.current[zonaSemUso] != true) _usadas.add(chave);
     if (usarCache) await _carregarDoDisco(chave);
     final atual = _valores[chave];
     if (usarCache && !forceRefresh && atual != null) {
@@ -120,29 +125,40 @@ class ConsultaCache {
 
   /// Traz do disco a cópia e o carimbo do último sucesso, se ainda não estão
   /// em memória. True quando há cópia.
+  ///
+  /// A cópia e o carimbo entram em memória JUNTOS, sem espera no meio: duas
+  /// leituras da mesma chave na abertura (os selos pedem as quantidades duas
+  /// vezes no mesmo instante) viam a cópia já carregada e o carimbo ainda não,
+  /// e a segunda relia a tabela inteira achando a cópia vencida.
   Future<bool> _carregarDoDisco(String chave) async {
     if (_valores.containsKey(chave)) return true;
+    final String? texto;
+    String? textoCarimbo;
     try {
-      final texto = await lerDisco(chave);
-      if (texto == null || _valores.containsKey(chave)) {
-        return _valores.containsKey(chave);
-      }
+      texto = await lerDisco(chave);
+    } catch (_) {
+      return _valores.containsKey(chave);
+    }
+    if (texto == null || _valores.containsKey(chave)) {
+      return _valores.containsKey(chave);
+    }
+    try {
+      textoCarimbo = await lerDisco(_chaveCarimbo(chave));
+    } catch (_) {
+      // Sem carimbo a cópia vale como vencida: a primeira leitura relê.
+    }
+    if (_valores.containsKey(chave)) return true;
+    try {
       _valores[chave] = (jsonDecode(texto) as List)
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();
     } catch (_) {
-      return _valores.containsKey(chave); // Cópia inválida: buscar no banco.
+      return false; // Cópia inválida: buscar no banco.
     }
-    try {
-      final carimbo = DateTime.tryParse(
-        await lerDisco(_chaveCarimbo(chave)) ?? '',
-      );
-      if (carimbo != null && !_sucessoEm.containsKey(chave)) {
-        _sucessoEm[chave] = carimbo;
-        _ultimaTentativa.putIfAbsent(chave, () => carimbo);
-      }
-    } catch (_) {
-      // Sem carimbo a cópia vale como vencida: a primeira leitura relê.
+    final carimbo = DateTime.tryParse(textoCarimbo ?? '');
+    if (carimbo != null && !_sucessoEm.containsKey(chave)) {
+      _sucessoEm[chave] = carimbo;
+      _ultimaTentativa.putIfAbsent(chave, () => carimbo);
     }
     return true;
   }
@@ -150,14 +166,17 @@ class ConsultaCache {
   Future<LinhasConsulta> _atualizar(String chave) {
     final existente = _emAndamento[chave];
     if (existente != null) return existente;
+    final consultar = _consultas[chave];
+    if (consultar == null) return Future.value(_copiar(_valores[chave] ?? []));
     final geracao = _geracao;
     final geracaoChave = _geracoes[chave] ?? 0;
+    final esquecimentos = _esquecimentos[chave] ?? 0;
     final inicio = DateTime.now();
     _ultimaTentativa[chave] = inicio;
     late final Future<LinhasConsulta> futuro;
     futuro =
         Future<LinhasConsulta>(() async {
-          final novo = await _consultas[chave]!();
+          final novo = await consultar();
           final invalidada =
               geracaoChave != (_geracoes[chave] ?? 0) ||
               (geracao != _geracao && !_somenteLeitura.contains(chave));
@@ -178,10 +197,22 @@ class ConsultaCache {
           final mudou =
               anterior != null && _assinatura(anterior) != _assinatura(novo);
           _valores[chave] = _copiar(novo);
-          _sucessoEm[chave] = inicio;
+          // Idade apagada no meio da leitura (uma gravação que ainda vai ser
+          // corrigida): as linhas ficam, mas a cópia não volta a parecer
+          // fresca — nem em memória, nem no disco.
+          final esquecida = esquecimentos != (_esquecimentos[chave] ?? 0);
+          if (!esquecida) _sucessoEm[chave] = inicio;
           await _persistir(chave, jsonEncode(novo));
-          unawaited(_persistir(_chaveCarimbo(chave), inicio.toIso8601String()));
-          if (mudou && !_semAviso.contains(chave)) aoAtualizar();
+          if (!esquecida) {
+            unawaited(
+              _persistir(_chaveCarimbo(chave), inicio.toIso8601String()),
+            );
+          }
+          // Fora da zona do prewarm: o aviso dispara recargas nas telas (e
+          // os timers delas), e essas leituras contam como uso.
+          if (mudou && !_semAviso.contains(chave)) {
+            runZoned(aoAtualizar, zoneValues: {zonaSemUso: false});
+          }
           return novo;
         }).whenComplete(() {
           if (identical(_emAndamento[chave], futuro))
@@ -220,13 +251,20 @@ class ConsultaCache {
   /// a cópia a cada gravação, e o que outro aparelho mudou nunca chegava.
   /// [ordenar] mantém a ordem da cópia (as linhas novas iriam para o fim).
   /// Devolve a cópia inteira já corrigida, ou null quando não havia cópia.
+  ///
+  /// Sem cópia, a leitura completa que estiver no ar é descartada: ela pode
+  /// ter saído antes da gravação que se queria corrigir, e guardá-la como
+  /// fresca esconderia a gravação até a janela vencer.
   Future<LinhasConsulta?> atualizarParte(
     String chave,
     bool Function(Map<String, dynamic>) pertence,
     LinhasConsulta novas, {
     int Function(Map<String, dynamic>, Map<String, dynamic>)? ordenar,
   }) async {
-    if (!await _carregarDoDisco(chave)) return null;
+    if (!await _carregarDoDisco(chave)) {
+      invalidarConsultasEmAndamento([chave]);
+      return null;
+    }
     final linhas = [..._valores[chave]!.where((r) => !pertence(r)), ...novas];
     if (ordenar != null) linhas.sort(ordenar);
     await confirmar(chave, linhas, renovarJanela: false);
@@ -238,14 +276,27 @@ class ConsultaCache {
   void expirar(String chave) {
     _ultimaTentativa.remove(chave);
     _sucessoEm.remove(chave);
-    unawaited(_persistir(_chaveCarimbo(chave), ''));
+    esquecerCarimboEmDisco(chave);
   }
 
   /// Só o carimbo em disco: a cópia vale nesta sessão como está, mas uma
   /// reabertura do app a trata como vencida. É para quando a cópia ainda
   /// vai ser corrigida em memória e o app pode morrer antes disso.
-  void esquecerCarimboEmDisco(String chave) =>
-      unawaited(_persistir(_chaveCarimbo(chave), ''));
+  void esquecerCarimboEmDisco(String chave) {
+    _esquecimentos[chave] = (_esquecimentos[chave] ?? 0) + 1;
+    unawaited(_persistir(_chaveCarimbo(chave), ''));
+  }
+
+  /// Tira [chave] das consultas conhecidas: o Sincronizar e a volta ao app
+  /// deixam de relê-la. É para consulta que nem existe neste banco (tabela
+  /// ou coluna ausente) — relida a cada Sincronizar, ela falhava sempre e
+  /// levava o Sincronizar inteiro junto. A cópia que houver continua.
+  void esquecer(String chave) {
+    _consultas.remove(chave);
+    _janelas.remove(chave);
+    _usadas.remove(chave);
+    _emAndamento.remove(chave);
+  }
 
   /// True quando a cópia de [chave] não teve leitura bem-sucedida dentro de
   /// [janela] (ou não existe). Lê o carimbo do disco se preciso.
@@ -277,15 +328,20 @@ class ConsultaCache {
 
   /// Relê as consultas conhecidas.
   ///
-  /// Com [soVencidas], só as que passaram da própria janela; com [usadasHa],
-  /// só as lidas por alguém nesse intervalo (o prewarm não conta). É o que a
-  /// volta ao app usa, para não reler o estoque_mestre inteiro nem os ~35
-  /// layouts que ninguém abriu a cada desbloqueio de tela. Uma volta ao app
-  /// com outra passada no ar não faz nada.
+  /// Com [soVencidas], só as que passaram da própria janela; com [soUsadas],
+  /// só as que alguém leu nesta sessão (o prewarm não conta). É o que a volta
+  /// ao app usa, para não reler o estoque_mestre inteiro nem os ~35 layouts
+  /// que ninguém abriu a cada desbloqueio de tela. Sem prazo no uso: a tela
+  /// que ficou aberta com o celular bloqueado horas a fio não relê nada
+  /// enquanto isso, e é ela que precisa estar em dia no desbloqueio. Uma
+  /// volta ao app com outra passada no ar não faz nada.
   ///
   /// Sem filtro (o Sincronizar) espera a passada em andamento e relê TUDO —
   /// antes, ele voltava na hora sem reler nada e ainda avisava sucesso.
-  Future<void> atualizar({bool soVencidas = false, Duration? usadasHa}) async {
+  Future<void> atualizar({
+    bool soVencidas = false,
+    bool soUsadas = false,
+  }) async {
     final emCurso = _passada;
     if (emCurso != null) {
       if (soVencidas) return;
@@ -293,11 +349,8 @@ class ConsultaCache {
     }
     final agora = DateTime.now();
     final chaves = _consultas.keys.where((chave) {
-      if (!soVencidas) return true;
-      if (!_tentativaVencida(chave, agora)) return false;
-      if (usadasHa == null) return true;
-      final uso = _ultimoUso[chave];
-      return uso != null && agora.difference(uso) <= usadasHa;
+      if (soVencidas && !_tentativaVencida(chave, agora)) return false;
+      return !soUsadas || _usadas.contains(chave);
     }).toList();
     final futuro = Future.wait(chaves.map(_atualizar));
     _passada = futuro;

@@ -17,8 +17,13 @@
 
 /// Última contagem de cada produto no inventário cíclico.
 const String sqlUltimaContagemCiclico =
+    '$sqlUltimaContagemCiclicoBase GROUP BY produto_id';
+
+/// O mesmo SELECT sem o GROUP BY, para quem relê um produto só
+/// (`... AND produto_id = ? GROUP BY produto_id`).
+const String sqlUltimaContagemCiclicoBase =
     'SELECT produto_id AS produto_codigo, MAX(contado_em) AS ultima '
-    'FROM inventario_cicli WHERE contado_em IS NOT NULL GROUP BY produto_id';
+    'FROM inventario_cicli WHERE contado_em IS NOT NULL';
 
 /// Última contagem CONFIRMADA de cada código no app de contagem, pela coluna
 /// de confirmação que existir no banco (`confirmado_em` ou `registrado_em`).

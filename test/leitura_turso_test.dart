@@ -335,19 +335,115 @@ void main() {
     });
 
     test('tentativa que falhou não deixa a cópia mais nova', () async {
-      final cache = _cache();
+      final disco = <String, String>{};
+      final cache = _cacheComDisco(disco);
       final tabela = _Tabela([
         {'x': 1},
       ]);
       await cache.ler('t', tabela.ler, janela: Duration.zero);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await _assentar();
+      final carimbo = disco['t|em'];
+      await Future<void>.delayed(const Duration(milliseconds: 60));
       await cache.ler(
         't',
         () async => throw StateError('sem rede'),
         janela: Duration.zero,
       );
       await _assentar();
-      expect(await cache.vencida('t', const Duration(milliseconds: 1)), isTrue);
+      // A janela cai entre o sucesso (60 ms atrás) e a falha (agora): se a
+      // falha contasse como sucesso, a cópia pareceria fresca.
+      expect(
+        await cache.vencida('t', const Duration(milliseconds: 30)),
+        isTrue,
+      );
+      expect(disco['t|em'], carimbo);
+    });
+
+    test('leitura que começou antes de apagarem a idade não a devolve',
+        () async {
+      // A fila grava um palete com uma leitura inteira das quantidades no
+      // ar: o carimbo sai do disco (a correção ainda vai ser feita) e a
+      // leitura, que pode ter saído antes do commit, não pode recolocá-lo.
+      final disco = <String, String>{};
+      final cache = _cacheComDisco(disco);
+      final rede = Completer<LinhasConsulta>();
+      final leitura = cache.ler('q', () => rede.future, forceRefresh: true);
+      await Future<void>.delayed(Duration.zero);
+      cache.esquecerCarimboEmDisco('q');
+      rede.complete([
+        {'antes': true},
+      ]);
+      await leitura;
+      await _assentar();
+      expect(disco['q|em'], isEmpty);
+      expect(await _cacheComDisco(disco).vencida('q', janela), isTrue);
+
+      final expirada = Completer<LinhasConsulta>();
+      final outra = cache.ler('e', () => expirada.future, forceRefresh: true);
+      await Future<void>.delayed(Duration.zero);
+      cache.expirar('e');
+      expirada.complete([
+        {'antes': true},
+      ]);
+      await outra;
+      expect(await cache.vencida('e', janela), isTrue);
+    });
+
+    test('duas leituras da mesma chave na abertura respeitam o carimbo',
+        () async {
+      final disco = <String, String>{};
+      final tabela = _Tabela([
+        {'x': 1},
+      ]);
+      await _cacheComDisco(disco).ler('q', tabela.ler, janela: janela);
+      await _assentar();
+
+      final reaberto = _cacheComDisco(disco);
+      await Future.wait([
+        reaberto.ler('q', tabela.ler, janela: janela),
+        reaberto.ler('q', tabela.ler, janela: janela),
+        reaberto.vencida('q', janela),
+      ]);
+      await _assentar();
+      expect(tabela.leituras, 1, reason: 'o carimbo de 0 s vale para as duas');
+      expect(await reaberto.vencida('q', janela), isFalse);
+    });
+
+    test('corrigir sem cópia descarta a leitura inteira que estava no ar',
+        () async {
+      final cache = _cache();
+      final antiga = Completer<LinhasConsulta>();
+      var leituras = 0;
+      Future<LinhasConsulta> ler() {
+        leituras++;
+        return leituras == 1
+            ? antiga.future
+            : Future.value([
+                {'local': 1, 'depois': true},
+              ]);
+      }
+
+      final primeira = cache.ler('q', ler);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        await cache.atualizarParte('q', (r) => r['local'] == 1, [
+          {'local': 1, 'depois': true},
+        ]),
+        isNull,
+      );
+      final segunda = cache.ler('q', ler);
+      antiga.complete([
+        {'local': 1, 'antes': true},
+      ]);
+      await primeira;
+      expect((await segunda).single['depois'], isTrue);
+      expect(leituras, 2);
+      final guardada = await cache.ler(
+        'q',
+        () async => throw StateError('não devia ir ao banco'),
+        janela: const Duration(hours: 1),
+      );
+      expect(guardada.single['depois'], isTrue);
     });
 
     test('correção parcial não renova a janela da cópia inteira', () async {
@@ -415,16 +511,68 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 2));
 
-      await cache.atualizar(
-        soVencidas: true,
-        usadasHa: const Duration(hours: 2),
-      );
+      await cache.atualizar(soVencidas: true, soUsadas: true);
       expect(usada.leituras, 2);
       expect(soPrewarm.leituras, 1);
 
       // O Sincronizar continua relendo tudo.
       await cache.atualizar();
       expect(soPrewarm.leituras, 2);
+    });
+
+    test('a recarga que o aviso de uma leitura do prewarm dispara conta como uso',
+        () async {
+      // A tela recarrega pelo aviso; se herdasse a zona do prewarm, as
+      // consultas dela nunca contariam como uso e a volta ao app as pularia.
+      late ConsultaCache cache;
+      final tela = _Tabela([
+        {'t': 1},
+      ]);
+      final recargas = <Future<void>>[];
+      cache = _cache(
+        aoAtualizar: () => recargas.add(
+          Future<void>.delayed(
+            Duration.zero,
+            () => cache.ler('tela', tela.ler, janela: Duration.zero),
+          ),
+        ),
+      );
+      final mestre = _Tabela([
+        {'m': 1},
+      ]);
+      await cache.ler('mestre', mestre.ler, janela: Duration.zero);
+      mestre.linhas = [
+        {'m': 2},
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await ConsultaCache.semMarcarUso(
+        () => cache.ler('mestre', mestre.ler, forceRefresh: true),
+      );
+      await Future.wait(recargas);
+      expect(recargas, hasLength(1));
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+
+      await cache.atualizar(soVencidas: true, soUsadas: true);
+      expect(tela.leituras, 2);
+    });
+
+    test('consulta esquecida sai do Sincronizar', () async {
+      final cache = _cache();
+      final boa = _Tabela([
+        {'x': 1},
+      ]);
+      await cache.ler('boa', boa.ler);
+      await expectLater(
+        cache.ler(
+          'coluna_ausente',
+          () async => throw StateError('no such column: confirmado_em'),
+          falharSemCache: true,
+        ),
+        throwsStateError,
+      );
+      cache.esquecer('coluna_ausente');
+      await cache.atualizar();
+      expect(boa.leituras, 2);
     });
 
     test('Sincronizar durante a volta ao app espera e relê tudo', () async {

@@ -7,6 +7,10 @@
 >   `tool/verify_badges_sql.py` (o texto abaixo dizia `toString()`).
 > - A releitura das posições do galpão tem teste na `ConsultaCache` (ordem da correção parcial), não no
 >   `GalpaoService`.
+> - Depois da revisão: a volta ao app relê as chaves usadas na sessão, sem o prazo de 2 h (a tela aberta
+>   com o celular bloqueado ficava de fora); "concluir contagem" relê do banco as linhas do produto nas
+>   cópias dos selos em vez de montá-las; a baixa espera a correção da cópia antes do aviso final; a
+>   conferência guardada também cai com o Sincronizar de qualquer tela.
 > - Falta a medição no campo (gráfico de Rows Read de um dia de loja e galpão).
 
 ## Contexto

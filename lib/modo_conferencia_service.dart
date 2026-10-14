@@ -323,6 +323,7 @@ class ModoConferenciaService {
   ModoConferenciaResultado? _guardada;
   DateTime? _guardadaEm;
   String? _guardadaDoBanco;
+  int? _guardadaNaInvalidacao;
   Future<ModoConferenciaResultado>? _emAndamento;
   int _geracao = 0;
 
@@ -350,10 +351,14 @@ class ModoConferenciaService {
   Future<ModoConferenciaResultado> buscarConferenciaDoDia({
     bool forcar = false,
   }) {
+    // Outro banco, ou um Sincronizar (de qualquer tela) desde a guardada:
+    // ela não vale mais.
     final banco = TursoService().identidadeAtiva;
-    if (banco != _guardadaDoBanco) {
+    final invalidacao = TursoService().leiturasInvalidadas;
+    if (banco != _guardadaDoBanco || invalidacao != _guardadaNaInvalidacao) {
       esquecer();
       _guardadaDoBanco = banco;
+      _guardadaNaInvalidacao = invalidacao;
     }
     if (!forcar) {
       final guardada = _guardada;

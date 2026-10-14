@@ -237,7 +237,14 @@ class TursoService {
                       .timeout(_timeoutLeitura)
                   as List<dynamic>;
           return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-        } catch (_) {
+        } catch (e) {
+          // Tabela ou coluna que não existe neste banco: a consulta sai das
+          // conhecidas, senão o Sincronizar a relia, falhava sempre e dava o
+          // banco inteiro como fora do ar. Quem pediu decide o que fazer.
+          if (erroDeTabelaAusente(e) || erroDeColunaAusente(e)) {
+            _consultaCache.esquecer(completa);
+            rethrow;
+          }
           _renovarClienteDeLeitura(cliente);
           rethrow;
         }
@@ -464,14 +471,11 @@ class TursoService {
   static const Duration intervaloVoltaAoApp = Duration(minutes: 5);
   DateTime? _ultimaVoltaAoApp;
 
-  /// Uma consulta só é relida na volta ao app se alguém a usou nesse
-  /// intervalo. O prewarm lê ~35 layouts e as buscas na abertura, e reler
-  /// tudo isso a cada desbloqueio no galpão — onde ninguém abre gôndola — era
-  /// o grosso do custo da volta.
-  static const Duration usoRecente = Duration(hours: 2);
-
   /// Na volta do aplicativo a consulta acontece atrás da cena já visível, e
-  /// só para as consultas em uso cuja janela já passou.
+  /// só para as consultas cuja janela já passou e que alguém usou nesta
+  /// sessão. O prewarm lê ~35 layouts e as buscas na abertura, e reler tudo
+  /// isso a cada desbloqueio no galpão — onde ninguém abre gôndola — era o
+  /// grosso do custo da volta.
   Future<void> atualizarConsultas() async {
     if (_consultaCache.atualizando) return;
     final ultima = _ultimaVoltaAoApp;
@@ -481,7 +485,7 @@ class TursoService {
     }
     _ultimaVoltaAoApp = DateTime.now();
     try {
-      await _consultaCache.atualizar(soVencidas: true, usadasHa: usoRecente);
+      await _consultaCache.atualizar(soVencidas: true, soUsadas: true);
     } catch (_) {
       _ultimoErroSync =
           'Não foi possível atualizar. Os dados anteriores continuam visíveis.';
@@ -1697,10 +1701,16 @@ class TursoService {
     }
   }
 
+  /// Quantas vezes [_invalidarCachesDeLeitura] rodou: quem guarda leitura
+  /// própria fora daqui (a conferência do dia) compara para saber que o
+  /// Sincronizar (ou uma reconexão) passou e a dele não vale mais.
+  int leiturasInvalidadas = 0;
+
   /// Zera tudo que é leitura em cache (catálogo e layouts). Chamado nos quatro
   /// pontos em que a base sob o app pode ter mudado por inteiro: reconexão,
   /// carga inicial, sincronização e limpeza do cache local.
   void _invalidarCachesDeLeitura() {
+    leiturasInvalidadas++;
     _produtosCache = null;
     _produtosCacheEm = null;
     // Locais anotados ainda sem correção: a cópia das quantidades está sem
@@ -3266,7 +3276,7 @@ class TursoService {
   /// Última contagem de cada produto no inventário cíclico (inventario_cicli,
   /// gravado por este app em concluirContagem e pelos apps irmãos): linhas
   /// `produto_codigo`, `ultima`. Corrigida na hora por
-  /// [registrarContagemCiclico] depois de uma contagem concluída aqui.
+  /// [registrarContagemConcluida] depois de uma contagem concluída aqui.
   Future<List<Map<String, dynamic>>> consultarUltimasContagensCiclico({
     bool forceRefresh = false,
   }) => consultarComCache(
@@ -3280,7 +3290,7 @@ class TursoService {
 
   /// Produtos com divergência no ciclo (estoque_mestre.status_ciclo), com o
   /// contado e o sistema da contagem. Pelo índice de status_ciclo, lê só os
-  /// divergentes. Corrigida por [registrarDivergenciaCiclo].
+  /// divergentes. Corrigida por [registrarContagemConcluida].
   Future<List<Map<String, dynamic>>> consultarDivergentesCiclo({
     bool forceRefresh = false,
   }) => consultarComCache(
@@ -3292,42 +3302,56 @@ class TursoService {
     avisar: false,
   );
 
-  /// Depois de um concluirContagem: o produto tem contagem nova no cíclico.
-  /// É o MAX de hoje — o contado_em que acabou de ser gravado é o mais novo.
-  Future<void> registrarContagemCiclico(String codigo, String ultima) async {
-    final chave = _chaveCompleta(_chaveCiclico);
-    if (chave == null) return;
-    await _consultaCache.atualizarParte(
-      chave,
-      (r) => r['produto_codigo']?.toString() == codigo,
-      [
-        {'produto_codigo': codigo, 'ultima': ultima},
-      ],
-    );
-  }
+  /// Depois de um concluirContagem: relê do banco só as linhas do produto
+  /// nas duas cópias dos selos (pelos índices de produto_id e de codigo) e as
+  /// troca nelas. Relidas, e não montadas aqui: o código volta com o tipo que
+  /// a coluna deu a ele (num `produto_id` INTEGER o texto vira número, que o
+  /// selo âmbar nunca casou), e a cópia fica igual ao que o banco devolveria.
+  /// Sem conseguir reler, a cópia expira e a próxima leitura busca inteira.
+  Future<void> registrarContagemConcluida(String codigo) async {
+    final ciclico = _chaveCompleta(_chaveCiclico);
+    final divergentes = _chaveCompleta(_chaveDivergentes);
+    if (ciclico == null || divergentes == null) return;
 
-  /// Depois de um concluirContagem: o produto entra (ou sai) da lista de
-  /// divergentes do ciclo, com os mesmos inteiros que foram gravados.
-  Future<void> registrarDivergenciaCiclo(
-    String codigo, {
-    required bool divergente,
-    required int contada,
-    required int sistema,
-  }) async {
-    final chave = _chaveCompleta(_chaveDivergentes);
-    if (chave == null) return;
-    await _consultaCache.atualizarParte(
-      chave,
-      (r) => r['codigo']?.toString() == codigo,
-      [
-        if (divergente)
-          {
-            'codigo': codigo,
-            'qtd_contada_ciclo': contada,
-            'qtd_sistema_na_contagem': sistema,
-          },
-      ],
-    );
+    bool doProduto(Object? valor, List<Map<String, dynamic>> lidas, String col) =>
+        valor?.toString() == codigo || lidas.any((r) => r[col] == valor);
+
+    try {
+      final ultimas = await consultarDireto(
+        '$sqlUltimaContagemCiclicoBase AND produto_id = ? '
+        'GROUP BY produto_id',
+        parametros: [codigo],
+      );
+      await _consultaCache.atualizarParte(
+        ciclico,
+        (r) => doProduto(r['produto_codigo'], ultimas, 'produto_codigo'),
+        ultimas,
+      );
+    } catch (_) {
+      _consultaCache.expirar(ciclico);
+    }
+    try {
+      final linhas = await consultarDireto(
+        'SELECT codigo, status_ciclo, qtd_contada_ciclo, '
+        'qtd_sistema_na_contagem FROM estoque_mestre WHERE codigo = ?',
+        parametros: [codigo],
+      );
+      await _consultaCache.atualizarParte(
+        divergentes,
+        (r) => doProduto(r['codigo'], linhas, 'codigo'),
+        [
+          for (final r in linhas)
+            if (r['status_ciclo'] == 'divergencia')
+              {
+                'codigo': r['codigo'],
+                'qtd_contada_ciclo': r['qtd_contada_ciclo'],
+                'qtd_sistema_na_contagem': r['qtd_sistema_na_contagem'],
+              },
+        ],
+      );
+    } catch (_) {
+      _consultaCache.expirar(divergentes);
+    }
   }
 
   // ── Índices nas tabelas dos outros apps ───────────────────────────────────

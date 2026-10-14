@@ -419,7 +419,7 @@ Com o galpão resolvido, o grosso da leitura passou para a loja. O plano
 inteiro, com as estimativas, está em `docs/plano-rows-read-fase2.md`.
 
 - **Selos das prateleiras sem consulta própria.** O âmbar (endereço gravado
-  antes da última contagem) e o vermelho/verde (divergência do ciclo) eram
+  antes da última contagem) e o vermelho/azul-escuro (divergência do ciclo) eram
   duas consultas com JOIN sobre `estoque_localizado`, `inventario_cicli`,
   `contagem_itens` e `estoque_mestre`, refeitas com `forceRefresh` a cada
   aviso de dados — e cada linha salva no diálogo era um aviso. Agora saem em
@@ -429,17 +429,21 @@ inteiro, com as estimativas, está em `docs/plano-rows-read-fase2.md`.
   telas quando mudam). A regra é a mesma do SQL, inclusive as esquisitices
   dele (código comparado como texto, maior data por ordem de texto);
   `tool/verify_badges_sql.py` roda o SQL antigo em SQLite real e compara.
+  Concluir contagem relê do banco só as linhas do produto nessas cópias.
 - **Gôndola e estante esperam a rajada passar.** O layout recarrega na hora;
   selos e catálogo esperam 800 ms de silêncio. O barracão também.
 - **Conferência guardada por 1 minuto** (`ModoConferenciaService`). Cada
   volta de estrutura e cada aviso varriam `contagem_itens`; agora pedidos
   dentro de 1 minuto dividem a mesma leitura. Ligar o modo, o botão de
-  atualizar da faixa e a volta ao app leem na hora.
+  atualizar da faixa, a volta ao app e o Sincronizar (de qualquer tela)
+  leem na hora.
 - **Abertura e volta ao app.** A janela de cada cópia sobrevive ao app ser
   fechado (antes toda abertura relia ~11 mil linhas). A volta ao app relê só
-  as cópias vencidas **usadas nas últimas 2 h** — os ~35 layouts que só a
-  pré-carga leu ficam de fora. A pré-carga roda uma vez por sessão. "Ver no
-  mapa" não repete a baixa (ela só roda na loja raiz).
+  as cópias vencidas **que alguém usou nesta sessão** — os ~35 layouts que só
+  a pré-carga leu ficam de fora, e a tela que ficou aberta com o celular
+  bloqueado entra. A pré-carga roda uma vez por sessão. "Ver no mapa" não
+  repete a baixa (ela só roda na loja raiz). Consulta de tabela ou coluna que
+  não existe no banco sai da lista, para não derrubar o Sincronizar.
 - **Avisos de verdade.** O "mudou?" não depende mais da ordem das linhas, e
   as cópias que mudam na mesma volta viram um aviso só (300 ms). Antes, depois
   de qualquer correção parcial a releitura sempre acusava mudança, e cada

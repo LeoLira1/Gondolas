@@ -438,7 +438,15 @@ class EstoqueLocalizadoService {
     // A cópia do produto é relida por trás: quem gravou já tem o número na
     // tela, e esperar essa leitura era mais uma ida ao banco segurando o
     // "salvando". Os selos se recalculam dela quando o aviso chega.
-    unawaited(_atualizarCopiaDoProduto(produtoCodigo, avisar: avisar));
+    //
+    // Sem aviso (a baixa grava em série e avisa uma vez no fim), a releitura
+    // é esperada: o aviso do fim tem que chegar com a cópia já corrigida,
+    // senão as telas recalculavam do número antigo e ninguém avisava de novo.
+    if (avisar) {
+      unawaited(_atualizarCopiaDoProduto(produtoCodigo));
+    } else {
+      await _atualizarCopiaDoProduto(produtoCodigo, avisar: false);
+    }
     return true;
   }
 
@@ -452,7 +460,7 @@ class EstoqueLocalizadoService {
     try {
       final client = await _conexao();
       if (client == null) {
-        TursoService().expirarQuantidades();
+        _expirarCopia(avisar);
         return;
       }
       final rows = await client.query(
@@ -467,7 +475,20 @@ class EstoqueLocalizadoService {
         avisar: avisar,
       );
     } catch (_) {
-      TursoService().expirarQuantidades();
+      _expirarCopia(avisar);
+    }
+  }
+
+  /// A cópia ficou sem a gravação. Expirar só manda a PRÓXIMA leitura ao
+  /// banco — e a tela que já recalculou os selos ao fechar o diálogo não lê
+  /// de novo. Então a releitura sai já, por trás: quando ela trouxer a
+  /// gravação, o aviso de dados novos recalcula as telas. (Quem grava sem
+  /// aviso avisa no fim, e esse aviso faz as telas lerem a cópia expirada.)
+  void _expirarCopia(bool avisar) {
+    final turso = TursoService();
+    turso.expirarQuantidades();
+    if (avisar) {
+      unawaited(turso.consultarQuantidades().then<void>((_) {}, onError: (_) {}));
     }
   }
 
@@ -809,16 +830,10 @@ class EstoqueLocalizadoService {
 
       // A contagem não grava estoque_localizado: a cópia das quantidades
       // segue valendo. As cópias dos selos ganham a contagem nova na hora —
-      // o selo âmbar e o de divergência do produto se acertam sem reler
-      // inventario_cicli nem estoque_mestre.
+      // relidas só no produto, sem varrer inventario_cicli nem
+      // estoque_mestre inteiros.
       await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
-      await TursoService().registrarContagemCiclico(produtoCodigo, agoraIso);
-      await TursoService().registrarDivergenciaCiclo(
-        produtoCodigo,
-        divergente: status == 'divergencia',
-        contada: total.round(),
-        sistema: info.qtdSistema.round(),
-      );
+      await TursoService().registrarContagemConcluida(produtoCodigo);
       return ResultadoContagem(
         total: total,
         qtdSistema: info.qtdSistema,
