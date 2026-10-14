@@ -146,6 +146,9 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(TursoService().atualizarConsultas());
+      // A confirmação de contagem é feita no app Contagem: quem confere sai
+      // daqui e volta. A conferência do dia em memória deixa de valer.
+      ModoConferenciaService().esquecer();
       // Voltar ao app costuma ser voltar ao sinal: a gravação que estava
       // esperando a próxima tentativa vai já.
       FilaGravacao().tentarAgora();
@@ -183,6 +186,9 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       // Junto do prewarm: a baixa é a primeira coisa que precisa acontecer no
       // dia, porque é ela que tira do mapa o azul do que já foi vendido. Roda
       // sozinha e sem segurar a tela — o mapa abre enquanto ela trabalha.
+      // Só no mapa da abertura: o "Ver no mapa" das prateleiras empilha outra
+      // LojaPage, e a baixa já roda na abertura do app e na do galpão.
+      if (widget.itemTipoInicial != null) return null;
       return _rodarBaixaAutomatica();
     }));
 
@@ -231,7 +237,11 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   }
 
   void _atualizarBuscaVisivel() {
-    if (mounted && _searchCtrl.text.trim().length >= 2) {
+    // Só com a loja no topo da pilha: a LojaPage embaixo de uma prateleira
+    // guarda no campo o produto escolhido e refazia a busca a cada aviso, sem
+    // ninguém vendo. Ao voltar para ela, a próxima tecla busca de novo.
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+    if (_searchCtrl.text.trim().length >= 2) {
       _onSearchChanged(_searchCtrl.text);
     }
   }
@@ -389,12 +399,19 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       _selecionadoIdx     = null;
       _produtoSelecionado = null;
     });
-    await _carregarConferencia();
+    await _carregarConferencia(forcar: true);
   }
 
-  Future<void> _carregarConferencia() async {
+  /// [forcar]: ligar o modo, o botão de atualizar e o Sincronizar leem o
+  /// banco na hora. A volta de uma estrutura aceita a conferência de menos
+  /// de um minuto que o serviço guarda — antes, cada volta varria
+  /// contagem_itens inteira (a volta ao app esquece a guardada, porque a
+  /// confirmação é feita no app de contagem).
+  Future<void> _carregarConferencia({bool forcar = false}) async {
     setState(() => _carregandoConferencia = true);
-    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia(
+      forcar: forcar,
+    );
     if (!mounted) return;
     setState(() {
       _conferencia           = resultado;
@@ -542,7 +559,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       duration: Duration(
           seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
-    if (ok && _modoConferencia) _carregarConferencia();
+    if (ok && _modoConferencia) _carregarConferencia(forcar: true);
   }
 
   void _mostrarForaDoMapa() {
@@ -752,7 +769,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                         child: _BannerConferencia(
                           carregando: _carregandoConferencia,
                           resultado:  _conferencia,
-                          onRefresh:  _carregarConferencia,
+                          onRefresh:  () => _carregarConferencia(forcar: true),
                           onVerSemEndereco: _mostrarSemEndereco,
                           foraDoMapa: _estruturasForaDoMapa,
                           onVerForaDoMapa: _mostrarForaDoMapa,
@@ -1770,6 +1787,7 @@ class _GondolaPageState extends State<GondolaPage> {
   @override
   void dispose() {
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    _recargaPorAviso?.cancel();
     _highlightTimer?.cancel();
     _ctrl1.dispose();
     _ctrl2.dispose();
@@ -1832,10 +1850,25 @@ class _GondolaPageState extends State<GondolaPage> {
     // com o reload assíncrono) daria um frame com a gôndola vazia.
     _caixas.removeWhere((k, _) => k != _gondolaAtual && !_editadas.contains(k));
     _carregarLayout(_gondolaAtual);
-    unawaited(_carregarDesatualizados(forceRefresh: true));
-    // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
-    // era o que o _inicializar do botão Sincronizar fazia.
-    unawaited(_carregarCatalogo());
+    _agendarSelosECatalogo();
+  }
+
+  // Selos e catálogo esperam a rajada de avisos passar. Antes cada aviso
+  // forçava as duas consultas dos selos — tabelas inteiras — e um Salvar de N
+  // linhas no diálogo dava N+1 rodadas, em cada tela empilhada. Os selos
+  // agora saem das cópias (ver fetchEnderecosDesatualizados): recalcular não
+  // vai ao banco, e o Sincronizar já relê as cópias antes de avisar.
+  Timer? _recargaPorAviso;
+
+  void _agendarSelosECatalogo() {
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(const Duration(milliseconds: 800), () {
+      if (!mounted) return;
+      unawaited(_carregarDesatualizados());
+      // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
+      // era o que o _inicializar do botão Sincronizar fazia.
+      unawaited(_carregarCatalogo());
+    });
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -3256,6 +3289,7 @@ class _EstantePageState extends State<EstantePage> {
   @override
   void dispose() {
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    _recargaPorAviso?.cancel();
     _highlightTimer?.cancel();
     _ctrl1.dispose();
     _ctrl2.dispose();
@@ -3309,8 +3343,20 @@ class _EstantePageState extends State<EstantePage> {
     if (!mounted) return;
     _caixas.removeWhere((k, _) => k != _estanteAtual && !_editadas.contains(k));
     _carregarLayout(_estanteAtual);
-    unawaited(_carregarDesatualizados(forceRefresh: true));
-    unawaited(_carregarCatalogo());
+    _agendarSelosECatalogo();
+  }
+
+  // Ver o gêmeo em _GondolaPageState: selos e catálogo esperam a rajada de
+  // avisos, e saem das cópias.
+  Timer? _recargaPorAviso;
+
+  void _agendarSelosECatalogo() {
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(const Duration(milliseconds: 800), () {
+      if (!mounted) return;
+      unawaited(_carregarDesatualizados());
+      unawaited(_carregarCatalogo());
+    });
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {

@@ -522,12 +522,17 @@ class _GalpaoPageState extends State<GalpaoPage> {
       return;
     }
     setState(() => _modoConferencia = true);
-    if (_consultandoConferencia) await _carregarConferencia();
+    if (_consultandoConferencia) await _carregarConferencia(forcar: true);
   }
 
-  Future<void> _carregarConferencia() async {
+  /// [forcar]: ligar o modo e o botão de atualizar leem o banco na hora; os
+  /// outros pedidos (aviso de dados novos, abertura pelo banner) aceitam a
+  /// conferência de menos de um minuto que o serviço guarda.
+  Future<void> _carregarConferencia({bool forcar = false}) async {
     setState(() => _carregandoConferencia = true);
-    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia(
+      forcar: forcar,
+    );
     if (!mounted) return;
     setState(() {
       _conferencia = resultado;
@@ -634,9 +639,14 @@ class _GalpaoPageState extends State<GalpaoPage> {
     setState(() {});
   }
 
+  /// Posições cujas gravações saíram da fila (confirmadas ou recusadas) e
+  /// ainda não foram relidas: é só delas que a recarga precisa.
+  final Set<int> _posicoesGravadas = {};
+
   void _aoEventoFila(EventoFila evento) {
     if (!mounted || !evento.operacao.tipo.doGalpao) return;
     _versaoPilhas++;
+    _posicoesGravadas.add(evento.operacao.local);
     if (evento.gravada) return;
     _avisar(mensagemFalhaFila(evento));
     // A tela tinha aplicado a operação; agora ela saiu da fila, e o banco
@@ -646,8 +656,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   Future<void> _recarregarDoBanco() async {
     final versao = _versaoPilhas;
-    final pilhas = await GalpaoService().recarregarPilhas();
+    final posicoes = {..._posicoesGravadas};
+    // Só as posições gravadas (pelo índice): antes eram até 516 racks por
+    // palete lançado. Sem nenhuma anotada, relê o galpão inteiro.
+    final pilhas = await GalpaoService().recarregarPosicoes(posicoes);
     if (!mounted || pilhas == null || versao != _versaoPilhas) return;
+    _posicoesGravadas.removeAll(posicoes);
     _aplicarPilhasDoBanco(pilhas);
     unawaited(_carregarSaldos());
   }
@@ -1070,7 +1084,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           onRefresh:
                               _carregandoConferencia || !_consultandoConferencia
                               ? null
-                              : _carregarConferencia,
+                              : () => _carregarConferencia(forcar: true),
                         ),
                       ),
                   ],

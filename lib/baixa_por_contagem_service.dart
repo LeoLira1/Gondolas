@@ -47,12 +47,12 @@ class BaixaPorContagemService {
   /// Intervalo mínimo entre duas passadas AUTOMÁTICAS.
   ///
   /// A abertura do app e a abertura do galpão chamam a baixa cada uma por si,
-  /// e o galpão é reaberto dezenas de vezes num turno. Cada passada lê o
-  /// estoque_localizado inteiro, o catálogo e as duas tabelas do mapa — e a
-  /// baixa é idempotente por contagem, então repetir tudo isso um minuto
-  /// depois nunca acha nada de novo. Só uma contagem NOVA muda o resultado, e
-  /// contagem não é confirmada de dez em dez segundos.
-  static const Duration intervaloMinimoAutomatica = Duration(minutes: 10);
+  /// e o galpão é reaberto dezenas de vezes num turno. A baixa é idempotente
+  /// por contagem, então repetir a passada pouco depois nunca acha nada de
+  /// novo: só uma contagem NOVA muda o resultado. Meia hora é o atraso que o
+  /// Leo aceitou entre a contagem confirmada e o rack baixar (era 10 min);
+  /// religar o interruptor em ⚙️ zera a janela.
+  static const Duration intervaloMinimoAutomatica = Duration(minutes: 30);
 
   DateTime? _ultimaAutomaticaEm;
 
@@ -152,11 +152,34 @@ class BaixaPorContagemService {
   ///
   /// Com `aplicar: false` nada é escrito — é a prévia, usada pelo botão
   /// "conferir antes" e pelo desenvolvimento.
+  ///
+  /// A passada automática tem duas fases. A primeira planeja com as cópias
+  /// que o app já guarda (quantidades, saldos, vínculos e contagens, cada uma
+  /// relida só se passou da própria janela) e as divergências frescas. No
+  /// caso comum — toda contagem já baixada —, nenhum plano sai aplicável e a
+  /// passada termina aí, sem reler o estoque_localizado, o estoque_mestre e o
+  /// mapa inteiros. Só quando há o que gravar a segunda fase relê tudo fresco
+  /// e planeja do zero: a gravação nunca se baseia na cópia.
   Future<ResumoBaixa> executar({bool aplicar = true}) async {
     if (_rodando) return ResumoBaixa.vazio;
     _rodando = true;
     try {
-      final planos = await planejar();
+      _Insumos? daCopia;
+      if (aplicar) {
+        daCopia = await _insumosDasCopias();
+        if (daCopia != null) {
+          final planos = _montarPlanos(daCopia);
+          if (!planos.any((p) => p.aplicavel)) {
+            final resumo = planos.isEmpty
+                ? ResumoBaixa.vazio
+                : ResumoBaixa(ignorados: planos);
+            ultimoResumo.value = resumo;
+            return resumo;
+          }
+        }
+      }
+
+      final planos = await planejar(reaproveitar: daCopia);
       if (planos.isEmpty) {
         final resumo = ResumoBaixa.vazio;
         ultimoResumo.value = resumo;
@@ -191,10 +214,18 @@ class BaixaPorContagemService {
         ignorados: ignorados,
       );
       ultimoResumo.value = resumo;
-      // Só avisa as outras telas quando algo mudou de verdade: um
-      // dataRevision a cada abertura de mapa recarregaria o app inteiro sem
-      // motivo.
-      if (aplicados.isNotEmpty) TursoService().dataRevision.value++;
+      final tocados = [...aplicados, ...falhados];
+      // A cópia do galpão não sabe das gravações da baixa (a fila corrige só
+      // a das quantidades): sem reler, o rack esvaziado continuava na tela.
+      if (tocados.any(
+        (p) => p.ajustes.any((a) => a.endereco.localTipo == localTipoGalpao),
+      )) {
+        await GalpaoService().recarregarPilhas();
+      }
+      // Um aviso só, no fim, e só quando algo foi gravado — inclusive num
+      // plano que falhou no meio. As gravações saem com o aviso desligado:
+      // um dataRevision por endereço recarregava cada tela aberta N vezes.
+      if (tocados.isNotEmpty) TursoService().dataRevision.value++;
       return resumo;
     } catch (_) {
       return ResumoBaixa.vazio;
@@ -207,8 +238,13 @@ class BaixaPorContagemService {
   // Leitura
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// Monta o plano de cada produto que tem endereço, sem gravar nada.
-  Future<List<PlanoBaixa>> planejar() async {
+  /// Monta o plano de cada produto que tem endereço, sem gravar nada, com
+  /// leitura FRESCA do que a gravação usa: os endereços (com o rack_uuid), o
+  /// estoque_mestre e o mapa de produtos. As divergências e as contagens de
+  /// [reaproveitar] (a fase das cópias da mesma passada) são usadas como
+  /// vieram — contagem um pouco mais velha só deixa a baixa mais
+  /// conservadora (mais endereços "mexidos depois da contagem").
+  Future<List<PlanoBaixa>> planejar({_Insumos? reaproveitar}) async {
     final client = await _conexao();
     if (client == null) return const [];
 
@@ -222,62 +258,133 @@ class BaixaPorContagemService {
       final mestre = mestrePorCodigo(
         await TursoService().consultarSaldos(forceRefresh: true),
       );
-      final grupos = gruposDeCodigos(
-        codigos: enderecos.keys,
-        produtoIdPorCodigo: await TursoService().vinculosDoMapa(
-          forceRefresh: true,
-        ),
-        nomePorCodigo: {for (final e in mestre.entries) e.key: e.value.nome},
-      );
-      final divergencias = await _lerDivergencias(client);
-      final contagens = await _lerContagens(client);
-
-      final planos = <PlanoBaixa>[];
-      final gruposVistos = <String>{};
-      for (final codigo in enderecos.keys) {
-        final grupo = (grupos[codigo] ?? {codigo}).toList()..sort();
-        // Um produto, um plano: o irmão do grupo já foi planejado junto com
-        // ele, e planejar de novo baixaria a mesma venda duas vezes.
-        if (!gruposVistos.add(grupo.join('|'))) continue;
-
-        // Produto fora do estoque_mestre não tem qtd_sistema, e sem ela não
-        // existe alvo — chutar zero esvaziaria o rack de tudo que ainda não
-        // foi cadastrado.
-        if (!grupo.any(mestre.containsKey)) continue;
-
-        var qtdSistema = 0.0, delta = 0.0;
-        DateTime? confirmada;
-        final doGrupo = <EnderecoLocalizado>[];
-        var nome = '';
-        for (final c in grupo) {
-          qtdSistema += mestre[c]?.qtdSistema ?? 0;
-          delta += divergencias[c] ?? 0;
-          doGrupo.addAll(enderecos[c] ?? const []);
-          if (nome.isEmpty) nome = mestre[c]?.nome ?? '';
-          final dt = contagens[c];
-          if (dt != null && (confirmada == null || dt.isAfter(confirmada))) {
-            confirmada = dt;
-          }
-        }
-
-        planos.add(
-          planejarBaixa(
-            contagem: ContagemDoProduto(
-              codigos: grupo,
-              nome: nome,
-              qtdSistema: qtdSistema,
-              deltaDivergencias: delta,
-              confirmadaEm: confirmada,
-            ),
-            enderecos: doGrupo,
+      return _montarPlanos(
+        _Insumos(
+          enderecos: enderecos,
+          mestre: mestre,
+          // Falha fechada: sem um vínculo que existe, o código secundário
+          // seria planejado sozinho, com alvo no próprio qtd_sistema, e os
+          // endereços dele esvaziados.
+          vinculos: await TursoService().vinculosDoMapa(
+            forceRefresh: true,
+            falharFechado: true,
           ),
-        );
-      }
-      return planos;
+          divergencias:
+              reaproveitar?.divergencias ?? await _lerDivergencias(client),
+          contagens:
+              reaproveitar?.contagens ?? await _lerContagens(forcar: true),
+        ),
+      );
     } catch (_) {
       return const [];
     }
   }
+
+  /// Os insumos da fase das cópias, ou null quando falta alguma cópia (e a
+  /// rede para buscá-la) — aí a passada vai direto à leitura fresca.
+  Future<_Insumos?> _insumosDasCopias() async {
+    final client = await _conexao();
+    if (client == null) return null;
+    try {
+      final turso = TursoService();
+      final linhas = await turso.consultarQuantidades(
+        falharSemCache: true,
+        atualizarSeVencida: true,
+      );
+      final enderecos = <String, List<EnderecoLocalizado>>{};
+      for (final r in linhas) {
+        final bruto = r['produto_codigo'] as String? ?? '';
+        final codigo = normalizarCodigo(bruto);
+        if (codigo == null) continue;
+        enderecos.putIfAbsent(codigo, () => []).add(_enderecoDaLinha(r));
+      }
+      return _Insumos(
+        enderecos: enderecos,
+        mestre: mestrePorCodigo(
+          await turso.consultarSaldos(atualizarSeVencida: true),
+        ),
+        vinculos: await turso.vinculosDoMapa(atualizarSeVencida: true),
+        // Fresca e pequena (só as abertas): é ela que transforma uma falta
+        // em excesso, e um valor velho faria a baixa tirar o que não devia.
+        divergencias: await _lerDivergencias(client),
+        contagens: await _lerContagens(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// O plano de cada produto (grupo de códigos irmãos) que tem endereço.
+  List<PlanoBaixa> _montarPlanos(_Insumos insumos) {
+    final enderecos = insumos.enderecos;
+    if (enderecos.isEmpty) return const [];
+    final mestre = insumos.mestre;
+    final divergencias = insumos.divergencias;
+    final contagens = insumos.contagens;
+    final grupos = gruposDeCodigos(
+      codigos: enderecos.keys,
+      produtoIdPorCodigo: insumos.vinculos,
+      nomePorCodigo: {for (final e in mestre.entries) e.key: e.value.nome},
+    );
+
+    final planos = <PlanoBaixa>[];
+    final gruposVistos = <String>{};
+    for (final codigo in enderecos.keys) {
+      final grupo = (grupos[codigo] ?? {codigo}).toList()..sort();
+      // Um produto, um plano: o irmão do grupo já foi planejado junto com
+      // ele, e planejar de novo baixaria a mesma venda duas vezes.
+      if (!gruposVistos.add(grupo.join('|'))) continue;
+
+      // Produto fora do estoque_mestre não tem qtd_sistema, e sem ela não
+      // existe alvo — chutar zero esvaziaria o rack de tudo que ainda não
+      // foi cadastrado.
+      if (!grupo.any(mestre.containsKey)) continue;
+
+      var qtdSistema = 0.0, delta = 0.0;
+      DateTime? confirmada;
+      final doGrupo = <EnderecoLocalizado>[];
+      var nome = '';
+      for (final c in grupo) {
+        qtdSistema += mestre[c]?.qtdSistema ?? 0;
+        delta += divergencias[c] ?? 0;
+        doGrupo.addAll(enderecos[c] ?? const []);
+        if (nome.isEmpty) nome = mestre[c]?.nome ?? '';
+        final dt = contagens[c];
+        if (dt != null && (confirmada == null || dt.isAfter(confirmada))) {
+          confirmada = dt;
+        }
+      }
+
+      planos.add(
+        planejarBaixa(
+          contagem: ContagemDoProduto(
+            codigos: grupo,
+            nome: nome,
+            qtdSistema: qtdSistema,
+            deltaDivergencias: delta,
+            confirmadaEm: confirmada,
+          ),
+          enderecos: doGrupo,
+        ),
+      );
+    }
+    return planos;
+  }
+
+  static EnderecoLocalizado _enderecoDaLinha(
+    Map<String, dynamic> r, {
+    String? rackUuid,
+  }) => EnderecoLocalizado(
+    rackUuid: rackUuid,
+    id: r['id'] as int?,
+    produtoCodigo: r['produto_codigo'] as String? ?? '',
+    localTipo: r['local_tipo'] as String? ?? 'gondola',
+    localNum: r['local_num'] as int? ?? 0,
+    faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
+    andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
+    quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+    atualizadoEm: r['atualizado_em'] as String?,
+  );
 
   /// Todos os endereços gravados, indexados pelo código NORMALIZADO — é por
   /// ele que o grupo de códigos irmãos cruza. O código original fica dentro
@@ -300,19 +407,7 @@ class BaixaPorContagemService {
       if (codigo == null) continue;
       porCodigo
           .putIfAbsent(codigo, () => <EnderecoLocalizado>[])
-          .add(
-            EnderecoLocalizado(
-              rackUuid: r['rack_uuid'] as String?,
-              id: r['id'] as int?,
-              produtoCodigo: bruto,
-              localTipo: r['local_tipo'] as String? ?? 'gondola',
-              localNum: r['local_num'] as int? ?? 0,
-              faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
-              andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
-              quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
-              atualizadoEm: r['atualizado_em'] as String?,
-            ),
-          );
+          .add(_enderecoDaLinha(r, rackUuid: r['rack_uuid'] as String?));
     }
     return porCodigo;
   }
@@ -338,10 +433,14 @@ class BaixaPorContagemService {
         por[codigo] = (r['total'] as num?)?.toDouble() ?? 0;
       }
       return por;
-    } catch (_) {
+    } catch (e) {
       // Banco sem a tabela de divergências: o alvo vira o qtd_sistema puro,
       // que é o comportamento correto quando não há divergência nenhuma.
-      return const {};
+      if (TursoService.erroDeTabelaAusente(e)) return const {};
+      // Qualquer outra falha (rede) aborta a passada: "sem divergência" por
+      // engano deixa o alvo errado, e a baixa tiraria dos racks o que um
+      // cooperado já explicava.
+      rethrow;
     }
   }
 
@@ -358,33 +457,27 @@ class BaixaPorContagemService {
   /// o endereço está certo e o sistema é que está atrasado; a baixa existe
   /// para o caso contrário, e só a contagem física de fora pode afirmá-lo.
   ///
-  /// `confirmado_em` é coluna de migração do dashboard e pode não existir;
-  /// nesse caso vale `registrado_em`, o mesmo fallback do resto do app.
-  Future<Map<String, DateTime>> _lerContagens(LibsqlClient client) async {
-    for (final coluna in const ['confirmado_em', 'registrado_em']) {
-      try {
-        final stmt = await client.prepare('''
-          SELECT codigo AS produto_codigo, MAX($coluna) AS ultima
-          FROM contagem_itens
-          WHERE status != 'pendente' AND $coluna IS NOT NULL
-          GROUP BY codigo
-        ''');
-        final rows = await stmt.query() as List<dynamic>;
-        final por = <String, DateTime>{};
-        for (final dynamic row in rows) {
-          final r = row as Map<String, dynamic>;
-          final codigo = normalizarCodigo(r['produto_codigo'] as String?);
-          final texto = r['ultima'] as String?;
-          if (codigo == null || texto == null) continue;
-          final dt = _parseData(texto);
-          if (dt != null) por[codigo] = dt;
-        }
-        return por;
-      } catch (_) {
-        // Coluna inexistente neste ambiente: tenta a próxima.
-      }
+  /// Vem da cópia compartilhada com o selo âmbar das prateleiras
+  /// ([TursoService.consultarUltimasContagensItens]): uma varredura de
+  /// contagem_itens para os dois, relida só quando passou da janela — ou na
+  /// hora, com [forcar]. A coluna de confirmação (`confirmado_em` ou, sem
+  /// ela, `registrado_em`) é descoberta e lembrada lá.
+  Future<Map<String, DateTime>> _lerContagens({bool forcar = false}) async {
+    final rows = await TursoService().consultarUltimasContagensItens(
+      forceRefresh: forcar,
+      atualizarSeVencida: true,
+    );
+    final por = <String, DateTime>{};
+    for (final r in rows) {
+      final bruto = r['produto_codigo'];
+      final texto = r['ultima'];
+      if (bruto is! String || texto is! String) continue;
+      final codigo = normalizarCodigo(bruto);
+      if (codigo == null) continue;
+      final dt = _parseData(texto);
+      if (dt != null) por[codigo] = dt;
     }
-    return const {};
+    return por;
   }
 
   /// Data do banco em DateTime. O dashboard grava 'YYYY-MM-DD HH:MM:SS' (hora
@@ -440,9 +533,28 @@ class BaixaPorContagemService {
         andarOuNivel: a.endereco.andarOuNivel,
         quantidade: a.qtdNova,
         origem: origemLog,
+        // Um aviso só, no fim da passada (ver executar).
+        avisar: false,
       );
       if (!ok) return false;
     }
     return true;
   }
+}
+
+/// O que uma passada precisa para planejar.
+class _Insumos {
+  final Map<String, List<EnderecoLocalizado>> enderecos;
+  final Map<String, ({String nome, double qtdSistema})> mestre;
+  final Map<String, String> vinculos;
+  final Map<String, double> divergencias;
+  final Map<String, DateTime> contagens;
+
+  const _Insumos({
+    required this.enderecos,
+    required this.mestre,
+    required this.vinculos,
+    required this.divergencias,
+    required this.contagens,
+  });
 }

@@ -220,7 +220,8 @@ class PaleteRegistry {
         rethrow;
       }
       await carregar();
-      await TursoService().marcarGravacaoLocal();
+      // Cadastro de palete não grava estoque_localizado.
+      await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
       return num;
     } catch (_) {
       return null;
@@ -303,7 +304,8 @@ class PaleteRegistry {
         rethrow;
       }
       await carregar();
-      await TursoService().marcarGravacaoLocal();
+      // Cadastro de palete não grava estoque_localizado.
+      await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
       return true;
     } catch (_) {
       return false;
@@ -356,7 +358,8 @@ class PaleteRegistry {
         rethrow;
       }
       await carregar();
-      await TursoService().marcarGravacaoLocal();
+      // Cadastro de palete não grava estoque_localizado.
+      await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
       return true;
     } catch (_) {
       return false;

@@ -159,7 +159,8 @@ class BarracaoService {
         await _guardarCache(cacheRows);
         // Frame novo no arquivo local esperando o próximo Sincronizar — sem
         // esta marca, um push que não sai passaria por "nada a enviar".
-        await TursoService().marcarGravacaoLocal();
+        // Endereço semeado nasce vazio: nada vai para estoque_localizado.
+        await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
       } catch (e) {
         await tx.rollback();
         if (mutacao != null) await TursoService().abortarMutacao(mutacao);
@@ -220,13 +221,11 @@ class BarracaoService {
         quantidade:    (row['quantidade'] as num?)?.toDouble() ?? 0,
       );
 
-  /// Chave da cópia de leitura. É a mesma que `guardarConsulta` conhece para
-  /// derivar o índice de `busca_barracao`.
-  static const String chaveCache = 'barracao';
+  /// Chave da cópia de leitura. É a mesma que a busca do mapa lê (ver
+  /// `TursoService.chaveBarracao`).
+  static const String chaveCache = TursoService.chaveBarracao;
 
-  static const String _sqlTodos =
-      'SELECT id, rotulo, pos_x, pos_z, produto_codigo, produto_nome, '
-      'quantidade FROM barracao_enderecos ORDER BY rotulo';
+  static const String _sqlTodos = TursoService.sqlBarracao;
 
   /// Atualiza a cópia de leitura DEPOIS do commit. Falhar aqui não pode virar
   /// rollback de uma gravação já confirmada: no pior caso o refresh em segundo

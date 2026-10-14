@@ -242,15 +242,31 @@ alguém corrigir. Na primeira vez que ela roda, a limpeza pode ser grande — s�
 todas as vendas acumuladas desde a última contagem de cada produto, e todas
 elas aparecem no extrato.
 
-**Uma passada a cada 10 minutos, no máximo.** A abertura do app e a abertura
+**Uma passada a cada 30 minutos, no máximo.** A abertura do app e a abertura
 do galpão pedem a baixa cada uma por si, e o galpão é reaberto dezenas de
-vezes num turno — cada passada lê o `estoque_localizado` inteiro, o catálogo e
-as duas tabelas do mapa. Como a baixa é idempotente por contagem, repetir tudo
-isso um minuto depois nunca acha nada de novo: dentro da janela a chamada
-devolve o resumo da passada anterior, sem tocar no banco. A hora da última
-passada fica guardada no aparelho, por banco — só em memória, cada vez que o
-Android matava o app a janela zerava. Religar o interruptor em ⚙️ zera a
-janela, porque pedido explícito não espera.
+vezes num turno. Como a baixa é idempotente por contagem, repetir a passada um
+minuto depois nunca acha nada de novo: dentro da janela a chamada devolve o
+resumo da passada anterior, sem tocar no banco. A hora da última passada fica
+guardada no aparelho, por banco — só em memória, cada vez que o Android
+matava o app a janela zerava. Religar o interruptor em ⚙️ zera a janela,
+porque pedido explícito não espera.
+
+**Duas fases: olhar nas cópias, gravar com o banco fresco.** A passada
+primeiro planeja com as cópias de leitura do app (quantidades, saldo, mapa e
+contagens, cada uma relida só se a janela dela venceu). Quase sempre não sai
+nada aplicável e a passada termina ali, sem varrer tabela nenhuma. Só quando
+algum produto teria baixa a passada relê fresco o `estoque_localizado`, o
+saldo e o mapa e **replaneja do zero** — o que grava nunca sai de cópia. As
+divergências do ciclo vêm sempre frescas, e uma falha de rede nelas aborta a
+passada (antes virava "sem divergência" e o alvo saía errado).
+
+**O barracão conta, mas não é baixado.** Os paletes do barracão entram na
+soma do produto, mas a baixa nunca tira deles: ela gravava só o espelho em
+`estoque_localizado`, o palete em `barracao_enderecos` ficava com a
+quantidade antiga e a próxima gravação desfazia a baixa. O que só sairia do
+barracão fica como "não coberto" no extrato, para alguém resolver à mão.
+Depois de gravar no galpão, a passada relê as pilhas do galpão, para o rack
+esvaziado não ficar na tela.
 
 A regra vive em `lib/baixa_por_contagem.dart` (função pura, sem banco e sem
 tela); o SQL e a ordem das gravações, em `lib/baixa_por_contagem_service.dart`.
@@ -393,14 +409,74 @@ releitura das pilhas do galpão, que é pequena). A conta é da **conta inteira*
 do Turso: os dashboards Streamlit e os apps irmãos leem do mesmo plano, e a
 divisão por banco fica em Databases → (banco) → Usage.
 
-Ainda de fora: a baixa varre `contagem_itens` inteiro a cada passada (tabela
-do app de contagem, que só cresce), e as cenas de gôndola e estante relêem
-endereços desatualizados/divergentes com `forceRefresh` a cada
-`dataRevision`.
-
 Verificado em `test/leitura_turso_test.dart` (janela, volta ao app, tabela só
 de leitura, troca por local, somas do saldo) e `test/galpao_service_test.dart`
 (saldo sem banco nem cópia).
+
+### Segunda rodada: loja, conferência, baixa e abertura
+
+Com o galpão resolvido, o grosso da leitura passou para a loja. O plano
+inteiro, com as estimativas, está em `docs/plano-rows-read-fase2.md`.
+
+- **Selos das prateleiras sem consulta própria.** O âmbar (endereço gravado
+  antes da última contagem) e o vermelho/verde (divergência do ciclo) eram
+  duas consultas com JOIN sobre `estoque_localizado`, `inventario_cicli`,
+  `contagem_itens` e `estoque_mestre`, refeitas com `forceRefresh` a cada
+  aviso de dados — e cada linha salva no diálogo era um aviso. Agora saem em
+  Dart (`lib/badges_estoque.dart`) da cópia das quantidades e de três cópias
+  pequenas: última contagem do ciclo por produto, última contagem confirmada
+  por produto e produtos em divergência (janela de 10 e 5 min, sem avisar as
+  telas quando mudam). A regra é a mesma do SQL, inclusive as esquisitices
+  dele (código comparado como texto, maior data por ordem de texto);
+  `tool/verify_badges_sql.py` roda o SQL antigo em SQLite real e compara.
+- **Gôndola e estante esperam a rajada passar.** O layout recarrega na hora;
+  selos e catálogo esperam 800 ms de silêncio. O barracão também.
+- **Conferência guardada por 1 minuto** (`ModoConferenciaService`). Cada
+  volta de estrutura e cada aviso varriam `contagem_itens`; agora pedidos
+  dentro de 1 minuto dividem a mesma leitura. Ligar o modo, o botão de
+  atualizar da faixa e a volta ao app leem na hora.
+- **Abertura e volta ao app.** A janela de cada cópia sobrevive ao app ser
+  fechado (antes toda abertura relia ~11 mil linhas). A volta ao app relê só
+  as cópias vencidas **usadas nas últimas 2 h** — os ~35 layouts que só a
+  pré-carga leu ficam de fora. A pré-carga roda uma vez por sessão. "Ver no
+  mapa" não repete a baixa (ela só roda na loja raiz).
+- **Avisos de verdade.** O "mudou?" não depende mais da ordem das linhas, e
+  as cópias que mudam na mesma volta viram um aviso só (300 ms). Antes, depois
+  de qualquer correção parcial a releitura sempre acusava mudança, e cada
+  cópia avisava separado.
+- **Gravar não joga leitura fora.** Concluir contagem, salvar layout,
+  paletes, seed do barracão e a fila do galpão não expiram mais a cópia
+  inteira do `estoque_localizado` (cada uma corrige o que gravou), e uma
+  gravação só descarta as leituras em andamento da cópia que ela corrige.
+  Depois da fila, o galpão relê só as posições gravadas.
+- **Buscas do galpão e do barracão** saem das cópias das pilhas e dos
+  paletes, que já são relidas a cada gravação, em vez de consultas próprias.
+- **Catálogo**: não fura mais a janela do `estoque_mestre` (regressão da
+  primeira rodada).
+- **Índices nas tabelas dos outros apps**, criados uma vez por banco e
+  aparelho, em segundo plano, só quando nenhum índice da tabela já começa pela
+  mesma coluna (a chave primária conta). Tabela ou coluna que não existe é
+  pulada.
+
+| Índice | Tabela (colunas) | Para quê |
+|---|---|---|
+| `idx_gondolas_contagem_itens_status` | `contagem_itens(status)` | pendentes da conferência |
+| `idx_gondolas_estoque_mestre_status_ciclo` | `estoque_mestre(status_ciclo)` | produtos em divergência |
+| `idx_gondolas_estoque_mestre_codigo` | `estoque_mestre(codigo)` | concluir contagem |
+| `idx_gondolas_inventario_cicli_produto` | `inventario_cicli(produto_id, data_contagem)` | concluir contagem |
+
+Ainda de fora (anotado no plano): juntar os layouts por estrutura com a busca
+de gôndolas/estantes, janela maior para layouts, "Ver no mapa" voltando à
+raiz em vez de empilhar, leitura incremental de `contagem_itens` e pular o
+SELECT "antes" do salvar layout. Um comportamento antigo foi mantido como
+estava: depois de "Concluir contagem", todos os endereços do produto ficam
+âmbar até serem regravados.
+
+Verificado em `test/leitura_turso_test.dart` (janela em disco, sucesso ×
+tentativa, uso, avisos, geração por chave, ordem da correção parcial),
+`test/badges_estoque_test.dart`, `test/conferencia_guardada_test.dart`,
+`test/baixa_por_contagem_test.dart` (barracão) e `tool/verify_badges_sql.py`.
+Falta o gráfico de Rows Read de um dia de loja e galpão.
 
 ## Créditos
 

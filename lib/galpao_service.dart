@@ -91,9 +91,7 @@ class GalpaoService {
     }
   }
 
-  static const String _sqlPilhas =
-      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-      'FROM galpao_racks ORDER BY posicao, ordem';
+  static const String _sqlPilhas = TursoService.sqlGalpao;
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
   ///
@@ -102,7 +100,7 @@ class GalpaoService {
   Future<Map<int, List<RackGalpao>>> carregarPilhas() async {
     try {
       return _pilhasDasLinhas(
-        await TursoService().consultarComCache('galpao', _sqlPilhas),
+        await TursoService().consultarComCache(TursoService.chaveGalpao, _sqlPilhas),
       );
     } catch (_) {
       return {};
@@ -110,18 +108,53 @@ class GalpaoService {
   }
 
   /// Relê a ocupação DO SERVIDOR (sem servir a cópia) e atualiza a cópia de
-  /// leitura e a da busca. É a conferência depois que a fila de gravação
-  /// esvazia. Null quando a leitura falhou — ao contrário de [carregarPilhas],
+  /// leitura (que a busca do mapa também usa). Null quando a leitura falhou — ao contrário de [carregarPilhas],
   /// aqui um galpão vazio por falta de rede apagaria a tela inteira.
   Future<Map<int, List<RackGalpao>>?> recarregarPilhas() async {
     try {
       final rows = await TursoService().consultarComCache(
-        'galpao',
+        TursoService.chaveGalpao,
         _sqlPilhas,
         forceRefresh: true,
       );
-      await TursoService().guardarConsulta('galpao', rows);
+      await TursoService().guardarConsulta(TursoService.chaveGalpao, rows);
       return _pilhasDasLinhas(rows);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Relê do servidor só as [posicoes] (pelo UNIQUE(posicao, ordem)) e as
+  /// troca na cópia de leitura, mantendo a ordem (posicao, ordem). É a
+  /// conferência depois que a fila do galpão esvazia: antes ela relia o galpão
+  /// inteiro (até 516 racks) a cada palete lançado. Rack que outro aparelho
+  /// mexeu em outra posição aparece pela janela da cópia (30 s), como antes
+  /// aparecia pela recarga. Sem cópia nenhuma, relê tudo.
+  Future<Map<int, List<RackGalpao>>?> recarregarPosicoes(
+    Set<int> posicoes,
+  ) async {
+    if (posicoes.isEmpty) return recarregarPilhas();
+    try {
+      final lista = posicoes.toList()..sort();
+      final rows = await TursoService().consultarDireto(
+        'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, '
+        'quantidade FROM galpao_racks WHERE posicao IN '
+        '(${List.filled(lista.length, '?').join(', ')}) ORDER BY posicao, ordem',
+        parametros: lista,
+      );
+      final copia = await TursoService().corrigirConsulta(
+        TursoService.chaveGalpao,
+        (r) => posicoes.contains(r['posicao']),
+        rows,
+        ordenar: (a, b) {
+          final porPosicao = (a['posicao'] as int? ?? 0).compareTo(
+            b['posicao'] as int? ?? 0,
+          );
+          if (porPosicao != 0) return porPosicao;
+          return (a['ordem'] as int? ?? 0).compareTo(b['ordem'] as int? ?? 0);
+        },
+      );
+      return copia == null ? await recarregarPilhas() : _pilhasDasLinhas(copia);
     } catch (_) {
       return null;
     }

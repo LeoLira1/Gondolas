@@ -15,6 +15,19 @@ ConsultaCache _cache({void Function()? aoAtualizar}) => ConsultaCache(
       aoAtualizar: aoAtualizar ?? () {},
     );
 
+ConsultaCache _cacheComDisco(
+  Map<String, String> disco, {
+  void Function()? aoAtualizar,
+}) =>
+    ConsultaCache(
+      lerDisco: (k) async => disco[k],
+      gravarDisco: (k, v) async => disco[k] = v,
+      aoAtualizar: aoAtualizar ?? () {},
+    );
+
+/// Espera as gravações em disco e as releituras em segundo plano.
+Future<void> _assentar() => Future<void>.delayed(const Duration(milliseconds: 5));
+
 /// Uma "tabela" que conta quantas vezes foi lida.
 class _Tabela {
   int leituras = 0;
@@ -247,6 +260,316 @@ void main() {
       expect(saldos['254185']!.qtdSistema, 559);
       expect(saldos['254185']!.enderecado, 500);
       expect(saldos['254185']!.quantoFalta, 59);
+    });
+  });
+
+  group('janela que sobrevive ao app fechado', () {
+    const janela = Duration(hours: 1);
+
+    test('reabrir dentro da janela não vai ao banco', () async {
+      final disco = <String, String>{};
+      final mestre = _Tabela([
+        {'codigo': 'BORAL'},
+      ]);
+      await _cacheComDisco(disco).ler('mestre', mestre.ler, janela: janela);
+      await _assentar();
+      expect(mestre.leituras, 1);
+
+      // O Android matou o app: uma ConsultaCache nova lê o mesmo disco.
+      final reaberto = _cacheComDisco(disco);
+      final linhas = await reaberto.ler('mestre', mestre.ler, janela: janela);
+      await _assentar();
+      expect(linhas.single['codigo'], 'BORAL');
+      expect(mestre.leituras, 1);
+      expect(await reaberto.vencida('mestre', janela), isFalse);
+    });
+
+    test('cópia antiga, sem carimbo, é relida uma vez', () async {
+      final disco = <String, String>{'mestre': '[{"codigo":"VELHO"}]'};
+      final mestre = _Tabela([
+        {'codigo': 'NOVO'},
+      ]);
+      final cache = _cacheComDisco(disco);
+      expect(await cache.vencida('mestre', janela), isTrue);
+      await cache.ler('mestre', mestre.ler, janela: janela);
+      await _assentar();
+      expect(mestre.leituras, 1);
+      expect(disco['mestre|em'], isNotEmpty);
+    });
+
+    test('expirar apaga o carimbo em disco também', () async {
+      final disco = <String, String>{};
+      final tabela = _Tabela([
+        {'x': 1},
+      ]);
+      final cache = _cacheComDisco(disco);
+      await cache.ler('t', tabela.ler, janela: janela);
+      await _assentar();
+      cache.expirar('t');
+      await _assentar();
+
+      final reaberto = _cacheComDisco(disco);
+      await reaberto.ler('t', tabela.ler, janela: janela);
+      await _assentar();
+      expect(tabela.leituras, 2);
+    });
+
+    test('esquecerCarimboEmDisco não mexe na sessão, só na reabertura',
+        () async {
+      final disco = <String, String>{};
+      final tabela = _Tabela([
+        {'x': 1},
+      ]);
+      final cache = _cacheComDisco(disco);
+      await cache.ler('t', tabela.ler, janela: janela);
+      await _assentar();
+      cache.esquecerCarimboEmDisco('t');
+      await _assentar();
+      await cache.ler('t', tabela.ler, janela: janela);
+      await _assentar();
+      expect(tabela.leituras, 1, reason: 'na sessão a cópia segue fresca');
+
+      await _cacheComDisco(disco).ler('t', tabela.ler, janela: janela);
+      await _assentar();
+      expect(tabela.leituras, 2, reason: 'reaberto, relê a tabela');
+    });
+
+    test('tentativa que falhou não deixa a cópia mais nova', () async {
+      final cache = _cache();
+      final tabela = _Tabela([
+        {'x': 1},
+      ]);
+      await cache.ler('t', tabela.ler, janela: Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await cache.ler(
+        't',
+        () async => throw StateError('sem rede'),
+        janela: Duration.zero,
+      );
+      await _assentar();
+      expect(await cache.vencida('t', const Duration(milliseconds: 1)), isTrue);
+    });
+
+    test('correção parcial não renova a janela da cópia inteira', () async {
+      final cache = _cache();
+      final tabela = _Tabela([
+        {'local': 1, 'q': 1},
+        {'local': 2, 'q': 2},
+      ]);
+      await cache.ler('q', tabela.ler, janela: Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await cache.atualizarParte('q', (r) => r['local'] == 1, [
+        {'local': 1, 'q': 9},
+      ]);
+      expect(await cache.vencida('q', const Duration(milliseconds: 1)), isTrue);
+    });
+
+    test('releitura por posição volta para o lugar da posição', () async {
+      // O galpão relê só as posições gravadas; sem ordenar, elas iriam para o
+      // fim da cópia e a busca do galpão sairia fora de (posicao, ordem).
+      final cache = _cache();
+      final tabela = _Tabela([
+        {'posicao': 1, 'ordem': 0},
+        {'posicao': 2, 'ordem': 0},
+        {'posicao': 3, 'ordem': 0},
+      ]);
+      await cache.ler('galpao', tabela.ler);
+      int porPosicao(Map<String, dynamic> a, Map<String, dynamic> b) {
+        final p = (a['posicao'] as int).compareTo(b['posicao'] as int);
+        return p != 0 ? p : (a['ordem'] as int).compareTo(b['ordem'] as int);
+      }
+
+      final corrigida = await cache.atualizarParte(
+        'galpao',
+        (r) => r['posicao'] == 2,
+        [
+          {'posicao': 2, 'ordem': 1},
+          {'posicao': 2, 'ordem': 0},
+        ],
+        ordenar: porPosicao,
+      );
+      final esperado = [
+        (1, 0),
+        (2, 0),
+        (2, 1),
+        (3, 0),
+      ];
+      expect(corrigida!.map((r) => (r['posicao'], r['ordem'])), esperado);
+      final lida = await cache.ler('galpao', tabela.ler);
+      expect(lida.map((r) => (r['posicao'], r['ordem'])), esperado);
+    });
+  });
+
+  group('volta ao app relê só o que está em uso', () {
+    test('o prewarm não conta como uso', () async {
+      final cache = _cache();
+      final usada = _Tabela([
+        {'x': 1},
+      ]);
+      final soPrewarm = _Tabela([
+        {'y': 1},
+      ]);
+      await cache.ler('usada', usada.ler, janela: Duration.zero);
+      await ConsultaCache.semMarcarUso(
+        () => cache.ler('layout_9', soPrewarm.ler, janela: Duration.zero),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+
+      await cache.atualizar(
+        soVencidas: true,
+        usadasHa: const Duration(hours: 2),
+      );
+      expect(usada.leituras, 2);
+      expect(soPrewarm.leituras, 1);
+
+      // O Sincronizar continua relendo tudo.
+      await cache.atualizar();
+      expect(soPrewarm.leituras, 2);
+    });
+
+    test('Sincronizar durante a volta ao app espera e relê tudo', () async {
+      final cache = _cache();
+      final lenta = Completer<LinhasConsulta>();
+      var leiturasLenta = 0;
+      Future<LinhasConsulta> lerLenta() {
+        leiturasLenta++;
+        return leiturasLenta == 1 ? Future.value([]) : lenta.future;
+      }
+
+      await cache.ler('lenta', lerLenta, janela: Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      final volta = cache.atualizar(soVencidas: true);
+      expect(cache.atualizando, isTrue);
+
+      var sincronizou = false;
+      final sincronizar = cache.atualizar().then((_) => sincronizou = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(sincronizou, isFalse);
+      lenta.complete([
+        {'v': 2},
+      ]);
+      await volta;
+      await sincronizar;
+      expect(sincronizou, isTrue);
+      expect(leiturasLenta, 3, reason: 'a passada do Sincronizar relê de novo');
+    });
+  });
+
+  group('avisos', () {
+    test('avisar: false não chama aoAtualizar quando a cópia muda', () async {
+      var avisos = 0;
+      final cache = _cache(aoAtualizar: () => avisos++);
+      final contagens = _Tabela([
+        {'codigo': 'A'},
+      ]);
+      await cache.ler('c', contagens.ler, janela: Duration.zero, avisar: false);
+      contagens.linhas = [
+        {'codigo': 'B'},
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await cache.ler('c', contagens.ler, janela: Duration.zero, avisar: false);
+      await _assentar();
+      expect(contagens.leituras, 2);
+      expect(avisos, 0);
+    });
+
+    test('a ordem das linhas e das colunas não conta como mudança', () async {
+      var avisos = 0;
+      final cache = _cache(aoAtualizar: () => avisos++);
+      final tabela = _Tabela([
+        {'a': 1, 'b': 2},
+        {'a': 3, 'b': 4},
+      ]);
+      await cache.ler('t', tabela.ler, janela: Duration.zero);
+      tabela.linhas = [
+        {'b': 4, 'a': 3},
+        {'a': 1, 'b': 2},
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await cache.ler('t', tabela.ler, janela: Duration.zero);
+      await _assentar();
+      expect(tabela.leituras, 2);
+      expect(avisos, 0);
+
+      tabela.linhas = [
+        {'a': 1, 'b': 5},
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await cache.ler('t', tabela.ler, janela: Duration.zero);
+      await _assentar();
+      expect(avisos, 1);
+    });
+  });
+
+  group('geração por chave', () {
+    test('commit em X não descarta a leitura em andamento de Y', () async {
+      final cache = _cache();
+      final rede = Completer<LinhasConsulta>();
+      final leitura = cache.ler('y', () => rede.future, forceRefresh: true);
+      await Future<void>.delayed(Duration.zero);
+      await cache.confirmar('x', [
+        {'gravado': true},
+      ]);
+      rede.complete([
+        {'y': 'novo'},
+      ]);
+      expect((await leitura).single['y'], 'novo');
+      final depois = await cache.ler(
+        'y',
+        () async => throw StateError('não devia ir ao banco'),
+        janela: const Duration(hours: 1),
+      );
+      expect(depois.single['y'], 'novo');
+    });
+
+    test('invalidar sem chaves poupa as somenteLeitura', () async {
+      final cache = _cache();
+      final ro = Completer<LinhasConsulta>();
+      final rw = Completer<LinhasConsulta>();
+      await cache.confirmar('rw', [
+        {'v': 'antes'},
+      ]);
+      final leituraRo = cache.ler(
+        'ro',
+        () => ro.future,
+        forceRefresh: true,
+        somenteLeitura: true,
+      );
+      final leituraRw = cache.ler('rw', () => rw.future, forceRefresh: true);
+      await Future<void>.delayed(Duration.zero);
+      cache.invalidarConsultasEmAndamento();
+      ro.complete([
+        {'v': 'ro'},
+      ]);
+      rw.complete([
+        {'v': 'resposta velha'},
+      ]);
+      expect((await leituraRo).single['v'], 'ro');
+      expect((await leituraRw).single['v'], 'antes');
+    });
+
+    test('invalidar com chaves mexe só nelas', () async {
+      final cache = _cache();
+      await cache.confirmar('galpao', [
+        {'v': 'antes'},
+      ]);
+      await cache.confirmar('outra', [
+        {'v': 'antes'},
+      ]);
+      final g = Completer<LinhasConsulta>();
+      final o = Completer<LinhasConsulta>();
+      final lg = cache.ler('galpao', () => g.future, forceRefresh: true);
+      final lo = cache.ler('outra', () => o.future, forceRefresh: true);
+      await Future<void>.delayed(Duration.zero);
+      cache.invalidarConsultasEmAndamento(['galpao']);
+      g.complete([
+        {'v': 'velha'},
+      ]);
+      o.complete([
+        {'v': 'nova'},
+      ]);
+      expect((await lg).single['v'], 'antes');
+      expect((await lo).single['v'], 'nova');
     });
   });
 }

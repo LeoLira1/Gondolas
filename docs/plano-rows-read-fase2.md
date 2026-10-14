@@ -1,5 +1,14 @@
 # Menos rows read: fase 2 (loja, conferência, baixa e cache)
 
+> **Status: aplicado** (commit `Menos rows read, fase 2…`). O resumo para quem usa está no README, em
+> "Leitura no Turso → Segunda rodada". Diferenças do texto abaixo:
+> - Os selos casam o código só quando os dois lados são texto, e o `codigo` de `estoque_mestre` (INTEGER)
+>   casa pelo valor numérico — é o que o JOIN antigo fazia de fato no SQLite, conferido por
+>   `tool/verify_badges_sql.py` (o texto abaixo dizia `toString()`).
+> - A releitura das posições do galpão tem teste na `ConsultaCache` (ordem da correção parcial), não no
+>   `GalpaoService`.
+> - Falta a medição no campo (gráfico de Rows Read de um dia de loja e galpão).
+
 ## Contexto
 
 A primeira rodada (commit `Menos rows read no Turso…`, branch `claude/laughing-cori-7rst28`) tirou o
