@@ -17,6 +17,16 @@ const prefixoEstocado = 'EST:';
 
 bool codigoEhEstocado(String codigo) => codigo.startsWith(prefixoEstocado);
 
+/// Chave do destaque da busca (o laranja que acende os paletes do produto).
+///
+/// Da loja, é o código: todos os paletes do herbicida acendem juntos. De
+/// estocado, o código sozinho não serve — dois cooperados com o mesmo produto
+/// gravam o mesmo `EST:49000`, e buscar o ZAPP do João acendia também o da
+/// Maria. Por isso entra o nome do palete, que traz o cooperado
+/// (ver [nomeDoPalete]).
+String chaveDestaque(String codigo, String nome) =>
+    codigoEhEstocado(codigo) ? '$codigo|$nome' : codigo;
+
 /// Uma linha de `materiais_terceiros` com saldo a entregar.
 class ItemEstocado {
   final String cooperado;

@@ -394,7 +394,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
   void _escolherResultado(EnderecoBarracao e) {
     FocusScope.of(context).unfocus();
     setState(() {
-      _destacadoCodigo = e.produtoCodigo;
+      _destacadoCodigo = chaveDestaque(e.produtoCodigo, e.produtoNome);
       _selecionadoId   = e.id;
       _buscaCtrl.clear();
       _resultadosBusca = const [];
@@ -698,7 +698,8 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final codigo = _destacadoCodigo;
     if (codigo == null) return '';
     for (final e in _enderecos) {
-      if (e.produtoCodigo == codigo && e.produtoNome.isNotEmpty) {
+      if (chaveDestaque(e.produtoCodigo, e.produtoNome) == codigo &&
+          e.produtoNome.isNotEmpty) {
         return e.produtoNome;
       }
     }
@@ -708,7 +709,9 @@ class _BarracaoPageState extends State<BarracaoPage> {
   int get _paletesComDestaque {
     final codigo = _destacadoCodigo;
     if (codigo == null) return 0;
-    return _enderecos.where((e) => e.produtoCodigo == codigo).length;
+    return _enderecos
+        .where((e) => chaveDestaque(e.produtoCodigo, e.produtoNome) == codigo)
+        .length;
   }
 }
 

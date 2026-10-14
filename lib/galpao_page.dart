@@ -415,7 +415,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
     return [
       for (final pilha in _pilhas.values)
         for (final rack in pilha)
-          if (rack.produtoCodigo == codigo) rack,
+          if (chaveDestaque(rack.produtoCodigo, rack.produtoNome) == codigo)
+            rack,
     ];
   }
 
@@ -1986,12 +1987,13 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// só, com o painel dela já aberto, não mostra nada que não esteja na tela
   /// — e o botão ficava ali em todo rack, cobrando espaço sem servir.
   Widget? _botaoDestaque(RackGalpao rack) {
-    final quantas = _posicoesDoProduto(rack.produtoCodigo);
-    final aceso = widget.destacadoCodigo == rack.produtoCodigo;
+    final chave = chaveDestaque(rack.produtoCodigo, rack.produtoNome);
+    final quantas = _posicoesDoProduto(chave);
+    final aceso = widget.destacadoCodigo == chave;
     if (quantas <= 1 && !aceso) return null;
 
     return GestureDetector(
-      onTap: () => widget.onAlternarDestaque?.call(rack.produtoCodigo),
+      onTap: () => widget.onAlternarDestaque?.call(chave),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
         decoration: BoxDecoration(
@@ -2030,10 +2032,13 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   /// Em quantas posições do galpão este produto está — racks empilhados na
   /// mesma posição contam uma vez só, que é como quem vai buscar conta.
-  int _posicoesDoProduto(String codigo) {
+  int _posicoesDoProduto(String chave) {
     var total = 0;
     for (final pilha in widget.pilhas.values) {
-      if (pilha.any((r) => r.produtoCodigo == codigo)) total++;
+      final tem = pilha.any(
+        (r) => chaveDestaque(r.produtoCodigo, r.produtoNome) == chave,
+      );
+      if (tem) total++;
     }
     return total;
   }
