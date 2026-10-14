@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:libsql_dart/libsql_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'baixa_por_contagem.dart';
 import 'codigos_vinculados.dart';
 import 'estoque_localizado_service.dart';
+import 'galpao_saldo.dart' show mestrePorCodigo;
 import 'galpao_service.dart';
 import 'models.dart' show localTipoGalpao;
 import 'turso_service.dart';
@@ -53,6 +56,43 @@ class BaixaPorContagemService {
 
   DateTime? _ultimaAutomaticaEm;
 
+  /// Onde a hora da última passada automática fica guardada, por banco. Só
+  /// em memória, cada vez que o Android matava o app a janela zerava e a
+  /// abertura seguinte relia tudo de novo.
+  static String chaveUltimaPassada(String banco) =>
+      'baixa_automatica_ultima_$banco';
+
+  String? get _chaveUltimaPassada {
+    final banco = TursoService().identidadeAtiva;
+    return banco == null ? null : chaveUltimaPassada(banco);
+  }
+
+  Future<DateTime?> _ultimaPassadaGravada() async {
+    final chave = _chaveUltimaPassada;
+    if (chave == null) return null;
+    try {
+      final texto = (await SharedPreferences.getInstance()).getString(chave);
+      return texto == null ? null : DateTime.tryParse(texto);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _gravarUltimaPassada(DateTime? quando) async {
+    final chave = _chaveUltimaPassada;
+    if (chave == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (quando == null) {
+        await prefs.remove(chave);
+      } else {
+        await prefs.setString(chave, quando.toIso8601String());
+      }
+    } catch (_) {
+      // Sem a marca, a próxima abertura só roda a passada de novo.
+    }
+  }
+
   bool _rodando = false;
 
   /// True enquanto uma passada está em andamento — as telas chamam de mais de
@@ -85,12 +125,17 @@ class BaixaPorContagemService {
   /// abrindo agora.
   Future<ResumoBaixa> rodarSeAutomatica() async {
     if (!await lerAutomatica()) return ResumoBaixa.vazio;
-    final ultima = _ultimaAutomaticaEm;
+    final gravada = _ultimaAutomaticaEm ?? await _ultimaPassadaGravada();
+    // A memória de novo depois do await: outra tela pode ter começado uma
+    // passada enquanto o disco era lido.
+    final ultima = _ultimaAutomaticaEm ?? gravada;
     if (ultima != null &&
         DateTime.now().difference(ultima) < intervaloMinimoAutomatica) {
       return ultimoResumo.value ?? ResumoBaixa.vazio;
     }
-    _ultimaAutomaticaEm = DateTime.now();
+    final agora = DateTime.now();
+    _ultimaAutomaticaEm = agora;
+    unawaited(_gravarUltimaPassada(agora));
     return executar();
   }
 
@@ -98,7 +143,10 @@ class BaixaPorContagemService {
   /// [rodarSeAutomatica] ler o banco de novo. É o que o interruptor da
   /// configuração usa ao ser religado: pedido explícito não espera a janela
   /// de quem não pediu nada.
-  void esquecerJanela() => _ultimaAutomaticaEm = null;
+  void esquecerJanela() {
+    _ultimaAutomaticaEm = null;
+    unawaited(_gravarUltimaPassada(null));
+  }
 
   /// Uma passada completa: planeja e (se [aplicar]) grava.
   ///
@@ -168,10 +216,17 @@ class BaixaPorContagemService {
       final enderecos = await _lerEnderecos(client);
       if (enderecos.isEmpty) return const [];
 
-      final mestre = await _lerMestre(client);
+      // Leitura fresca de propósito (a baixa GRAVA com base nela), mas pela
+      // cópia compartilhada: o galpão aberto logo depois usa estas mesmas
+      // linhas para o saldo em vez de reler a tabela.
+      final mestre = mestrePorCodigo(
+        await TursoService().consultarSaldos(forceRefresh: true),
+      );
       final grupos = gruposDeCodigos(
         codigos: enderecos.keys,
-        produtoIdPorCodigo: await _lerVinculosDoMapa(client),
+        produtoIdPorCodigo: await TursoService().vinculosDoMapa(
+          forceRefresh: true,
+        ),
         nomePorCodigo: {for (final e in mestre.entries) e.key: e.value.nome},
       );
       final divergencias = await _lerDivergencias(client);
@@ -260,53 +315,6 @@ class BaixaPorContagemService {
           );
     }
     return porCodigo;
-  }
-
-  /// Nome e qtd_sistema por código. A tabela inteira, com o mesmo teto do
-  /// catálogo: o irmão de um código fora do mapa só é achável pelo NOME (ver
-  /// codigos_vinculados.dart).
-  Future<Map<String, ({String nome, double qtdSistema})>> _lerMestre(
-    LibsqlClient client,
-  ) async {
-    final stmt = await client.prepare(
-      'SELECT codigo, produto, qtd_sistema FROM estoque_mestre LIMIT 5000',
-    );
-    final rows = await stmt.query() as List<dynamic>;
-    final mestre = <String, ({String nome, double qtdSistema})>{};
-    for (final dynamic row in rows) {
-      final r = row as Map<String, dynamic>;
-      final codigo = normalizarCodigo(r['codigo'] as String?);
-      if (codigo == null) continue;
-      mestre[codigo] = (
-        nome: r['produto'] as String? ?? '',
-        qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
-      );
-    }
-    return mestre;
-  }
-
-  /// Código → produto_id do mapa de produtos. As tabelas são do dashboard e
-  /// podem não existir; sem elas resta o nome.
-  Future<Map<String, String>> _lerVinculosDoMapa(LibsqlClient client) async {
-    final vinculos = <String, String>{};
-    for (final tabela in const ['mapa_produtos', 'mapa_produtos_codigos']) {
-      try {
-        final stmt = await client.prepare(
-          'SELECT produto_id, codigo FROM $tabela WHERE codigo IS NOT NULL',
-        );
-        final rows = await stmt.query() as List<dynamic>;
-        for (final dynamic row in rows) {
-          final r = row as Map<String, dynamic>;
-          final codigo = normalizarCodigo(r['codigo'] as String?);
-          final produtoId = (r['produto_id']?.toString() ?? '').trim();
-          if (codigo == null || produtoId.isEmpty) continue;
-          vinculos[codigo] = produtoId;
-        }
-      } catch (_) {
-        // Tabela ausente: segue sem ela.
-      }
-    }
-    return vinculos;
   }
 
   /// Soma dos deltas das divergências ABERTAS, por código.

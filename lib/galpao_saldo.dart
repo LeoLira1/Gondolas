@@ -168,3 +168,36 @@ Map<String, SaldoProduto> montarSaldos({
   }
   return saldos;
 }
+
+/// Nome e qtd_sistema por código NORMALIZADO, das linhas do estoque_mestre
+/// (`codigo`, `produto`, `qtd_sistema`). Código repetido fica com a última
+/// linha, como na leitura direta que isto substituiu.
+Map<String, ({String nome, double qtdSistema})> mestrePorCodigo(
+  Iterable<Map<String, dynamic>> linhas,
+) {
+  final mestre = <String, ({String nome, double qtdSistema})>{};
+  for (final r in linhas) {
+    final codigo = normalizarCodigo(r['codigo'] as String?);
+    if (codigo == null) continue;
+    mestre[codigo] = (
+      nome: r['produto'] as String? ?? '',
+      qtdSistema: (r['qtd_sistema'] as num?)?.toDouble() ?? 0,
+    );
+  }
+  return mestre;
+}
+
+/// Soma de estoque_localizado.quantidade por código NORMALIZADO, em todos os
+/// locais — a conta que o `GROUP BY produto_codigo` fazia no banco, agora
+/// sobre a cópia de leitura que o app já tem. Grafias do mesmo código
+/// (`254185` e ` 254185`) somam juntas em vez de uma apagar a outra.
+Map<String, double> enderecadoPorCodigo(Iterable<Map<String, dynamic>> linhas) {
+  final total = <String, double>{};
+  for (final r in linhas) {
+    final codigo = normalizarCodigo(r['produto_codigo'] as String?);
+    if (codigo == null) continue;
+    total[codigo] =
+        (total[codigo] ?? 0) + ((r['quantidade'] as num?)?.toDouble() ?? 0);
+  }
+  return total;
+}

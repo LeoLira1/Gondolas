@@ -258,7 +258,14 @@ Future<void> executarOperacao(OperacaoPendente op) async {
       dispositivo: await turso.dispositivo(),
     ),
   );
+  // O espelho em estoque_localizado só mudou neste local: é só ele que a
+  // próxima leitura de quantidades relê (antes a cópia inteira expirava, e
+  // cada palete custava o estoque_localizado inteiro de novo no Turso).
+  turso.marcarLocalGravado(
+    op.tipo.doGalpao ? localTipoGalpaoSql : localTipoBarracaoSql,
+    op.local,
+  );
   // Expira as cópias de leitura que dependem do que mudou (busca do
-  // barracão, quantidades) e impede consulta antiga de desfazer o commit.
-  await turso.marcarGravacaoLocal();
+  // barracão) e impede consulta antiga de desfazer o commit.
+  await turso.marcarGravacaoLocal(quantidadesPorLocal: true);
 }

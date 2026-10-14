@@ -149,6 +149,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     if (_persistindo) _fila.removeListener(_aoMudarFila);
     unawaited(_eventosFila?.cancel());
     _recargaAposFila?.cancel();
+    _recargaPorAviso?.cancel();
     _irParaCtrl.dispose();
     super.dispose();
   }
@@ -285,8 +286,22 @@ class _GalpaoPageState extends State<GalpaoPage> {
     TursoService().dataRevision.addListener(_aoAtualizarDados);
   }
 
+  // Os avisos de dados novos chegam em rajada: uma volta ao app relê várias
+  // consultas, e cada uma que mudou avisa por conta própria. Sem o respiro,
+  // cada aviso recarregava o galpão e o saldo de novo.
+  Timer? _recargaPorAviso;
+
   void _aoAtualizarDados() {
     if (!mounted || !_persistindo) return;
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(
+      const Duration(milliseconds: 800),
+      _recarregarPorAviso,
+    );
+  }
+
+  void _recarregarPorAviso() {
+    if (!mounted) return;
     _carregarPilhas();
     unawaited(_carregarCatalogo());
     // Uma sincronização também traz as confirmações feitas no app de contagem:
@@ -338,7 +353,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
     // o delta que a tela já aplicou. A recarga do fim da fila lê o saldo.
     if (_temPendentesGalpao) return;
     final mudancas = _mudancasLocais;
-    final saldos = await GalpaoService().carregarSaldos();
+    final saldos = await GalpaoService().carregarSaldos(
+      codigosComRack: _codigosComRack.toSet(),
+    );
     if (!mounted || mudancas != _mudancasLocais || _temPendentesGalpao) return;
     setState(() => _saldos = saldos);
   }
@@ -347,11 +364,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// nenhum no galpão — é o número que interessa na hora de lançar ("o
   /// sistema tem 145, já endereçei 100").
   ///
-  /// O mapa em memória responde primeiro; só um produto de fora dele (nunca
-  /// endereçado, ou catálogo recém-aberto) custa a consulta. Ela é a MESMA de
+  /// O mapa em memória responde primeiro; um produto de fora dele (nunca
+  /// endereçado, ou catálogo recém-aberto) é calculado pela MESMA conta de
   /// [GalpaoService.carregarSaldos] — inclusive na soma dos códigos irmãos do
   /// produto —, para o painel nunca mostrar um número diferente do da tarja
-  /// que já estava na tela.
+  /// que já estava na tela. A conta sai das cópias de leitura: escolher um
+  /// produto não vai mais ao banco.
   Future<SaldoProduto?> _saldoDoProduto(String codigo) async {
     final emMemoria = _saldos[codigo];
     if (emMemoria != null) return emMemoria;

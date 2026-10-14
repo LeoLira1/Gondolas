@@ -247,8 +247,10 @@ do galpão pedem a baixa cada uma por si, e o galpão é reaberto dezenas de
 vezes num turno — cada passada lê o `estoque_localizado` inteiro, o catálogo e
 as duas tabelas do mapa. Como a baixa é idempotente por contagem, repetir tudo
 isso um minuto depois nunca acha nada de novo: dentro da janela a chamada
-devolve o resumo da passada anterior, sem tocar no banco. Religar o
-interruptor em ⚙️ zera a janela, porque pedido explícito não espera.
+devolve o resumo da passada anterior, sem tocar no banco. A hora da última
+passada fica guardada no aparelho, por banco — só em memória, cada vez que o
+Android matava o app a janela zerava. Religar o interruptor em ⚙️ zera a
+janela, porque pedido explícito não espera.
 
 A regra vive em `lib/baixa_por_contagem.dart` (função pura, sem banco e sem
 tela); o SQL e a ordem das gravações, em `lib/baixa_por_contagem_service.dart`.
@@ -342,6 +344,63 @@ O teste que falta é o do celular na rede da loja.
 Ainda no caminho antigo (várias idas por gravação): layouts de gôndola e
 estante, cadastro de paletes, exclusão de endereço de gôndola e conclusão de
 contagem.
+
+## Leitura no Turso (rows read)
+
+O Turso cobra por linha **varrida**, não por linha devolvida: um `SELECT` sem
+filtro indexado conta a tabela inteira, mude ela ou não. Catalogar no galpão
+estava custando umas 15 mil linhas por palete, quase tudo relendo o que não
+tinha mudado:
+
+- **Escolher um produto novo** no painel recalculava o saldo lendo o
+  `estoque_mestre`, as duas tabelas do mapa e o `estoque_localizado` inteiros
+  — para mostrar o número de um produto só.
+- **Cada gravação expirava** a cópia do `estoque_localizado`, e a conferência
+  do fim da fila relia o saldo completo de novo.
+- **Cada volta ao app** (a tela bloqueia a cada palete) relia as ~30 consultas
+  guardadas, e cada uma que mudou recarregava o galpão por conta própria.
+- **O `estoque_mestre` era lido quatro vezes** ao abrir o app e o galpão:
+  catálogo, diálogo de quantidade, saldo do galpão e baixa.
+
+O que mudou:
+
+- **Janela por consulta** (`ConsultaCache`). A cópia só volta ao banco depois
+  da sua idade: 30 s para as pequenas (galpão, barracão, layouts), 5 min para
+  as de tabela grande (`estoque_localizado`, buscas, `materiais_terceiros`) e
+  30 min para o cadastro (`estoque_mestre`, mapa de produtos), que só muda
+  quando a planilha do ERP sobe ou pelo dashboard. O que ESTE aparelho grava
+  corrige a cópia na hora; a janela só limita quanto demora para aparecer o
+  que outro aparelho mudou. O **Sincronizar continua relendo tudo**.
+- **Uma leitura do `estoque_mestre` para o app inteiro** (`consultarSaldos`):
+  o catálogo sai dela (com o teto de 5000 de sempre), e o saldo do galpão, o
+  diálogo de quantidade e a baixa usam a mesma cópia. A baixa pede leitura
+  fresca, porque grava com base nela, e deixa o resultado para os outros.
+- **Saldo do galpão sem consulta própria** (`GalpaoService.carregarSaldos`):
+  os códigos com rack saem das pilhas da tela, o sistema e o mapa das cópias
+  de cadastro, e o endereçado é somado em Dart da cópia do
+  `estoque_localizado`. Escolher um produto para lançar não vai ao banco.
+- **Depois de gravar, só o local gravado** (`marcarLocalGravado`): a fila
+  anota a posição do galpão (ou o palete do barracão), e a próxima leitura de
+  quantidades relê só essas linhas, pelo `idx_estoque_localizado_local`, numa
+  ida para todas as posições anotadas.
+- **Volta ao app**: no máximo uma releitura a cada 5 min, e só das consultas
+  cuja janela venceu. A fila de gravação continua tentando na hora.
+- **Avisos em rajada viram uma recarga**: o galpão espera 800 ms de silêncio
+  no `dataRevision` antes de recarregar.
+
+Estimativa por palete catalogado: de ~15 mil linhas para algumas centenas (a
+releitura das pilhas do galpão, que é pequena). A conta é da **conta inteira**
+do Turso: os dashboards Streamlit e os apps irmãos leem do mesmo plano, e a
+divisão por banco fica em Databases → (banco) → Usage.
+
+Ainda de fora: a baixa varre `contagem_itens` inteiro a cada passada (tabela
+do app de contagem, que só cresce), e as cenas de gôndola e estante relêem
+endereços desatualizados/divergentes com `forceRefresh` a cada
+`dataRevision`.
+
+Verificado em `test/leitura_turso_test.dart` (janela, volta ao app, tabela só
+de leitura, troca por local, somas do saldo) e `test/galpao_service_test.dart`
+(saldo sem banco nem cópia).
 
 ## Créditos
 

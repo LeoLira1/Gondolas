@@ -5,6 +5,12 @@ typedef LinhasConsulta = List<Map<String, dynamic>>;
 
 /// Cópias de respostas confirmadas pelo servidor. Nunca recebe SQL de escrita.
 /// A geração impede uma leitura iniciada antes de um commit de desfazê-lo.
+///
+/// Cada chave tem a sua JANELA: servida da cópia, ela só volta ao banco quando
+/// a última tentativa passou dessa idade. O Turso cobra por linha varrida, e
+/// as tabelas grandes (estoque_mestre, estoque_localizado) eram relidas
+/// inteiras a cada 30 s de uso — o mesmo número de linhas para descobrir, quase
+/// sempre, que nada tinha mudado.
 class ConsultaCache {
   ConsultaCache({
     required this.lerDisco,
@@ -19,17 +25,39 @@ class ConsultaCache {
   final _emAndamento = <String, Future<LinhasConsulta>>{};
   final _ultimaTentativa = <String, DateTime>{};
   final _persistencias = <String, Future<void>>{};
+  final _janelas = <String, Duration>{};
+  final _somenteLeitura = <String>{};
   int _geracao = 0;
   bool atualizando = false;
 
+  /// A janela de quem não pede outra: a das consultas pequenas, que custam
+  /// poucas linhas e mudam a cada lançamento.
+  static const Duration janelaPadrao = Duration(seconds: 30);
+
+  /// [janela] é a idade a partir da qual a cópia servida dispara uma
+  /// releitura em segundo plano.
+  ///
+  /// [somenteLeitura] marca tabela que ESTE app nunca grava (estoque_mestre,
+  /// mapa de produtos): nenhum commit daqui a deixa velha, então a resposta
+  /// que chega depois de um commit vale do mesmo jeito. Sem isso, um
+  /// lançamento confirmado no meio da leitura do catálogo fazia a resposta
+  /// nova ser jogada fora em troca da cópia de ontem.
   Future<LinhasConsulta> ler(
     String chave,
     Future<LinhasConsulta> Function() consultar, {
     bool usarCache = true,
     bool forceRefresh = false,
     bool falharSemCache = false,
+    Duration janela = janelaPadrao,
+    bool somenteLeitura = false,
   }) async {
     _consultas[chave] = consultar;
+    _janelas[chave] = janela;
+    if (somenteLeitura) {
+      _somenteLeitura.add(chave);
+    } else {
+      _somenteLeitura.remove(chave);
+    }
     if (usarCache && !_valores.containsKey(chave)) {
       try {
         final texto = await lerDisco(chave);
@@ -45,8 +73,7 @@ class ConsultaCache {
     final atual = _valores[chave];
     if (usarCache && !forceRefresh && atual != null) {
       final ultima = _ultimaTentativa[chave];
-      if (ultima == null ||
-          DateTime.now().difference(ultima) > const Duration(seconds: 30)) {
+      if (ultima == null || DateTime.now().difference(ultima) > janela) {
         unawaited(_atualizar(chave).then<void>((_) {}, onError: (_) {}));
       }
       return _copiar(atual);
@@ -69,7 +96,9 @@ class ConsultaCache {
     futuro =
         Future<LinhasConsulta>(() async {
           final novo = await _consultas[chave]!();
-          if (geracao != _geracao) return _valores[chave] ?? novo;
+          if (geracao != _geracao && !_somenteLeitura.contains(chave)) {
+            return _valores[chave] ?? novo;
+          }
           final anterior = _valores[chave];
           final mudou = jsonEncode(anterior) != jsonEncode(novo);
           _valores[chave] = _copiar(novo);
@@ -129,14 +158,30 @@ class ConsultaCache {
     _emAndamento.clear();
   }
 
-  Future<void> atualizar() async {
+  /// Relê as consultas conhecidas. Com [soVencidas], só as que passaram da
+  /// própria janela — é o que a volta ao app usa, para não reler o
+  /// estoque_mestre inteiro a cada desbloqueio de tela. O Sincronizar pede
+  /// tudo.
+  Future<void> atualizar({bool soVencidas = false}) async {
     if (atualizando) return;
     atualizando = true;
     try {
-      await Future.wait(_consultas.keys.toList().map(_atualizar));
+      final agora = DateTime.now();
+      await Future.wait(
+        _consultas.keys
+            .where((chave) => !soVencidas || _vencida(chave, agora))
+            .toList()
+            .map(_atualizar),
+      );
     } finally {
       atualizando = false;
     }
+  }
+
+  bool _vencida(String chave, DateTime agora) {
+    final ultima = _ultimaTentativa[chave];
+    return ultima == null ||
+        agora.difference(ultima) > (_janelas[chave] ?? janelaPadrao);
   }
 
   Future<void> _persistir(String chave, LinhasConsulta linhas) {

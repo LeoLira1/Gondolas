@@ -1,6 +1,6 @@
 # Cache de consulta e gravação online
 
-A abertura das cenas lê respostas persistidas por banco antes de esperar a rede. O retorno ao app dispara atualização em segundo plano. A preferência de cache controla a leitura da cópia; toda gravação nova usa LibsqlClient.remote.
+A abertura das cenas lê respostas persistidas por banco antes de esperar a rede. Cada consulta tem a sua janela (30 s, 5 min para tabela grande, 30 min para estoque_mestre e mapa de produtos): dentro dela a cópia responde sem ir ao banco. O retorno ao app dispara, no máximo a cada 5 min, atualização em segundo plano só das consultas vencidas; o Sincronizar relê todas. A preferência de cache controla a leitura da cópia; toda gravação nova usa LibsqlClient.remote.
 
 O cache guarda somente resultados lidos do servidor ou dados de transações confirmadas. Falhas de rede preservam a última cópia. A geração do cache impede que consultas iniciadas antes de um commit substituam o estado confirmado. Falhas ao persistir o cache não transformam um commit online em falha de gravação.
 

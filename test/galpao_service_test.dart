@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/estoque_localizado_service.dart';
 import 'package:gondola_camda/galpao_service.dart';
 import 'package:gondola_camda/models.dart' show localTipoGalpao;
+import 'package:gondola_camda/turso_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -83,6 +84,25 @@ void main() {
         await GalpaoService().esvaziar(posicao: 1, ordem: 1, rackUuid: 'r'),
         isFalse,
       );
+    });
+
+    // O saldo agora sai das cópias de leitura. Sem banco e sem cópia, a
+    // resposta é "não sei" (vazio), nunca endereçado zero — que pintaria de
+    // vermelho todo rack do galpão.
+    test('saldo sem banco nem cópia devolve vazio', () async {
+      expect(
+        await GalpaoService().carregarSaldos(codigosComRack: {'BORAL'}),
+        isEmpty,
+      );
+      expect(await GalpaoService().carregarSaldo('BORAL'), isNull);
+    });
+
+    test('local anotado pela fila não trava a leitura das quantidades',
+        () async {
+      TursoService().marcarLocalGravado('galpao', 52);
+      expect(await TursoService().consultarQuantidades(), isEmpty);
+      // A anotação foi consumida: a próxima leitura não tenta de novo.
+      expect(await TursoService().consultarQuantidades(), isEmpty);
     });
   });
 }
