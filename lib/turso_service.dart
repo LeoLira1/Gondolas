@@ -19,7 +19,9 @@ import 'galpao_migracao_unidades.dart';
 import 'gravacao_lote.dart';
 import 'layout_cache.dart';
 import 'consulta_cache.dart';
+import 'badges_estoque.dart';
 import 'busca_local.dart';
+import 'codigos_vinculados.dart' show normalizarCodigo;
 import 'models.dart';
 import 'palete_registry.dart';
 import 'replica_local.dart';
@@ -177,8 +179,23 @@ class TursoService {
         throw StateError('Cache não foi persistido');
       }
     },
-    aoAtualizar: () => dataRevision.value++,
+    aoAtualizar: _avisarEmBreve,
   );
+
+  // Releituras em segundo plano que trouxeram dado novo avisam as telas por
+  // dataRevision. Uma volta ao app ou um Sincronizar relê várias consultas de
+  // uma vez, e cada uma que mudou avisava por conta própria: k avisos, k
+  // recargas de cada tela aberta. Um respiro curto junta a rajada num aviso.
+  Timer? _avisoPendente;
+  static const Duration _respiroDoAviso = Duration(milliseconds: 300);
+
+  void _avisarEmBreve() {
+    _avisoPendente?.cancel();
+    _avisoPendente = Timer(_respiroDoAviso, () {
+      _avisoPendente = null;
+      dataRevision.value++;
+    });
+  }
 
   Future<List<Map<String, dynamic>>> consultarComCache(
     String chave,
@@ -186,6 +203,10 @@ class TursoService {
     List<dynamic> parametros = const [],
     bool forceRefresh = false,
     bool falharSemCache = false,
+    Duration janela = ConsultaCache.janelaPadrao,
+    bool somenteLeitura = false,
+    bool avisar = true,
+    bool atualizarSeVencida = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString(keyDbUrl) ?? '';
@@ -194,8 +215,14 @@ class TursoService {
       return [];
     }
     final usarCache = prefs.getBool(keyCacheLocal) ?? true;
+    final completa = 'consulta_v1_${idBanco(url)}_$chave';
+    // Quem decide com o dado (catálogo, baixa) espera a rede quando a cópia
+    // passou da janela desde o último SUCESSO; dentro dela, a cópia basta.
+    if (atualizarSeVencida && !forceRefresh) {
+      forceRefresh = await _consultaCache.vencida(completa, janela);
+    }
     return _consultaCache.ler(
-      'consulta_v1_${idBanco(url)}_$chave',
+      completa,
       () async {
         if (!await _garantirConexao() || _urlAtiva != url) {
           throw StateError('Sem conexão com o banco');
@@ -210,7 +237,14 @@ class TursoService {
                       .timeout(_timeoutLeitura)
                   as List<dynamic>;
           return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-        } catch (_) {
+        } catch (e) {
+          // Tabela ou coluna que não existe neste banco: a consulta sai das
+          // conhecidas, senão o Sincronizar a relia, falhava sempre e dava o
+          // banco inteiro como fora do ar. Quem pediu decide o que fazer.
+          if (erroDeTabelaAusente(e) || erroDeColunaAusente(e)) {
+            _consultaCache.esquecer(completa);
+            rethrow;
+          }
           _renovarClienteDeLeitura(cliente);
           rethrow;
         }
@@ -218,8 +252,58 @@ class TursoService {
       usarCache: usarCache,
       forceRefresh: forceRefresh,
       falharSemCache: falharSemCache,
+      janela: janela,
+      somenteLeitura: somenteLeitura,
+      avisar: avisar,
     );
   }
+
+  /// Cópia da ocupação do galpão: a tela, o saldo, a busca do mapa e a
+  /// conferência leem a mesma (e o mesmo SQL, senão cada um registraria a
+  /// sua consulta para a chave).
+  static const String chaveGalpao = 'galpao';
+  static const String sqlGalpao =
+      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
+      'FROM galpao_racks ORDER BY posicao, ordem';
+
+  /// Cópia dos endereços do barracão, no mesmo esquema da do galpão.
+  static const String chaveBarracao = 'barracao';
+  static const String sqlBarracao =
+      'SELECT id, rotulo, pos_x, pos_z, produto_codigo, produto_nome, '
+      'quantidade FROM barracao_enderecos ORDER BY rotulo';
+
+  /// Chave completa (com o banco) de uma consulta guardada, ou null sem banco
+  /// ativo.
+  String? _chaveCompleta(String chave) {
+    final banco = _identidadeAtiva;
+    return banco == null ? null : 'consulta_v1_${banco}_$chave';
+  }
+
+  /// True quando a cópia de [chave] não teve leitura bem-sucedida dentro de
+  /// [janela] — mesmo que ela tenha vindo do disco de uma sessão anterior.
+  /// É o que decide se quem precisa de dado recente (catálogo, baixa) espera
+  /// a rede ou usa a cópia.
+  Future<bool> consultaVencida(String chave, Duration janela) async {
+    final completa = _chaveCompleta(chave);
+    if (completa == null) return true;
+    return _consultaCache.vencida(completa, janela);
+  }
+
+  /// Janela das cópias de contagem (última contagem por produto): o app de
+  /// contagem confirma itens o dia todo, e o selo âmbar das prateleiras
+  /// aguenta esse atraso.
+  static const Duration janelaContagem = Duration(minutes: 10);
+
+  /// Janela das consultas que varrem tabela inteira e grande
+  /// (estoque_localizado, layouts para a busca, materiais_terceiros). O que
+  /// ESTE aparelho grava já corrige a cópia na hora; a janela só limita quanto
+  /// demora para aparecer o que OUTRO aparelho ou app mudou.
+  static const Duration janelaTabelaGrande = Duration(minutes: 5);
+
+  /// Janela do estoque_mestre e do mapa de produtos: o primeiro só muda quando
+  /// a planilha do ERP sobe (uma vez por dia), o segundo pelo dashboard. É a
+  /// mesma validade que o catálogo já tinha no modo remoto.
+  static const Duration janelaCadastro = _produtosCacheTtl;
 
   /// Troca a conexão de leitura por uma nova depois de uma falha.
   ///
@@ -251,39 +335,29 @@ class TursoService {
       'consulta_v1_${idBanco(url)}_$chave',
       linhas,
     );
+    // A busca do galpão e a do barracão saem das próprias cópias 'galpao' e
+    // 'barracao' (ver _buscarNoGalpao). A das gôndolas e estantes tem cópia
+    // própria, corrigida aqui com a MESMA forma das linhas do SQL dela —
+    // colunas e DISTINCT —, senão a releitura seguinte acusava "mudou" e
+    // recarregava o app inteiro depois de cada layout salvo.
     final prefixo = 'consulta_v1_${idBanco(url)}_';
-    if (chave == 'galpao') {
-      await _consultaCache.confirmar('${prefixo}busca_galpao', linhas);
-    } else if (chave == 'barracao') {
-      // A busca só enxerga paletes com produto, e só as colunas que ela usa.
-      await _consultaCache.confirmar(
-        '${prefixo}busca_barracao',
-        [
-          for (final r in linhas)
-            if ((r['produto_codigo'] as String? ?? '').isNotEmpty)
-              {
-                'id': r['id'],
-                'rotulo': r['rotulo'],
-                'produto_codigo': r['produto_codigo'],
-                'produto_nome': r['produto_nome'],
-                'quantidade': r['quantidade'],
-              },
-        ]..sort((a, b) {
-            final n = ((a['produto_nome'] as String?) ?? '')
-                .compareTo((b['produto_nome'] as String?) ?? '');
-            return n != 0
-                ? n
-                : ((a['rotulo'] as String?) ?? '')
-                    .compareTo((b['rotulo'] as String?) ?? '');
-          }),
-      );
-    } else if (chave.startsWith('gondola_')) {
+    if (chave.startsWith('gondola_')) {
       final numero = int.tryParse(chave.substring('gondola_'.length));
       if (numero != null)
         await _consultaCache.atualizarParte(
           '${prefixo}busca_gondolas',
           (r) => r['gondola_num'] == numero,
-          linhas,
+          _distintas([
+            for (final r in linhas)
+              {
+                'produto_codigo': r['produto_codigo'],
+                'produto_nome': r['produto_nome'],
+                'gondola_num': r['gondola_num'],
+                'andar': r['andar'],
+                'pos_x': r['pos_x'],
+                'pos_z': r['pos_z'],
+              },
+          ]),
         );
     } else if (chave.startsWith('estante_')) {
       final numero = int.tryParse(chave.substring('estante_'.length));
@@ -291,24 +365,44 @@ class TursoService {
         await _consultaCache.atualizarParte(
           '${prefixo}busca_estantes',
           (r) => r['estante_num'] == numero,
-          linhas
-              .where(
-                (r) =>
-                    !estantesRemovidas.contains(r['estante_num']) &&
-                    !_ehBaseNelloreRemovida(
-                      r['estante_num'] as int,
-                      r['nivel'] as int,
-                    ),
-              )
-              .toList(),
+          _distintas([
+            for (final r in linhas)
+              if (!estantesRemovidas.contains(r['estante_num']) &&
+                  !_ehBaseNelloreRemovida(
+                    r['estante_num'] as int,
+                    r['nivel'] as int,
+                  ))
+                {
+                  'produto_codigo': r['produto_codigo'],
+                  'produto_nome': r['produto_nome'],
+                  'estante_num': r['estante_num'],
+                  'nivel': r['nivel'],
+                },
+          ]),
         );
     }
   }
 
+  /// As linhas sem repetição, na ordem em que apareceram (o SELECT DISTINCT
+  /// das buscas).
+  static List<Map<String, dynamic>> _distintas(
+    List<Map<String, dynamic>> linhas,
+  ) {
+    final vistas = <String>{};
+    return [
+      for (final r in linhas)
+        if (vistas.add(jsonEncode(r))) r,
+    ];
+  }
+
+  /// Corrige na cópia das quantidades as linhas de UM produto, relidas do
+  /// servidor depois de uma gravação deste aparelho. [avisar] falso é para
+  /// quem grava em série (a baixa) e avisa uma vez só no fim.
   Future<void> guardarQuantidadesProduto(
     String codigo,
-    List<Map<String, dynamic>> linhas,
-  ) async {
+    List<Map<String, dynamic>> linhas, {
+    bool avisar = true,
+  }) async {
     final url = _urlAtiva;
     if (url == null) return;
     await _consultaCache.atualizarParte(
@@ -316,14 +410,82 @@ class TursoService {
       (r) => r['produto_codigo'] == codigo,
       linhas,
     );
-    dataRevision.value++;
+    if (avisar) dataRevision.value++;
   }
 
-  /// Na volta do aplicativo a consulta acontece atrás da cena já visível.
+  /// Uma leitura avulsa, sem cópia: para quem relê só um pedaço de uma cópia
+  /// (pelo índice) e a corrige com [corrigirConsulta]. Com prazo, e renovando
+  /// a conexão de leitura depois de uma falha, como [consultarComCache].
+  Future<List<Map<String, dynamic>>> consultarDireto(
+    String sql, {
+    List<Object?> parametros = const [],
+  }) async {
+    if (!await _garantirConexao()) {
+      throw StateError('Sem conexão com o banco');
+    }
+    final cliente = _client!;
+    try {
+      consultasEmitidas++;
+      final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+      final rows =
+          await stmt.query(positional: parametros).timeout(_timeoutLeitura)
+              as List<dynamic>;
+      return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+    } catch (_) {
+      _renovarClienteDeLeitura(cliente);
+      rethrow;
+    }
+  }
+
+  /// Troca na cópia de [chave] (nome curto) as linhas que [pertence] aceita
+  /// por [novas]. Devolve a cópia inteira corrigida, ou null sem cópia — aí
+  /// quem chamou relê a consulta inteira.
+  Future<List<Map<String, dynamic>>?> corrigirConsulta(
+    String chave,
+    bool Function(Map<String, dynamic>) pertence,
+    List<Map<String, dynamic>> novas, {
+    int Function(Map<String, dynamic>, Map<String, dynamic>)? ordenar,
+  }) async {
+    final completa = _chaveCompleta(chave);
+    if (completa == null) return null;
+    return _consultaCache.atualizarParte(
+      completa,
+      pertence,
+      novas,
+      ordenar: ordenar,
+    );
+  }
+
+  /// Faz a próxima leitura das quantidades ir ao banco — para quem gravou em
+  /// estoque_localizado e não conseguiu corrigir a cópia.
+  void expirarQuantidades() {
+    final chave = _chaveCompleta(_chaveQuantidades);
+    if (chave != null) _consultaCache.expirar(chave);
+  }
+
+  /// Volta ao app que não relê nada se a anterior foi há menos que isto.
+  ///
+  /// No galpão a tela bloqueia e desbloqueia a cada palete, e cada volta relia
+  /// as ~30 consultas guardadas — o estoque_mestre e o estoque_localizado
+  /// inteiros, toda vez. O Sincronizar continua relendo tudo na hora.
+  static const Duration intervaloVoltaAoApp = Duration(minutes: 5);
+  DateTime? _ultimaVoltaAoApp;
+
+  /// Na volta do aplicativo a consulta acontece atrás da cena já visível, e
+  /// só para as consultas cuja janela já passou e que alguém usou nesta
+  /// sessão. O prewarm lê ~35 layouts e as buscas na abertura, e reler tudo
+  /// isso a cada desbloqueio no galpão — onde ninguém abre gôndola — era o
+  /// grosso do custo da volta.
   Future<void> atualizarConsultas() async {
     if (_consultaCache.atualizando) return;
+    final ultima = _ultimaVoltaAoApp;
+    if (ultima != null &&
+        DateTime.now().difference(ultima) < intervaloVoltaAoApp) {
+      return;
+    }
+    _ultimaVoltaAoApp = DateTime.now();
     try {
-      await _consultaCache.atualizar();
+      await _consultaCache.atualizar(soVencidas: true, soUsadas: true);
     } catch (_) {
       _ultimoErroSync =
           'Não foi possível atualizar. Os dados anteriores continuam visíveis.';
@@ -953,22 +1115,39 @@ class TursoService {
   /// A persistência é aguardada antes de liberar o mutex. Assim um sync que
   /// venha logo depois não pode remover a chave e ser ultrapassado por uma
   /// gravação assíncrona antiga do contador.
-  Future<void> marcarGravacaoLocal() async {
-    if (!_modoLocal) {
-      _consultaCache.invalidarConsultasEmAndamento();
-      _consultaCache.expirar(
-        'consulta_v1_${_identidadeAtiva}_quantidades_detalhes_v2',
-      );
-      _consultaCache.expirar(
-        'consulta_v1_${_identidadeAtiva}_busca_barracao',
-      );
-      return;
-    }
-    _consultaCache.expirar(
-      'consulta_v1_${_identidadeAtiva}_busca_barracao',
+  ///
+  /// [expirarQuantidades] falso: quem gravou não mexeu em estoque_localizado
+  /// (layout, paletes, contagem do ciclo, seed do barracão), ou já corrige a
+  /// cópia das quantidades sozinho — por produto (diálogo de quantidade) ou
+  /// pelos locais anotados em [marcarLocalGravado] (fila do galpão e do
+  /// barracão). Expirar mandaria reler o estoque_localizado inteiro a cada
+  /// gravação.
+  ///
+  /// [chavesAfetadas]: as únicas consultas guardadas que a gravação pode ter
+  /// deixado velhas (nomes curtos, como 'galpao'). Só as leituras em andamento
+  /// DELAS são descartadas; sem a lista, todas as que este app grava. Descartar
+  /// leitura no ar é jogar fora linhas já cobradas pelo Turso — a volta ao
+  /// app relê várias consultas no mesmo instante em que a fila reenvia.
+  Future<void> marcarGravacaoLocal({
+    bool expirarQuantidades = true,
+    Set<String>? chavesAfetadas,
+  }) async {
+    final banco = _identidadeAtiva;
+    _consultaCache.invalidarConsultasEmAndamento(
+      chavesAfetadas == null || banco == null
+          ? null
+          : [for (final c in chavesAfetadas) 'consulta_v1_${banco}_$c'],
     );
+    if (expirarQuantidades) this.expirarQuantidades();
+    if (!_modoLocal) return;
     _gravacoesPendentes++;
     await _persistirGravacoesPendentes();
+  }
+
+  /// Faz a próxima leitura da consulta [chave] (nome curto) ir ao banco.
+  void expirarConsulta(String chave) {
+    final completa = _chaveCompleta(chave);
+    if (completa != null) _consultaCache.expirar(completa);
   }
 
   Future<void> _persistirGravacoesPendentes() async {
@@ -1254,6 +1433,8 @@ class TursoService {
         _timeoutConexao,
         onTimeout: () {},
       );
+      // Por trás, sem segurar a abertura (ver _garantirIndicesAlheios).
+      unawaited(_garantirIndicesAlheios());
     } catch (_) {
       _connected = false;
       _client = null;
@@ -1520,12 +1701,26 @@ class TursoService {
     }
   }
 
+  /// Quantas vezes [_invalidarCachesDeLeitura] rodou: quem guarda leitura
+  /// própria fora daqui (a conferência do dia) compara para saber que o
+  /// Sincronizar (ou uma reconexão) passou e a dele não vale mais.
+  int leiturasInvalidadas = 0;
+
   /// Zera tudo que é leitura em cache (catálogo e layouts). Chamado nos quatro
   /// pontos em que a base sob o app pode ter mudado por inteiro: reconexão,
   /// carga inicial, sincronização e limpeza do cache local.
   void _invalidarCachesDeLeitura() {
+    leiturasInvalidadas++;
     _produtosCache = null;
     _produtosCacheEm = null;
+    // Locais anotados ainda sem correção: a cópia das quantidades está sem
+    // essas gravações, e sem a anotação ninguém mais a corrigiria — ela
+    // expira e a próxima leitura busca a tabela. (Num banco novo, as
+    // anotações do anterior não dizem nada sobre ele.)
+    if (_locaisGravados.isNotEmpty) expirarQuantidades();
+    _locaisGravados.clear();
+    _tabelasDoMapaAusentes.clear();
+    _prewarmFeitoEm = null;
     _cacheGondola.invalidarTudo();
     _cacheEstante.invalidarTudo();
   }
@@ -2344,24 +2539,27 @@ class TursoService {
 
     final cache = _produtosCache;
     try {
-      // Use prepare() so the return type is consistent with fetchLayout.
-      // The bare client.query() returns a different type in libsql_dart 0.9.x
-      // and silently fails the cast, yielding an empty list.
-      //
       // Sem ORDER BY: estoque_mestre é de outro app e não tem índice em
       // `produto`, então ordenar no banco montava uma b-tree temporária a cada
       // leitura fria. A ordenação em Dart logo abaixo dá o mesmo resultado —
       // a colação BINARY do SQLite e o String.compareTo do Dart são ambos por
       // code point — e a ordem importa rio abaixo (produtosComCaixa documenta
       // "mantém a ordem do catálogo", e o autocomplete faz .take(8)).
+      //
+      // A leitura é a MESMA do saldo (`consultarSaldos`, que traz também o
+      // qtd_sistema): uma ida ao estoque_mestre alimenta o catálogo, o saldo
+      // do galpão, o diálogo de quantidade e a baixa. Antes eram quatro
+      // leituras da tabela inteira na abertura do app e do galpão. O teto de
+      // 5000 do catálogo continua, aplicado aqui.
+      //
+      // Só vai ao banco se a cópia passou da janela desde a última leitura
+      // que deu certo — mesmo vinda do disco de uma sessão anterior. Forçar
+      // sempre furava a janela: o Sincronizar lia o estoque_mestre duas
+      // vezes, e cada vencimento do catálogo lia de novo uma tabela que
+      // alguém tinha acabado de ler.
       final produtos = await cronometrar('fetchProdutos', () async {
-        consultasEmitidas++;
-        final stmt = await _client!.prepare(
-          'SELECT codigo, produto, categoria FROM estoque_mestre LIMIT 5000',
-        );
-        final rows = await stmt.query();
-        return (rows as List<dynamic>).map((dynamic row) {
-          final r = row as Map<String, dynamic>;
+        final rows = await consultarSaldos(atualizarSeVencida: true);
+        return rows.take(5000).map((r) {
           final cat = r['categoria'] as String? ?? '';
           final corHex = categoriaCores[cat] ?? '#888888';
           return Produto(
@@ -2599,7 +2797,9 @@ class TursoService {
             'cor_hex': i.corHex,
           },
       ]);
-      await marcarGravacaoLocal();
+      // Layout não grava estoque_localizado (o produto que sai é tratado à
+      // parte, por deleteEnderecosZerados, que corrige a cópia sozinho).
+      await marcarGravacaoLocal(expirarQuantidades: false);
       return true;
     } catch (_) {
       try {
@@ -2649,13 +2849,9 @@ class TursoService {
     return itens;
   }
 
-  /// Carrega os layouts de TODAS as estruturas em duas consultas e deixa os
-  /// dois caches quentes.
-  ///
-  /// As tabelas são pequenas (dezenas de caixas por estrutura, ~30 estruturas),
-  /// então duas consultas sem WHERE saem mais baratas que as ~30 que percorrer
-  /// o carrossel dispararia uma a uma — e, chamadas do prewarm enquanto o
-  /// usuário olha o mapa, saem inteiramente de fora do caminho crítico.
+  /// Carrega os layouts de TODAS as estruturas (uma consulta por estrutura,
+  /// pelo índice do número dela) e deixa os dois caches quentes, de fora do
+  /// caminho crítico enquanto o usuário olha o mapa.
   ///
   /// Falha em silêncio: é otimização, não caminho obrigatório. Se não der
   /// certo, cada estrutura volta a ser lida sob demanda como antes.
@@ -2672,12 +2868,27 @@ class TursoService {
   /// Chamado logo depois do init() na abertura do app: `LojaPage` é a home e
   /// não emite trabalho de banco próprio, então essa janela é livre. É o que
   /// faz a primeira abertura de uma cena custar o mesmo que as seguintes.
+  ///
+  /// Uma vez por sessão e por banco: cada "Ver no mapa" cria uma LojaPage
+  /// nova, e cada uma pedia tudo de novo (os ~35 layouts de janela curta
+  /// quase sempre vencidos). Nada do que ele lê conta como uso para a volta
+  /// ao app (ver [ConsultaCache.semMarcarUso]) — só o que uma tela de fato
+  /// abrir.
   Future<void> prewarm() async {
     if (!_connected) return;
-    await _precarregarBusca();
-    await precarregarLayouts();
-    await fetchProdutos();
+    final banco = _identidadeAtiva;
+    if (banco != null && _prewarmFeitoEm == banco) return;
+    await ConsultaCache.semMarcarUso(() async {
+      await _precarregarBusca();
+      await precarregarLayouts();
+      await fetchProdutos();
+    });
+    _prewarmFeitoEm = banco;
   }
+
+  // Banco em que o prewarm já rodou nesta sessão (zerado na troca de banco e
+  // no Sincronizar, junto com os outros caches de leitura).
+  String? _prewarmFeitoEm;
 
   Future<bool> salvarLayoutEstante(
     int estanteNum,
@@ -2769,7 +2980,9 @@ class TursoService {
             'cor_hex': i.corHex,
           },
       ]);
-      await marcarGravacaoLocal();
+      // Layout não grava estoque_localizado (o produto que sai é tratado à
+      // parte, por deleteEnderecosZerados, que corrige a cópia sozinho).
+      await marcarGravacaoLocal(expirarQuantidades: false);
       return true;
     } catch (_) {
       try {
@@ -2814,22 +3027,450 @@ class TursoService {
     }
   }
 
+  static const String _chaveQuantidades = 'quantidades_detalhes_v2';
+  static const String _colunasQuantidades =
+      'id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
+      'andar_ou_nivel, quantidade, atualizado_em';
+
   // Busca produto por nome (LIKE) em gôndola_layout E estante_layout,
   // retornando uma lista combinada (gôndolas primeiro).
+  /// O estoque_localizado inteiro, da cópia de leitura, com os locais que a
+  /// fila gravou desde a última vez já relidos (ver [marcarLocalGravado]).
   Future<List<Map<String, dynamic>>> consultarQuantidades({
     bool falharSemCache = false,
-  }) => consultarComCache(
-    'quantidades_detalhes_v2',
-    'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
-        'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado',
-    falharSemCache: falharSemCache,
-  );
+    bool atualizarSeVencida = false,
+  }) async {
+    await _corrigirQuantidadesGravadas();
+    return consultarComCache(
+      _chaveQuantidades,
+      'SELECT $_colunasQuantidades FROM estoque_localizado',
+      falharSemCache: falharSemCache,
+      janela: janelaTabelaGrande,
+      atualizarSeVencida: atualizarSeVencida,
+    );
+  }
 
-  Future<List<Map<String, dynamic>>> consultarSaldos() => consultarComCache(
-    'saldos_dialogo_v1',
+  // Locais (local_tipo → números) que a fila gravou e cujo espelho ainda não
+  // foi relido para a cópia das quantidades. Em memória: a cópia em disco de
+  // uma sessão anterior é relida inteira na primeira consulta de qualquer
+  // jeito (a janela começa vencida).
+  final Map<String, Set<int>> _locaisGravados = {};
+  Future<void>? _correcaoQuantidades;
+
+  /// Anota que o espelho de [local] mudou no servidor. A releitura acontece
+  /// na próxima [consultarQuantidades], uma só para todos os locais anotados
+  /// até ali — dez paletes lançados em sequência custam uma ida, não dez.
+  ///
+  /// A anotação vive só em memória, então o carimbo em disco da cópia sai na
+  /// hora: se o Android matar o app antes da correção, a reabertura relê a
+  /// tabela em vez de servir como fresca uma cópia sem esta gravação.
+  void marcarLocalGravado(String localTipo, int local) {
+    _locaisGravados.putIfAbsent(localTipo, () => <int>{}).add(local);
+    final chave = _chaveCompleta(_chaveQuantidades);
+    if (chave != null) _consultaCache.esquecerCarimboEmDisco(chave);
+  }
+
+  Future<void> _corrigirQuantidadesGravadas() {
+    if (_locaisGravados.isEmpty) return Future<void>.value();
+    final emAndamento = _correcaoQuantidades;
+    if (emAndamento != null) return emAndamento;
+    final futuro = () async {
+      while (_locaisGravados.isNotEmpty) {
+        final tipo = _locaisGravados.keys.first;
+        final locais = _locaisGravados.remove(tipo)!;
+        await atualizarQuantidadesDosLocais(tipo, locais);
+      }
+    }();
+    _correcaoQuantidades = futuro;
+    unawaited(
+      futuro.whenComplete(() {
+        if (identical(_correcaoQuantidades, futuro)) {
+          _correcaoQuantidades = null;
+        }
+      }),
+    );
+    return futuro;
+  }
+
+  /// Relê do servidor só as linhas de estoque_localizado de [locais] (do tipo
+  /// [localTipo]) e põe na cópia de [consultarQuantidades] no lugar das
+  /// antigas. True quando a cópia ficou em dia; sem ela em dia, a cópia
+  /// expira e a próxima leitura busca a tabela inteira.
+  ///
+  /// É o que segue uma gravação da fila do galpão/barracão: o lote reescreveu
+  /// o espelho dessas posições, e reler a tabela inteira para ver quatro
+  /// linhas custava milhares de linhas no Turso a cada palete. O filtro é o
+  /// do `idx_estoque_localizado_local`, então o banco lê só o que devolve.
+  Future<bool> atualizarQuantidadesDosLocais(
+    String localTipo,
+    Set<int> locais,
+  ) async {
+    if (locais.isEmpty) return true;
+    final chave = 'consulta_v1_${_identidadeAtiva}_$_chaveQuantidades';
+    final cliente = await _garantirConexao() ? _client : null;
+    if (cliente == null) {
+      _consultaCache.expirar(chave);
+      return false;
+    }
+    final lista = locais.toList()..sort();
+    try {
+      consultasEmitidas++;
+      final stmt = await cliente
+          .prepare(
+            'SELECT $_colunasQuantidades FROM estoque_localizado '
+            'WHERE local_tipo = ? AND local_num IN '
+            '(${List.filled(lista.length, '?').join(', ')})',
+          )
+          .timeout(_timeoutConexao);
+      final rows =
+          await stmt
+                  .query(positional: [localTipo, ...lista])
+                  .timeout(_timeoutLeitura)
+              as List<dynamic>;
+      await _consultaCache.atualizarParte(
+        chave,
+        (r) => r['local_tipo'] == localTipo && locais.contains(r['local_num']),
+        rows.map((r) => Map<String, dynamic>.from(r as Map)).toList(),
+      );
+      return true;
+    } catch (_) {
+      _renovarClienteDeLeitura(cliente);
+      // A cópia ficou sem a gravação: a próxima leitura busca a tabela.
+      _consultaCache.expirar(chave);
+      return false;
+    }
+  }
+
+  static const String _chaveSaldos = 'saldos_dialogo_v1';
+
+  /// O estoque_mestre inteiro: código, nome, categoria e qtd_sistema.
+  ///
+  /// É a fonte única da tabela no app (catálogo, saldo do galpão, diálogo de
+  /// quantidade, baixa), guardada por [janelaCadastro]. [forceRefresh] vai ao
+  /// banco na hora e deixa a cópia nova para todos os outros.
+  Future<List<Map<String, dynamic>>> consultarSaldos({
+    bool forceRefresh = false,
+    bool atualizarSeVencida = false,
+  }) => consultarComCache(
+    _chaveSaldos,
     'SELECT codigo, produto, categoria, qtd_sistema FROM estoque_mestre',
     falharSemCache: true,
+    forceRefresh: forceRefresh,
+    atualizarSeVencida: atualizarSeVencida,
+    janela: janelaCadastro,
+    somenteLeitura: true,
   );
+
+  // Tabelas do mapa de produtos que faltam neste banco (o dashboard nunca as
+  // criou). Lembrado na sessão para não gastar uma ida por saldo calculado.
+  final Set<String> _tabelasDoMapaAusentes = {};
+
+  /// Código normalizado → produto_id do mapa de produtos (principal e
+  /// secundários), guardado por [janelaCadastro].
+  ///
+  /// As duas tabelas são criadas pelo dashboard e podem não existir num banco
+  /// onde o mapa nunca foi usado; a ausência de uma não derruba a outra — sem
+  /// mapa, resta o nome (ver codigos_vinculados.dart).
+  ///
+  /// [falharFechado]: para quem GRAVA com base nos vínculos (a baixa). Uma
+  /// tabela que existe e não pôde ser lida lança em vez de sumir da conta —
+  /// sem o vínculo, o código secundário seria planejado sozinho, com alvo no
+  /// próprio qtd_sistema (muitas vezes 0), e os endereços dele seriam
+  /// esvaziados.
+  Future<Map<String, String>> vinculosDoMapa({
+    bool forceRefresh = false,
+    bool atualizarSeVencida = false,
+    bool falharFechado = false,
+  }) async {
+    final vinculos = <String, String>{};
+    for (final tabela in const ['mapa_produtos', 'mapa_produtos_codigos']) {
+      if (_tabelasDoMapaAusentes.contains(tabela)) continue;
+      try {
+        final rows = await consultarComCache(
+          'vinculos_$tabela',
+          'SELECT produto_id, codigo FROM $tabela WHERE codigo IS NOT NULL',
+          falharSemCache: true,
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+          janela: janelaCadastro,
+          somenteLeitura: true,
+        );
+        for (final r in rows) {
+          final codigo = normalizarCodigo(r['codigo']?.toString());
+          final produtoId = (r['produto_id']?.toString() ?? '').trim();
+          if (codigo == null || produtoId.isEmpty) continue;
+          vinculos[codigo] = produtoId;
+        }
+      } catch (e) {
+        if (erroDeTabelaAusente(e)) {
+          _tabelasDoMapaAusentes.add(tabela);
+          continue;
+        }
+        if (falharFechado) rethrow;
+        // Sem conexão (ou coluna diferente): segue sem ela.
+      }
+    }
+    return vinculos;
+  }
+
+  /// O erro é de tabela que não existe neste banco (e não de rede).
+  static bool erroDeTabelaAusente(Object erro) =>
+      erro.toString().toLowerCase().contains('no such table');
+
+  /// O erro é de coluna que não existe neste banco (e não de rede).
+  static bool erroDeColunaAusente(Object erro) =>
+      erro.toString().toLowerCase().contains('no such column');
+
+  // ── Contagens e divergências do ciclo (selos das prateleiras e baixa) ──────
+
+  static const String _chaveCiclico = 'ultima_contagem_ciclico_v1';
+  static const String _chaveDivergentes = 'divergentes_ciclo_v1';
+
+  /// Coluna de confirmação de contagem_itens que existe neste banco
+  /// (`confirmado_em` vem de uma migração do dashboard e pode faltar; aí vale
+  /// `registrado_em`). Descoberta na primeira leitura.
+  String? _colunaConfirmacao;
+  String get colunaConfirmacao => _colunaConfirmacao ?? 'confirmado_em';
+
+  /// Última contagem CONFIRMADA de cada código em contagem_itens (o app
+  /// Contagem CAMDA): linhas `produto_codigo`, `ultima` (texto, como gravado).
+  ///
+  /// Uma varredura de contagem_itens, que só cresce, servindo o selo âmbar das
+  /// prateleiras E a baixa automática — antes cada um lia a tabela inteira por
+  /// conta própria, a cada dataRevision. Guardada por [janelaContagem], sem
+  /// avisar as telas quando muda (o app de contagem confirma itens o dia
+  /// todo, e cada aviso recarregaria tudo). A coluna só troca em erro de
+  /// coluna inexistente: um timeout com `confirmado_em` não pode fazer a
+  /// sessão inteira passar a usar outra data.
+  Future<List<Map<String, dynamic>>> consultarUltimasContagensItens({
+    bool forceRefresh = false,
+    bool atualizarSeVencida = false,
+  }) async {
+    Future<List<Map<String, dynamic>>> ler(String coluna) => consultarComCache(
+      'ultima_contagem_itens_$coluna',
+      sqlUltimaContagemItens(coluna),
+      falharSemCache: true,
+      forceRefresh: forceRefresh,
+      atualizarSeVencida: atualizarSeVencida,
+      janela: janelaContagem,
+      somenteLeitura: true,
+      avisar: false,
+    );
+
+    final preferida = colunaConfirmacao;
+    try {
+      final rows = await ler(preferida);
+      _colunaConfirmacao = preferida;
+      return rows;
+    } catch (e) {
+      if (!erroDeColunaAusente(e)) rethrow;
+      final outra = preferida == 'confirmado_em'
+          ? 'registrado_em'
+          : 'confirmado_em';
+      final rows = await ler(outra);
+      _colunaConfirmacao = outra;
+      return rows;
+    }
+  }
+
+  /// Última contagem de cada produto no inventário cíclico (inventario_cicli,
+  /// gravado por este app em concluirContagem e pelos apps irmãos): linhas
+  /// `produto_codigo`, `ultima`. Corrigida na hora por
+  /// [registrarContagemConcluida] depois de uma contagem concluída aqui.
+  Future<List<Map<String, dynamic>>> consultarUltimasContagensCiclico({
+    bool forceRefresh = false,
+  }) => consultarComCache(
+    _chaveCiclico,
+    sqlUltimaContagemCiclico,
+    falharSemCache: true,
+    forceRefresh: forceRefresh,
+    janela: janelaContagem,
+    avisar: false,
+  );
+
+  /// Produtos com divergência no ciclo (estoque_mestre.status_ciclo), com o
+  /// contado e o sistema da contagem. Pelo índice de status_ciclo, lê só os
+  /// divergentes. Corrigida por [registrarContagemConcluida].
+  Future<List<Map<String, dynamic>>> consultarDivergentesCiclo({
+    bool forceRefresh = false,
+  }) => consultarComCache(
+    _chaveDivergentes,
+    sqlDivergentesCiclo,
+    falharSemCache: true,
+    forceRefresh: forceRefresh,
+    janela: janelaTabelaGrande,
+    avisar: false,
+  );
+
+  /// Depois de um concluirContagem: relê do banco só as linhas do produto
+  /// nas duas cópias dos selos (pelos índices de produto_id e de codigo) e as
+  /// troca nelas. Relidas, e não montadas aqui: o código volta com o tipo que
+  /// a coluna deu a ele (num `produto_id` INTEGER o texto vira número, que o
+  /// selo âmbar nunca casou), e a cópia fica igual ao que o banco devolveria.
+  /// Sem conseguir reler, a cópia expira e a próxima leitura busca inteira.
+  Future<void> registrarContagemConcluida(String codigo) async {
+    final ciclico = _chaveCompleta(_chaveCiclico);
+    final divergentes = _chaveCompleta(_chaveDivergentes);
+    if (ciclico == null || divergentes == null) return;
+
+    bool doProduto(Object? valor, List<Map<String, dynamic>> lidas, String col) =>
+        valor?.toString() == codigo || lidas.any((r) => r[col] == valor);
+
+    try {
+      final ultimas = await consultarDireto(
+        '$sqlUltimaContagemCiclicoBase AND produto_id = ? '
+        'GROUP BY produto_id',
+        parametros: [codigo],
+      );
+      await _consultaCache.atualizarParte(
+        ciclico,
+        (r) => doProduto(r['produto_codigo'], ultimas, 'produto_codigo'),
+        ultimas,
+      );
+    } catch (_) {
+      _consultaCache.expirar(ciclico);
+    }
+    try {
+      final linhas = await consultarDireto(
+        'SELECT codigo, status_ciclo, qtd_contada_ciclo, '
+        'qtd_sistema_na_contagem FROM estoque_mestre WHERE codigo = ?',
+        parametros: [codigo],
+      );
+      await _consultaCache.atualizarParte(
+        divergentes,
+        (r) => doProduto(r['codigo'], linhas, 'codigo'),
+        [
+          for (final r in linhas)
+            if (r['status_ciclo'] == 'divergencia')
+              {
+                'codigo': r['codigo'],
+                'qtd_contada_ciclo': r['qtd_contada_ciclo'],
+                'qtd_sistema_na_contagem': r['qtd_sistema_na_contagem'],
+              },
+        ],
+      );
+    } catch (_) {
+      _consultaCache.expirar(divergentes);
+    }
+  }
+
+  // ── Índices nas tabelas dos outros apps ───────────────────────────────────
+
+  /// Índices que este app cria nas tabelas dos apps irmãos (autorizado pelo
+  /// Leo). Cada um serve uma consulta daqui que, sem ele, varre a tabela
+  /// inteira — e o Turso cobra cada linha varrida.
+  static const List<({String nome, String tabela, List<String> colunas})>
+  indicesAlheios = [
+    // Pendentes do Modo Conferência (status = 'pendente').
+    (
+      nome: 'idx_gondolas_contagem_itens_status',
+      tabela: 'contagem_itens',
+      colunas: ['status'],
+    ),
+    // Divergentes do ciclo (status_ciclo = 'divergencia').
+    (
+      nome: 'idx_gondolas_estoque_mestre_status_ciclo',
+      tabela: 'estoque_mestre',
+      colunas: ['status_ciclo'],
+    ),
+    // concluirContagem lê e grava o produto por código.
+    (
+      nome: 'idx_gondolas_estoque_mestre_codigo',
+      tabela: 'estoque_mestre',
+      colunas: ['codigo'],
+    ),
+    // concluirContagem procura a linha do dia do produto.
+    (
+      nome: 'idx_gondolas_inventario_cicli_produto',
+      tabela: 'inventario_cicli',
+      colunas: ['produto_id', 'data_contagem'],
+    ),
+  ];
+
+  static final String _assinaturaIndicesAlheios = [
+    for (final i in indicesAlheios) '${i.nome}:${i.tabela}:${i.colunas}',
+  ].join('|');
+
+  /// Cria os [indicesAlheios] que faltam, uma vez por banco e aparelho.
+  ///
+  /// Nunca duplica: se algum índice da tabela (inclusive o da chave primária)
+  /// já começa pela mesma coluna, não cria nada. Tabela ou coluna que não
+  /// existe neste banco é pulada. Roda em segundo plano depois do init; sem
+  /// conexão, tenta de novo na próxima abertura.
+  Future<void> _garantirIndicesAlheios() async {
+    final banco = _identidadeAtiva;
+    final cliente = _client;
+    if (banco == null || cliente == null) return;
+    final marca = 'indices_alheios_$banco';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString(marca) == _assinaturaIndicesAlheios) return;
+      for (final indice in indicesAlheios) {
+        await _criarIndiceAlheio(cliente, indice);
+      }
+      await prefs.setString(marca, _assinaturaIndicesAlheios);
+    } catch (_) {
+      // Rede caiu no meio: a próxima abertura confere de novo (os que já
+      // existem são reconhecidos e pulados).
+    }
+  }
+
+  Future<void> _criarIndiceAlheio(
+    LibsqlClient cliente,
+    ({String nome, String tabela, List<String> colunas}) indice,
+  ) async {
+    Future<bool> existe(String sql, List<Object> parametros) async {
+      final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+      final rows =
+          await stmt.query(positional: parametros).timeout(_timeoutLeitura)
+              as List<dynamic>;
+      return rows.isNotEmpty;
+    }
+
+    try {
+      for (final coluna in indice.colunas) {
+        if (!await existe(
+          'SELECT 1 FROM pragma_table_info(?) WHERE name = ? LIMIT 1',
+          [indice.tabela, coluna],
+        )) {
+          return; // Tabela ou coluna ausente neste banco.
+        }
+      }
+      if (await existe(
+        'SELECT 1 FROM pragma_index_list(?) il '
+        'JOIN pragma_index_info(il.name) ii '
+        'WHERE ii.seqno = 0 AND ii.name = ? LIMIT 1',
+        [indice.tabela, indice.colunas.first],
+      )) {
+        return; // Já há índice começando por essa coluna.
+      }
+      await cliente
+          .batch(
+            'CREATE INDEX IF NOT EXISTS ${indice.nome} '
+            'ON ${indice.tabela} (${indice.colunas.join(', ')})',
+          )
+          .timeout(_timeoutPreparoBanco);
+    } on TimeoutException {
+      rethrow;
+    } catch (e) {
+      // Erro de esquema (tabela sem permissão, pragma não suportado): pula
+      // este índice. Erro de rede sobe e a marca não é gravada.
+      if (!erroDeTabelaAusente(e) && !erroDeColunaAusente(e) &&
+          _pareceErroDeRede(e)) {
+        rethrow;
+      }
+    }
+  }
+
+  static bool _pareceErroDeRede(Object erro) {
+    final texto = erro.toString().toLowerCase();
+    return texto.contains('socket') ||
+        texto.contains('connection') ||
+        texto.contains('network') ||
+        texto.contains('timeout') ||
+        texto.contains('handshake') ||
+        texto.contains('failed host lookup');
+  }
 
   Future<List<Map<String, dynamic>>> _quantidadesParaBusca() =>
       consultarQuantidades();
@@ -2873,14 +3514,23 @@ class TursoService {
   /// concluía que ele não estava na loja.
   Future<List<ProdutoEncontrado>> _buscarNoGalpao(String like) async {
     try {
-      final rows = filtrarBuscaLocal(
-        await consultarComCache(
-          'busca_galpao',
-          'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-              'FROM galpao_racks ORDER BY produto_nome, posicao, ordem',
-        ),
-        like,
-      );
+      // A MESMA cópia que a tela do galpão usa ('galpao'): antes havia uma
+      // segunda, com a mesma tabela em outra ordem, relida à parte — e a
+      // diferença de ordem entre as duas acusava "mudou" depois de cada
+      // rajada de lançamentos.
+      final linhas = [...await consultarComCache(chaveGalpao, sqlGalpao)]
+        ..sort((a, b) {
+          final porNome = (a['produto_nome'] as String? ?? '').compareTo(
+            b['produto_nome'] as String? ?? '',
+          );
+          if (porNome != 0) return porNome;
+          final porPosicao = (a['posicao'] as int? ?? 0).compareTo(
+            b['posicao'] as int? ?? 0,
+          );
+          if (porPosicao != 0) return porPosicao;
+          return (a['ordem'] as int? ?? 0).compareTo(b['ordem'] as int? ?? 0);
+        });
+      final rows = filtrarBuscaLocal(linhas, like);
       return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         final posicao = r['posicao'] as int? ?? 0;
@@ -2911,15 +3561,21 @@ class TursoService {
 
   Future<List<ProdutoEncontrado>> _buscarNoBarracao(String like) async {
     try {
-      final rows = filtrarBuscaLocal(
-        await consultarComCache(
-          'busca_barracao',
-          'SELECT id, rotulo, produto_codigo, produto_nome, quantidade '
-              "FROM barracao_enderecos WHERE produto_codigo <> '' "
-              'ORDER BY produto_nome, rotulo',
-        ),
-        like,
-      );
+      // A mesma cópia da tela do barracão ('barracao'), só com os paletes
+      // ocupados.
+      final linhas = [
+        for (final r in await consultarComCache(chaveBarracao, sqlBarracao))
+          if ((r['produto_codigo'] as String? ?? '').isNotEmpty) r,
+      ]..sort((a, b) {
+          final porNome = (a['produto_nome'] as String? ?? '').compareTo(
+            b['produto_nome'] as String? ?? '',
+          );
+          if (porNome != 0) return porNome;
+          return (a['rotulo'] as String? ?? '').compareTo(
+            b['rotulo'] as String? ?? '',
+          );
+        });
+      final rows = filtrarBuscaLocal(linhas, like);
       return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         return ProdutoEncontrado(
@@ -2949,6 +3605,14 @@ class TursoService {
         .toSet()
         .toList();
     if (codigos.isEmpty) return encontrados;
+    // Galpão e barracão trazem a quantidade na própria linha: só gôndola e
+    // estante precisam da cópia do estoque_localizado (que, vencida, relê a
+    // tabela inteira).
+    if (encontrados.every(
+      (p) => p.tipo == localTipoGalpao || p.tipo == localTipoBarracao,
+    )) {
+      return encontrados;
+    }
     try {
       final rows = await _quantidadesParaBusca();
 
@@ -3001,6 +3665,7 @@ class TursoService {
           'busca_gondolas',
           'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar, pos_x, pos_z '
               'FROM gondola_layout ORDER BY produto_nome',
+          janela: janelaTabelaGrande,
         ),
         like,
       );
@@ -3044,6 +3709,7 @@ class TursoService {
           'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
               'FROM estante_layout WHERE estante_num NOT IN ($_sqlEstantesRemovidas) '
               'AND $_sqlSemBaseNellore ORDER BY produto_nome',
+          janela: janelaTabelaGrande,
         ),
         like,
       );

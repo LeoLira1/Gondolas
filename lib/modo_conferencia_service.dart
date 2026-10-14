@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:libsql_dart/libsql_dart.dart';
 import 'galpao_config.dart';
 import 'models.dart' show estantesRemovidas;
@@ -307,43 +308,120 @@ class ModoConferenciaService {
     return TursoService().client;
   }
 
+  // ── Conferência guardada ──────────────────────────────────────────────────
+  //
+  // Cada pedido varria contagem_itens (a tabela do app de contagem, que só
+  // cresce) e mais quatro consultas: ligar o modo, voltar de cada gôndola,
+  // ir e voltar do galpão pelo banner, e cada aviso de dados novos no galpão
+  // e no barracão. Numa sessão de conferência eram dezenas de varreduras para
+  // o mesmo resultado. Agora o resultado vale um minuto, e pedidos
+  // simultâneos dividem a mesma leitura.
+
+  /// Quanto vale a conferência guardada para quem não força.
+  static const Duration validade = Duration(seconds: 60);
+
+  ModoConferenciaResultado? _guardada;
+  DateTime? _guardadaEm;
+  String? _guardadaDoBanco;
+  int? _guardadaNaInvalidacao;
+  Future<ModoConferenciaResultado>? _emAndamento;
+  int _geracao = 0;
+
+  /// Troca a leitura do banco (testes).
+  @visibleForTesting
+  Future<ModoConferenciaResultado> Function()? leitorParaTeste;
+
+  /// Esquece a conferência guardada: a próxima busca vai ao banco. É o que a
+  /// volta ao app chama — a confirmação é feita no app de contagem, então
+  /// quem confere sai daqui e volta.
+  void esquecer() {
+    _guardada = null;
+    _guardadaEm = null;
+    _emAndamento = null;
+    _geracao++;
+  }
+
+  /// Os pendentes do dia cruzados com os endereços (ver [_consultar]).
+  ///
+  /// Sem [forcar], serve a conferência guardada há menos de [validade], ou
+  /// pega carona na leitura em andamento. Com [forcar] (ligar o modo, o botão
+  /// de atualizar, o Sincronizar), lê o banco na hora, sem pegar carona numa
+  /// leitura iniciada antes do pedido. Falha de leitura devolve vazio e não
+  /// fica guardada.
+  Future<ModoConferenciaResultado> buscarConferenciaDoDia({
+    bool forcar = false,
+  }) {
+    // Outro banco, ou um Sincronizar (de qualquer tela) desde a guardada:
+    // ela não vale mais.
+    final banco = TursoService().identidadeAtiva;
+    final invalidacao = TursoService().leiturasInvalidadas;
+    if (banco != _guardadaDoBanco || invalidacao != _guardadaNaInvalidacao) {
+      esquecer();
+      _guardadaDoBanco = banco;
+      _guardadaNaInvalidacao = invalidacao;
+    }
+    if (!forcar) {
+      final guardada = _guardada;
+      final em = _guardadaEm;
+      if (guardada != null &&
+          em != null &&
+          DateTime.now().difference(em) < validade) {
+        return Future.value(guardada);
+      }
+      final andamento = _emAndamento;
+      if (andamento != null) return andamento;
+    }
+    final geracao = ++_geracao;
+    late final Future<ModoConferenciaResultado> futuro;
+    futuro = (leitorParaTeste ?? _consultar)()
+        .then((resultado) {
+          if (geracao == _geracao) {
+            _guardada = resultado;
+            _guardadaEm = DateTime.now();
+          }
+          return resultado;
+        }, onError: (Object _) => ModoConferenciaResultado.vazio)
+        .whenComplete(() {
+          if (identical(_emAndamento, futuro)) _emAndamento = null;
+        });
+    _emAndamento = futuro;
+    return futuro;
+  }
+
   /// Busca os pendentes de contagem_itens e cruza com gondola_layout,
   /// estante_layout, galpao_racks e barracao_enderecos numa única passada —
   /// 5 queries no total (ou
   /// poucas mais, se o lote de códigos precisar ser quebrado), nunca uma por
-  /// estrutura.
+  /// estrutura. Lança em falha (sem conexão inclusive), para a falha não
+  /// ficar guardada como "nada pendente".
   ///
   /// As três consultas recebem TODOS os códigos pendentes: o filtro de
   /// categorias de depósito não é mais aplicado antes de perguntar ao banco,
   /// porque é o próprio endereço que decide se ele vale (ver a nota no topo do
   /// arquivo). O cruzamento em si é de [montarConferencia].
-  Future<ModoConferenciaResultado> buscarConferenciaDoDia() async {
+  Future<ModoConferenciaResultado> _consultar() async {
     final client = await _conexao();
-    if (client == null) return ModoConferenciaResultado.vazio;
+    if (client == null) throw StateError('Sem conexão com o banco');
 
-    try {
-      final pendentes = await _buscarPendentes(client);
-      if (pendentes.isEmpty) return ModoConferenciaResultado.vazio;
+    final pendentes = await _buscarPendentes(client);
+    if (pendentes.isEmpty) return ModoConferenciaResultado.vazio;
 
-      final codigosTodos = pendentes.map((p) => p.codigo).toList();
+    final codigosTodos = pendentes.map((p) => p.codigo).toList();
 
-      final resultados = await Future.wait([
-        _buscarEnderecosGondola(client, codigosTodos),
-        _buscarEnderecosEstante(client, codigosTodos),
-        _buscarEnderecosGalpao(client, codigosTodos),
-        _buscarEnderecosBarracao(client, codigosTodos),
-      ]);
+    final resultados = await Future.wait([
+      _buscarEnderecosGondola(client, codigosTodos),
+      _buscarEnderecosEstante(client, codigosTodos),
+      _buscarEnderecosGalpao(client, codigosTodos),
+      _buscarEnderecosBarracao(client, codigosTodos),
+    ]);
 
-      return montarConferencia(
-        pendentes:         pendentes,
-        gondolasPorCodigo: resultados[0],
-        estantesPorCodigo: resultados[1],
-        galpaoPorCodigo:   resultados[2],
-        barracaoPorCodigo: resultados[3],
-      );
-    } catch (_) {
-      return ModoConferenciaResultado.vazio;
-    }
+    return montarConferencia(
+      pendentes:         pendentes,
+      gondolasPorCodigo: resultados[0],
+      estantesPorCodigo: resultados[1],
+      galpaoPorCodigo:   resultados[2],
+      barracaoPorCodigo: resultados[3],
+    );
   }
 
   Future<List<ItemPendente>> _buscarPendentes(LibsqlClient client) async {

@@ -258,7 +258,22 @@ Future<void> executarOperacao(OperacaoPendente op) async {
       dispositivo: await turso.dispositivo(),
     ),
   );
-  // Expira as cópias de leitura que dependem do que mudou (busca do
-  // barracão, quantidades) e impede consulta antiga de desfazer o commit.
-  await turso.marcarGravacaoLocal();
+  // O espelho em estoque_localizado só mudou neste local: é só ele que a
+  // próxima leitura de quantidades relê (antes a cópia inteira expirava, e
+  // cada palete custava o estoque_localizado inteiro de novo no Turso).
+  turso.marcarLocalGravado(
+    op.tipo.doGalpao ? localTipoGalpaoSql : localTipoBarracaoSql,
+    op.local,
+  );
+  // Só a cópia do prédio gravado pode ter ficado velha: a leitura dela que
+  // estiver no ar é descartada, e as outras (quantidades incluídas, que se
+  // corrigem pelos locais anotados) seguem. A tela do galpão relê as
+  // posições gravadas quando a fila esvazia; a do barracão pode já ter
+  // fechado antes da recarga dela, então a cópia 'barracao' expira aqui.
+  final predio = op.tipo.doGalpao ? 'galpao' : 'barracao';
+  await turso.marcarGravacaoLocal(
+    expirarQuantidades: false,
+    chavesAfetadas: {predio},
+  );
+  if (!op.tipo.doGalpao) turso.expirarConsulta(predio);
 }
