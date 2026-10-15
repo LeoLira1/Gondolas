@@ -86,7 +86,6 @@ void main() {
     setUp(() {
       SharedPreferences.setMockInitialValues({
         chave: true,
-        TursoService.keyCacheLocal: true,
       });
     });
 
@@ -118,12 +117,23 @@ void main() {
       expect((await SharedPreferences.getInstance()).getBool(chave), isTrue);
     });
 
-    test('desligar cache também mantém o arquivo antigo protegido', () async {
+    test('a chave antiga de cache some e o arquivo antigo segue protegido',
+        () async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(TursoService.keyCacheLocal, false);
+      await prefs.setString('consulta_v1_x_gondola_3', '[]');
+      await prefs.setString('consulta_v1_x_gondola_3|em', '');
+      await prefs.setString('consulta_v1_x_busca_estantes', '[]');
+      await prefs.setString('consulta_v1_x_galpao', '[]');
+      await prefs.remove('limpeza_preferencias_v1');
       await TursoService().init();
       expect(TursoService().modoLocal, isFalse);
       expect(prefs.getBool(chave), isTrue);
+      expect(prefs.containsKey(TursoService.keyCacheLocal), isFalse);
+      expect(prefs.containsKey('consulta_v1_x_gondola_3'), isFalse);
+      expect(prefs.containsKey('consulta_v1_x_gondola_3|em'), isFalse);
+      expect(prefs.containsKey('consulta_v1_x_busca_estantes'), isFalse);
+      expect(prefs.getString('consulta_v1_x_galpao'), '[]');
     });
 
     test('outro banco não herda a marca antiga', () async {

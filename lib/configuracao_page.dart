@@ -26,7 +26,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
   bool _testando = false;
   String? _statusTeste;
   bool _testeOk = false;
-  bool _cacheLocal = true;
   bool _reconectando = false;
   bool _sincronizando = false;
   bool _limpandoCache = false;
@@ -92,7 +91,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     setState(() {
       _urlCtrl.text = prefs.getString(TursoService.keyDbUrl) ?? '';
       _tokenCtrl.text = prefs.getString(TursoService.keyDbToken) ?? '';
-      _cacheLocal = prefs.getBool(TursoService.keyCacheLocal) ?? true;
     });
   }
 
@@ -297,15 +295,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
     );
   }
 
-  Future<void> _alterarCacheLocal(bool valor) async {
-    if (_ocupado) return;
-    setState(() => _cacheLocal = valor);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(TursoService.keyCacheLocal, valor);
-    // A troca de modo (local ⇄ remoto) é aplicada pelo init() quando as
-    // páginas recarregam ao voltar desta tela.
-  }
-
   /// Dispara a conexão e devolve o controle NA HORA.
   ///
   /// A primeira conexão baixa o banco inteiro e pode levar minutos. Segurar a
@@ -327,10 +316,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
             'Não deu para conectar — confira URL, token e a internet.',
             const Color(0xFF8b1a1a),
           ),
-          _ when servico.caiuParaRemoto => (
-            'O cache local não pôde ser aberto — veja o aviso logo abaixo.',
-            const Color(0xFF8b6a1a),
-          ),
           _ when servico.modoLocal => (
             'Cache local pronto ✓ — os dados já estão no aparelho.',
             const Color(0xFF2e6b46),
@@ -351,11 +336,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
       ),
     );
   }
-
-  /// Tenta reabrir o cache local sem precisar fechar e reabrir o app.
-  void _tentarCacheLocal() => _conectarEmSegundoPlano(
-    'Baixando a base em segundo plano — pode continuar usando o app.',
-  );
 
   Future<void> _salvarConfig() async {
     if (_ocupado) return;
@@ -653,101 +633,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                 ),
                 child: Column(
                   children: [
-                    SwitchListTile(
-                      value: _cacheLocal,
-                      onChanged: _ocupado ? null : _alterarCacheLocal,
-                      activeThumbColor: const Color(0xFF4a9d6a),
-                      title: const Text(
-                        'Cache de consulta',
-                        style: TextStyle(color: Colors.white, fontSize: 13),
-                      ),
-                      subtitle: const Text(
-                        'Mostra os produtos guardados no celular e atualiza em segundo plano. '
-                        'As alterações são gravadas diretamente no banco online '
-                        'e precisam de internet.',
-                        style: TextStyle(
-                          color: Color(0xFF8a9aa8),
-                          fontSize: 11,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                    // O app está em modo remoto com o cache local LIGADO: até
-                    // aqui, esta tela mostrava a preferência e escondia o que
-                    // valia de verdade. Quem está nesse estado grava tudo pela
-                    // rede (e vê "não deu para gravar" com sinal ruim) sem ter
-                    // como saber por quê.
-                    if (_cacheLocal && TursoService().caiuParaRemoto)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                        child: Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF2a1e10),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFF6b4a1e)),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                '⚠ O cache local não pôde ser aberto',
-                                style: TextStyle(
-                                  color: Color(0xFFe0a33e),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              const Text(
-                                'O app está gravando direto no banco online, '
-                                'então cada lançamento depende da internet e o '
-                                'Sincronizar não tem o que enviar. Costuma ser '
-                                'sinal fraco na primeira abertura, enquanto a '
-                                'base é baixada.',
-                                style: TextStyle(
-                                  color: Color(0xFFc8b79a),
-                                  fontSize: 11,
-                                  height: 1.4,
-                                ),
-                              ),
-                              if (TursoService().motivoFalhaCacheLocal !=
-                                  null) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Motivo: '
-                                  '${TursoService().motivoFalhaCacheLocal}',
-                                  style: const TextStyle(
-                                    color: Color(0xFFe0a33e),
-                                    fontSize: 11,
-                                    height: 1.3,
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 8),
-                              OutlinedButton.icon(
-                                onPressed: _reconectando
-                                    ? null
-                                    : _tentarCacheLocal,
-                                icon: const Icon(Icons.refresh, size: 16),
-                                label: Text(
-                                  _reconectando
-                                      ? 'Baixando a base…'
-                                      : 'Tentar de novo',
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xFFe0a33e),
-                                  side: const BorderSide(
-                                    color: Color(0xFF6b4a1e),
-                                  ),
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    if (_cacheLocal)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                         child: Row(
@@ -841,7 +726,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                           ],
                         ),
                       ),
-                    if (_cacheLocal)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                         child: Align(
@@ -878,7 +762,6 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
                       ),
                     // Só aparece quando existe algo pendente: um atalho para uma
                     // lista vazia seria ruído numa tela que já é densa.
-                    if (_cacheLocal)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                         child: Align(

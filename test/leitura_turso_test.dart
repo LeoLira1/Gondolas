@@ -556,6 +556,54 @@ void main() {
       expect(tela.leituras, 2);
     });
 
+    test('releNaVolta falso: fora da volta ao app, dentro do Sincronizar',
+        () async {
+      // Layouts, buscas e contagens: quem usa relê quando precisa (a tela
+      // à vista relê a própria estrutura ao voltar).
+      final cache = _cache();
+      final tela = _Tabela([
+        {'x': 1},
+      ]);
+      final contagens = _Tabela([
+        {'c': 1},
+      ]);
+      await cache.ler('quantidades', tela.ler, janela: Duration.zero);
+      await cache.ler(
+        'contagens',
+        contagens.ler,
+        janela: Duration.zero,
+        releNaVolta: false,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+
+      await cache.atualizar(soVencidas: true, soUsadas: true);
+      expect(tela.leituras, 2);
+      expect(contagens.leituras, 1);
+
+      await cache.atualizar();
+      expect(contagens.leituras, 2);
+    });
+
+    test('emMemoria troca de objeto a cada atualização; carregar só lê o disco',
+        () async {
+      final disco = <String, String>{
+        'k': '[{"v":1}]',
+      };
+      final cache = _cacheComDisco(disco);
+      expect(cache.emMemoria('k'), isNull);
+      expect(await cache.carregar('k'), isTrue);
+      final primeira = cache.emMemoria('k');
+      expect(primeira!.single['v'], 1);
+      expect(identical(primeira, cache.emMemoria('k')), isTrue);
+
+      await cache.atualizarParte('k', (r) => true, [
+        {'v': 2},
+      ]);
+      expect(identical(primeira, cache.emMemoria('k')), isFalse);
+      expect(cache.emMemoria('k')!.single['v'], 2);
+      expect(await cache.carregar('nada'), isFalse);
+    });
+
     test('consulta esquecida sai do Sincronizar', () async {
       final cache = _cache();
       final boa = _Tabela([

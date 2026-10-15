@@ -197,6 +197,16 @@ List<int> get ordemNavegacaoEstantes =>
 /// busca nem em conferência — o produto deve ser recadastrado na parede.
 const Set<int> estantesRemovidas = {3, 4};
 
+/// A linha de estante_layout entra na busca do mapa? Fora as estantes
+/// removidas e a base do Expositor Nellore (nível 0, que saiu dos endereços).
+/// É o WHERE que a consulta da busca fazia no banco, agora sobre a cópia
+/// completa da tabela.
+bool linhaDeEstanteBuscavel(Map<String, dynamic> r) {
+  final numero = r['estante_num'];
+  if (estantesRemovidas.contains(numero)) return false;
+  return !(numero == expositorNelloreNum && r['nivel'] == 0);
+}
+
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
 
