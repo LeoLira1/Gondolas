@@ -25,9 +25,9 @@ enum ResultadoSalvarLayout {
   falhou,
 }
 
-/// O resultado e os códigos que a estrutura tinha no banco logo antes do
-/// salvamento (lidos dentro da própria transação): é deles que sai quais
-/// produtos a edição tirou.
+/// O resultado e os códigos que a estrutura tinha — no banco logo antes do
+/// salvamento (lidos dentro da própria transação) e na base da tela: é deles
+/// que sai quais produtos a edição tirou.
 typedef SalvamentoLayout = ({
   ResultadoSalvarLayout resultado,
   Set<String> codigosAntes,
@@ -51,6 +51,22 @@ String assinaturaLayout(
     for (final r in linhas) colunas.map((c) => valor(r[c])).join('|'),
   ]..sort();
   return caixas.join('\n');
+}
+
+/// O layout no banco mudou por baixo da edição? Não quando ele ainda é o que
+/// a tela carregou ([base]), nem quando já é exatamente o que vai ser gravado
+/// ([itens]) — a tentativa anterior chegou e só a resposta se perdeu (a
+/// pessoa tocou de novo em Salvar), ou outro aparelho fez a mesma edição:
+/// regravar dá no mesmo, e acusar "outro aparelho" seria falso.
+bool layoutMudouPorBaixo({
+  required Iterable<Map<String, dynamic>> noBanco,
+  required Iterable<Map<String, dynamic>> base,
+  required Iterable<Map<String, dynamic>> itens,
+  required List<String> colunas,
+}) {
+  final atual = assinaturaLayout(noBanco, colunas);
+  return atual != assinaturaLayout(base, colunas) &&
+      atual != assinaturaLayout(itens, colunas);
 }
 
 /// Uma tabela de layout (gondola_layout ou estante_layout) servida de uma
@@ -77,10 +93,17 @@ class LayoutsDaCopia {
 
   /// Troca na cópia completa as linhas que [pertence] aceita por [novas].
   /// Devolve null quando ainda não há cópia completa.
+  ///
+  /// [deGravacao]: a correção vem de um commit deste aparelho, e a leitura
+  /// completa que estiver no ar (que pode ter saído antes dele) é descartada.
+  /// Uma correção que veio de LEITURA não descarta nada: a leitura completa
+  /// no ar é do mesmo servidor, na mesma fila, e jogá-la fora só fazia ler a
+  /// tabela inteira de novo.
   final Future<LinhasLayout?> Function(
     bool Function(Map<String, dynamic>) pertence,
-    LinhasLayout novas,
-  )
+    LinhasLayout novas, {
+    required bool deGravacao,
+  })
   corrigirCopia;
 
   /// A cópia completa em memória (o objeto muda a cada atualização), ou null.
@@ -168,7 +191,11 @@ class LayoutsDaCopia {
     }
     _relidaEm[numero] = inicio;
     _sujas.remove(numero);
-    final corrigida = await corrigirCopia((r) => r[coluna] == numero, lidas);
+    final corrigida = await corrigirCopia(
+      (r) => r[coluna] == numero,
+      lidas,
+      deGravacao: false,
+    );
     if (corrigida == null) _semCopia[numero] = lidas;
     return lidas;
   }
@@ -180,7 +207,11 @@ class LayoutsDaCopia {
     _emAndamento.remove(numero);
     _relidaEm[numero] = DateTime.now();
     _sujas.remove(numero);
-    final corrigida = await corrigirCopia((r) => r[coluna] == numero, linhas);
+    final corrigida = await corrigirCopia(
+      (r) => r[coluna] == numero,
+      linhas,
+      deGravacao: true,
+    );
     if (corrigida == null) _semCopia[numero] = List.of(linhas);
   }
 

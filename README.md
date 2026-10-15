@@ -372,9 +372,10 @@ jeitos de perder dado com isso, os dois corrigidos:
   carregou — as caixas e os lugares delas, sem nome nem cor. Se mudou, nada é
   gravado e aparece "Esta gôndola foi alterada em outro aparelho enquanto você
   editava", com **Recarregar** (mostra como ela está e descarta a edição) e
-  **Salvar por cima** (grava assim mesmo). Os endereços zerados que o
-  salvamento limpa saem do layout lido nessa mesma transação, não da cópia do
-  aparelho.
+  **Salvar por cima** (grava assim mesmo). Se o banco já tem exatamente o que
+  vai ser gravado — a tentativa anterior chegou e só a resposta se perdeu —
+  não é conflito. Os endereços zerados que o salvamento limpa saem do layout
+  lido nessa mesma transação e da base da tela, não da cópia do aparelho.
 - **A gôndola abria vazia quando a leitura falhava** (sem rede e sem cópia,
   como numa instalação nova) e continuava editável: um "Salvar layout" ali
   apagava a de verdade. Agora ela mostra "Não foi possível carregar o layout"
@@ -524,7 +525,8 @@ busca).
   abriam vazias. Agora todo aparelho reaproveita as leituras recentes; "Atualizar
   dados" e o Sincronizar continuam relendo tudo na hora. Na primeira abertura
   depois da atualização, o app apaga a preferência e as cópias antigas de
-  layout que ninguém lê mais.
+  layout — antes juntando as cópias por estrutura na cópia nova, para o
+  primeiro uso sem sinal ainda abrir as gôndolas.
 
 Duas correções de layout que não são de leitura vieram junto (ver "Gravação
 com internet ruim").

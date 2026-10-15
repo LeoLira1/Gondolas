@@ -239,12 +239,16 @@ class ConsultaCache {
   ///
   /// [renovarJanela] falso é para cópia que só foi CORRIGIDA em parte (ver
   /// [atualizarParte]): o resto dela continua com a idade que tinha.
+  ///
+  /// [descartarNoAr] falso: as linhas vieram de uma leitura (não de um
+  /// commit), e a leitura de [chave] que estiver no ar continua valendo.
   Future<void> confirmar(
     String chave,
     LinhasConsulta linhas, {
     bool renovarJanela = true,
+    bool descartarNoAr = true,
   }) async {
-    _geracoes[chave] = (_geracoes[chave] ?? 0) + 1;
+    if (descartarNoAr) _geracoes[chave] = (_geracoes[chave] ?? 0) + 1;
     _valores[chave] = _copiar(linhas);
     if (renovarJanela) {
       final agora = DateTime.now();
@@ -266,19 +270,30 @@ class ConsultaCache {
   /// Sem cópia, a leitura completa que estiver no ar é descartada: ela pode
   /// ter saído antes da gravação que se queria corrigir, e guardá-la como
   /// fresca esconderia a gravação até a janela vencer.
+  ///
+  /// [descartarNoAr] falso: a correção veio de uma LEITURA do servidor (não
+  /// de um commit deste aparelho), e a leitura completa que estiver no ar
+  /// continua valendo — ela sai na mesma fila e é tão nova quanto. Jogá-la
+  /// fora só fazia ler a tabela inteira de novo.
   Future<LinhasConsulta?> atualizarParte(
     String chave,
     bool Function(Map<String, dynamic>) pertence,
     LinhasConsulta novas, {
     int Function(Map<String, dynamic>, Map<String, dynamic>)? ordenar,
+    bool descartarNoAr = true,
   }) async {
     if (!await _carregarDoDisco(chave)) {
-      invalidarConsultasEmAndamento([chave]);
+      if (descartarNoAr) invalidarConsultasEmAndamento([chave]);
       return null;
     }
     final linhas = [..._valores[chave]!.where((r) => !pertence(r)), ...novas];
     if (ordenar != null) linhas.sort(ordenar);
-    await confirmar(chave, linhas, renovarJanela: false);
+    await confirmar(
+      chave,
+      linhas,
+      renovarJanela: false,
+      descartarNoAr: descartarNoAr,
+    );
     return _copiar(linhas);
   }
 

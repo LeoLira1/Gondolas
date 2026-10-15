@@ -64,8 +64,13 @@ Map<String, dynamic> _caixa(int gondola, String codigo, {double x = 0.1}) => {
     coluna: 'gondola_num',
     janelaEstrutura: janela,
     lerEstrutura: tabela.lerEstrutura,
-    corrigirCopia: (pertence, novas) =>
-        cache.atualizarParte(chave, pertence, novas),
+    corrigirCopia: (pertence, novas, {required deGravacao}) =>
+        cache.atualizarParte(
+          chave,
+          pertence,
+          novas,
+          descartarNoAr: deGravacao,
+        ),
     copiaEmMemoria: () => cache.emMemoria(chave),
     carregarCopia: () => cache.carregar(chave),
     copiaVencida: (j) => cache.vencida(chave, j),
@@ -159,6 +164,54 @@ void main() {
       expect(_codigos(m.layouts.linhasEmMemoria(1)!), ['GRAVADO']);
     });
 
+    test('releitura de uma estrutura não joga fora a leitura completa no ar',
+        () async {
+      // A pré-carga (ou o Sincronizar) lia a tabela inteira enquanto alguém
+      // abria uma gôndola; a releitura dela descartava a leitura completa já
+      // cobrada, e a próxima busca lia a tabela de novo.
+      final tabela = _Tabela([_caixa(1, 'A'), _caixa(2, 'B')]);
+      final m = _montar(tabela, janela: Duration.zero);
+      await _lerCopiaInteira(m.cache, tabela);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+
+      tabela.linhas = [_caixa(1, 'A2'), _caixa(2, 'B2')];
+      final inteira = Completer<LinhasLayout>();
+      final completa = m.cache.ler(
+        'layouts',
+        () => inteira.future,
+        forceRefresh: true,
+        releNaVolta: false,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(_codigos(await m.layouts.linhas(1)), ['A2']);
+      inteira.complete(await tabela.lerInteira());
+      await completa;
+
+      expect(_codigos(m.cache.emMemoria('layouts')!), ['A2', 'B2']);
+      expect(
+        await m.cache.vencida('layouts', const Duration(minutes: 1)),
+        isFalse,
+        reason: 'a leitura completa ficou guardada, com idade nova',
+      );
+    });
+
+    test('sem cópia, a releitura de uma estrutura também não a descarta',
+        () async {
+      final tabela = _Tabela([_caixa(1, 'A'), _caixa(2, 'B')]);
+      final m = _montar(tabela);
+      final inteira = Completer<LinhasLayout>();
+      final completa = m.cache.ler(
+        'layouts',
+        () => inteira.future,
+        releNaVolta: false,
+      );
+      await Future<void>.delayed(Duration.zero);
+      await m.layouts.linhas(2);
+      inteira.complete(await tabela.lerInteira());
+      await completa;
+      expect(_codigos(m.cache.emMemoria('layouts')!), ['A', 'B']);
+    });
+
     test('suja força a releitura mesmo com a cópia em dia', () async {
       final tabela = _Tabela([_caixa(1, 'A')]);
       final m = _montar(tabela);
@@ -235,6 +288,23 @@ void main() {
       expect(g(const []), isNot(g(base)));
       expect(g([...base, _caixa(1, 'A')]), isNot(g(base)));
       expect(g([_caixa(1, 'A', x: 0.2)]), isNot(g(base)));
+    });
+
+    test('conflito só quando o banco não é nem a base nem o que vai gravar',
+        () {
+      final base = [_caixa(1, 'A'), _caixa(1, 'B', x: 0.3)];
+      final edicao = [_caixa(1, 'A'), _caixa(1, 'C', x: 0.5)];
+      bool mudou(LinhasLayout banco) => layoutMudouPorBaixo(
+        noBanco: banco,
+        base: base,
+        itens: edicao,
+        colunas: colunasConteudoGondola,
+      );
+      expect(mudou(base), isFalse, reason: 'ninguém mexeu');
+      // Salvou, a resposta se perdeu e a pessoa tocou em Salvar de novo: o
+      // banco já tem a edição. Não é "outro aparelho".
+      expect(mudou(edicao), isFalse);
+      expect(mudou([_caixa(1, 'A'), _caixa(1, 'D')]), isTrue);
     });
 
     test('estante: coluna, nível, slot e código', () {

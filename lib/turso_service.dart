@@ -189,10 +189,15 @@ class TursoService {
   }) => LayoutsDaCopia(
     coluna: coluna,
     janelaEstrutura: ConsultaCache.janelaPadrao,
-    lerEstrutura: (numero) =>
-        consultarDireto(sqlEstrutura, parametros: [numero]),
-    corrigirCopia: (pertence, novas) =>
-        corrigirConsulta(chave, pertence, novas),
+    lerEstrutura: (numero) async {
+      // Sem banco configurado (dados de exemplo): estrutura vazia e editável,
+      // como sempre foi — não é "sem rede".
+      final prefs = await SharedPreferences.getInstance();
+      if ((prefs.getString(keyDbUrl) ?? '').isEmpty) return [];
+      return consultarDireto(sqlEstrutura, parametros: [numero]);
+    },
+    corrigirCopia: (pertence, novas, {required deGravacao}) =>
+        corrigirConsulta(chave, pertence, novas, descartarNoAr: deGravacao),
     copiaEmMemoria: () {
       final completa = _chaveCompleta(chave);
       return completa == null ? null : _consultaCache.emMemoria(completa);
@@ -426,6 +431,7 @@ class TursoService {
     bool Function(Map<String, dynamic>) pertence,
     List<Map<String, dynamic>> novas, {
     int Function(Map<String, dynamic>, Map<String, dynamic>)? ordenar,
+    bool descartarNoAr = true,
   }) async {
     final completa = _chaveCompleta(chave);
     if (completa == null) return null;
@@ -434,6 +440,7 @@ class TursoService {
       pertence,
       novas,
       ordenar: ordenar,
+      descartarNoAr: descartarNoAr,
     );
   }
 
@@ -1246,16 +1253,43 @@ class TursoService {
     r'^consulta_v1_.+_(gondola_\d+|estante_\d+|busca_gondolas|busca_estantes)'
     r'(\|em)?$',
   );
+  static final RegExp _copiaAntigaDeEstrutura = RegExp(
+    r'^consulta_v1_(.+)_(gondola|estante)_(\d+)$',
+  );
 
   /// Uma vez por aparelho: apaga o que ficou de versões anteriores e nada
   /// mais lê — a chave "Cache de consulta" e as cópias de layout por
   /// estrutura e da busca (hoje é uma cópia por tabela, ver
   /// [chaveLayoutsGondola]). No Android cada gravação no SharedPreferences
   /// reescreve o arquivo inteiro, e essas ~40 cópias iam junto toda vez.
+  ///
+  /// Antes de apagar, as cópias por estrutura (mesmas colunas da cópia nova)
+  /// viram a cópia completa de cada banco, SEM carimbo — vencida, relida na
+  /// primeira abertura com rede. Sem isso, o primeiro uso sem sinal depois
+  /// da atualização abria toda gôndola sem layout.
   Future<void> _limparPreferenciasAntigas(SharedPreferences prefs) async {
     if (prefs.getBool(_marcaLimpezaV1) ?? false) return;
     try {
       await prefs.remove(keyCacheLocal);
+      final porCopiaNova = <String, List<dynamic>>{};
+      for (final chave in prefs.getKeys()) {
+        final m = _copiaAntigaDeEstrutura.firstMatch(chave);
+        if (m == null) continue;
+        final nova = m.group(2) == 'gondola'
+            ? 'consulta_v1_${m.group(1)}_$chaveLayoutsGondola'
+            : 'consulta_v1_${m.group(1)}_$chaveLayoutsEstante';
+        if (prefs.containsKey(nova)) continue;
+        try {
+          (porCopiaNova[nova] ??= []).addAll(
+            jsonDecode(prefs.getString(chave) ?? '[]') as List,
+          );
+        } catch (_) {
+          // Cópia antiga ilegível: fica de fora.
+        }
+      }
+      for (final e in porCopiaNova.entries) {
+        await prefs.setString(e.key, jsonEncode(e.value));
+      }
       for (final chave in prefs.getKeys().toList()) {
         if (_consultaAntigaDeLayout.hasMatch(chave)) await prefs.remove(chave);
       }
@@ -2787,20 +2821,26 @@ class TursoService {
         'WHERE gondola_num = ? ORDER BY andar, pos_x, pos_z',
         positional: [gondolaNum],
       );
+      // Produtos que podem ter saído: os do banco agora e os da base da tela.
+      // A base conta para o caso de uma tentativa anterior ter gravado sem a
+      // resposta chegar — aí o banco já está sem o produto removido, e a
+      // limpeza dos endereços zerados dele não pode se perder.
       final codigosAntes = {
         for (final r in antes) r['produto_codigo'] as String? ?? '',
+        for (final c in base) c.produtoCodigo,
       }..remove('');
-      final mudouNoBanco =
-          assinaturaLayout(antes, colunasConteudoGondola) !=
-          assinaturaLayout([
-            for (final c in base)
-              {
-                'andar': c.andar,
-                'produto_codigo': c.produtoCodigo,
-                'pos_x': c.posX,
-                'pos_z': c.posZ,
-              },
-          ], colunasConteudoGondola);
+      Map<String, dynamic> linha(CaixaLayout c) => {
+        'andar': c.andar,
+        'produto_codigo': c.produtoCodigo,
+        'pos_x': c.posX,
+        'pos_z': c.posZ,
+      };
+      final mudouNoBanco = layoutMudouPorBaixo(
+        noBanco: antes,
+        base: base.map(linha),
+        itens: itens.map(linha),
+        colunas: colunasConteudoGondola,
+      );
       if (mudouNoBanco && !sobrescrever) {
         await tx.rollback();
         // A cópia deste aparelho está velha: a próxima abertura relê.
@@ -3027,20 +3067,24 @@ class TursoService {
         for (final r in antes)
           if (!_ehBaseNelloreRemovida(estanteNum, r['nivel'] as int? ?? -1)) r,
       ];
+      // Ver o gêmeo em _salvarLayout: a base entra nos possíveis removidos, e
+      // o banco igual ao que vai ser gravado não é conflito.
       final codigosAntes = {
         for (final r in antesVisiveis) r['produto_codigo'] as String? ?? '',
+        for (final c in base) c.produtoCodigo,
       }..remove('');
-      final mudouNoBanco =
-          assinaturaLayout(antesVisiveis, colunasConteudoEstante) !=
-          assinaturaLayout([
-            for (final c in base)
-              {
-                'coluna': c.coluna,
-                'nivel': c.nivel,
-                'slot': c.slot,
-                'produto_codigo': c.produtoCodigo,
-              },
-          ], colunasConteudoEstante);
+      Map<String, dynamic> linha(CaixaLayoutEstante c) => {
+        'coluna': c.coluna,
+        'nivel': c.nivel,
+        'slot': c.slot,
+        'produto_codigo': c.produtoCodigo,
+      };
+      final mudouNoBanco = layoutMudouPorBaixo(
+        noBanco: antesVisiveis,
+        base: base.map(linha),
+        itens: itens.map(linha),
+        colunas: colunasConteudoEstante,
+      );
       if (mudouNoBanco && !sobrescrever) {
         await tx.rollback();
         _layoutsEstante.suja(estanteNum);

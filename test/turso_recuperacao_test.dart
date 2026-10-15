@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/replica_coordinator.dart';
 import 'package:gondola_camda/replica_local.dart' show idBanco;
@@ -121,8 +123,19 @@ void main() {
         () async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(TursoService.keyCacheLocal, false);
-      await prefs.setString('consulta_v1_x_gondola_3', '[]');
+      await prefs.setString(
+        'consulta_v1_x_gondola_3',
+        '[{"gondola_num":3,"produto_codigo":"A"}]',
+      );
       await prefs.setString('consulta_v1_x_gondola_3|em', '');
+      await prefs.setString(
+        'consulta_v1_x_gondola_4',
+        '[{"gondola_num":4,"produto_codigo":"B"}]',
+      );
+      await prefs.setString(
+        'consulta_v1_x_estante_19',
+        '[{"estante_num":19,"produto_codigo":"C"}]',
+      );
       await prefs.setString('consulta_v1_x_busca_estantes', '[]');
       await prefs.setString('consulta_v1_x_galpao', '[]');
       await prefs.remove('limpeza_preferencias_v1');
@@ -134,6 +147,17 @@ void main() {
       expect(prefs.containsKey('consulta_v1_x_gondola_3|em'), isFalse);
       expect(prefs.containsKey('consulta_v1_x_busca_estantes'), isFalse);
       expect(prefs.getString('consulta_v1_x_galpao'), '[]');
+      // As cópias por estrutura viram a cópia completa, sem carimbo (vencida:
+      // relida na primeira abertura com rede, servida offline até lá).
+      final gondolas = (jsonDecode(
+        prefs.getString('consulta_v1_x_layouts_gondola_v1')!,
+      ) as List).map((r) => (r as Map)['produto_codigo']).toSet();
+      expect(gondolas, {'A', 'B'});
+      expect(
+        prefs.getString('consulta_v1_x_layouts_estante_v1'),
+        contains('"C"'),
+      );
+      expect(prefs.containsKey('consulta_v1_x_layouts_gondola_v1|em'), isFalse);
     });
 
     test('outro banco não herda a marca antiga', () async {

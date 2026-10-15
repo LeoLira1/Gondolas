@@ -1873,10 +1873,22 @@ class _GondolaPageState extends State<GondolaPage>
   // que relê a própria gôndola e os selos.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed || !mounted || _coberta) return;
+    // Só volta de verdade (app em segundo plano, tela bloqueada) relê: puxar
+    // a cortina de notificações também passa por inactive → resumed, e cada
+    // puxada relia a gôndola.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _saiuDoApp = true;
+      return;
+    }
+    if (state != AppLifecycleState.resumed || !_saiuDoApp) return;
+    _saiuDoApp = false;
+    if (!mounted || _coberta) return;
     _carregarLayout(_gondolaAtual);
     unawaited(_carregarDesatualizados(atualizarSeVencida: true));
   }
+
+  bool _saiuDoApp = false;
 
   /// Abre [pagina] por cima desta e a deixa parada até voltar: com a gôndola
   /// escondida, cada aviso de dados relia o layout dela e mantinha as cópias
@@ -1903,6 +1915,9 @@ class _GondolaPageState extends State<GondolaPage>
     setState(() {
       _carregandoProdutos = true;
       _dbConectado        = false;
+      // A gôndola já está na cópia de layouts (a pré-carga a trouxe): a cena
+      // abre com ela na hora, e a releitura abaixo só a confere.
+      _carregandoLayout   = !_semearDoCache(_gondolaAtual);
     });
 
     unawaited(_carregarLayout(_gondolaAtual));
@@ -2091,9 +2106,21 @@ class _GondolaPageState extends State<GondolaPage>
   /// ele não está carregado (para quem ia editar desistir).
   bool _semLayoutParaEditar() {
     if (_layoutCarregado(_gondolaAtual)) return false;
+    if (_carregandoLayout) {
+      _avisarAindaCarregando();
+      return true;
+    }
     _avisadasSemLayout.remove(_gondolaAtual);
     _avisarSemLayout(_gondolaAtual);
     return true;
+  }
+
+  void _avisarAindaCarregando() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('O layout ainda está carregando — um instante.'),
+      backgroundColor: Color(0xFF1a3040),
+      duration: Duration(seconds: 2),
+    ));
   }
 
   void _avisarSemLayout(int gondolaNum) {
@@ -2383,7 +2410,10 @@ class _GondolaPageState extends State<GondolaPage>
     if (r.resultado == ResultadoSalvarLayout.conflito) {
       final escolha = await perguntarConflitoDeLayout(context, 'Esta gôndola');
       if (!mounted) return;
-      if (escolha == EscolhaConflitoLayout.salvarPorCima) {
+      // A pessoa decide sobre a gôndola que deu conflito; se a tela já está
+      // em outra, nada é gravado (a edição continua na gôndola dela).
+      if (escolha == EscolhaConflitoLayout.salvarPorCima &&
+          numero == _gondolaAtual) {
         await _salvarLayout(sobrescrever: true);
       } else if (escolha == EscolhaConflitoLayout.recarregar) {
         setState(() {
@@ -2432,6 +2462,8 @@ class _GondolaPageState extends State<GondolaPage>
   }
 
   Future<void> _buscarProduto(Produto produto) async {
+    // Sem trocar de estrutura no meio de um salvamento (ver _trocarGondola).
+    if (_salvando) return;
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Configure o banco em ⚙️ para buscar no Turso'),
@@ -2494,13 +2526,24 @@ class _GondolaPageState extends State<GondolaPage>
     // Navigate to the gondola and load its layout
     setState(() {
       _gondolaAtual     = encontrado.gondolaNum;
-      _carregandoLayout = true;
+      _carregandoLayout = !_semearDoCache(encontrado.gondolaNum);
       _expanderAberto   = null;
       _sugestoes2       = [];
     });
     _ctrl2.clear();
 
-    final layouts = await TursoService().fetchLayout(encontrado.gondolaNum);
+    final List<CaixaLayout> layouts;
+    try {
+      layouts = await TursoService().fetchLayout(encontrado.gondolaNum);
+    } catch (_) {
+      // Sem rede e sem cópia: ver _carregarLayout.
+      if (!mounted) return;
+      setState(() => _carregandoLayout = false);
+      if (!_layoutCarregado(encontrado.gondolaNum)) {
+        _avisarSemLayout(encontrado.gondolaNum);
+      }
+      return;
+    }
     if (!mounted) return;
 
     _highlightTimer?.cancel();
@@ -3499,6 +3542,8 @@ class _EstantePageState extends State<EstantePage>
     setState(() {
       _carregandoProdutos = true;
       _dbConectado        = false;
+      // Ver o gêmeo em _GondolaPageState.
+      _carregandoLayout   = !_semearDoCache(_estanteAtual);
     });
 
     unawaited(_carregarLayout(_estanteAtual));
@@ -3548,10 +3593,19 @@ class _EstantePageState extends State<EstantePage>
   // Ver o gêmeo em _GondolaPageState.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed || !mounted || _coberta) return;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _saiuDoApp = true;
+      return;
+    }
+    if (state != AppLifecycleState.resumed || !_saiuDoApp) return;
+    _saiuDoApp = false;
+    if (!mounted || _coberta) return;
     _carregarLayout(_estanteAtual);
     unawaited(_carregarDesatualizados(atualizarSeVencida: true));
   }
+
+  bool _saiuDoApp = false;
 
   // Ver o gêmeo em _GondolaPageState.
   Future<void> _abrirPorCima(Widget pagina) async {
@@ -3696,9 +3750,21 @@ class _EstantePageState extends State<EstantePage>
 
   bool _semLayoutParaEditar() {
     if (_layoutCarregado(_estanteAtual)) return false;
+    if (_carregandoLayout) {
+      _avisarAindaCarregando();
+      return true;
+    }
     _avisadasSemLayout.remove(_estanteAtual);
     _avisarSemLayout(_estanteAtual);
     return true;
+  }
+
+  void _avisarAindaCarregando() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('O layout ainda está carregando — um instante.'),
+      backgroundColor: Color(0xFF1a3040),
+      duration: Duration(seconds: 2),
+    ));
   }
 
   void _avisarSemLayout(int estanteNum) {
@@ -4118,7 +4184,8 @@ class _EstantePageState extends State<EstantePage>
         ehPalete(numero) ? 'Este palete' : 'Esta estante',
       );
       if (!mounted) return;
-      if (escolha == EscolhaConflitoLayout.salvarPorCima) {
+      if (escolha == EscolhaConflitoLayout.salvarPorCima &&
+          numero == _estanteAtual) {
         await _salvarLayout(sobrescrever: true);
       } else if (escolha == EscolhaConflitoLayout.recarregar) {
         setState(() {
@@ -4167,6 +4234,8 @@ class _EstantePageState extends State<EstantePage>
   }
 
   Future<void> _buscarProduto(Produto produto) async {
+    // Sem trocar de estrutura no meio de um salvamento (ver _trocarGondola).
+    if (_salvando) return;
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Configure o banco em ⚙️ para buscar no Turso'),
@@ -4213,14 +4282,23 @@ class _EstantePageState extends State<EstantePage>
 
     setState(() {
       _estanteAtual     = encontrado.estanteNum;
-      _carregandoLayout = true;
+      _carregandoLayout = !_semearDoCache(encontrado.estanteNum);
       _expanderAberto   = null;
       _sugestoes2       = [];
     });
     _ctrl2.clear();
 
-    final layouts =
-        await TursoService().fetchLayoutEstante(encontrado.estanteNum);
+    final List<CaixaLayoutEstante> layouts;
+    try {
+      layouts = await TursoService().fetchLayoutEstante(encontrado.estanteNum);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _carregandoLayout = false);
+      if (!_layoutCarregado(encontrado.estanteNum)) {
+        _avisarSemLayout(encontrado.estanteNum);
+      }
+      return;
+    }
     if (!mounted) return;
 
     _highlightTimer?.cancel();
