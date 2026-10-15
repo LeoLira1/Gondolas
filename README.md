@@ -542,6 +542,28 @@ conflito, paridade da busca nas estantes) e `test/leitura_turso_test.dart`
 (cópias fora da volta ao app). Falta o gráfico de Rows Read de um dia de loja
 e galpão.
 
+### Medindo: ⚙️ → Leituras deste aparelho
+
+O gráfico de Rows Read do Turso é da **conta inteira**: os dashboards, o app
+Contagem e todos os aparelhos somados. Para saber quanto é do Gôndolas — e se
+uma mudança funcionou —, cada aparelho conta o que ele mesmo pediu ao banco,
+por dia e por tipo de consulta (`lib/leituras_turso.dart`), e mostra em ⚙️ →
+**Leituras deste aparelho**. Os últimos 8 dias ficam guardados no aparelho.
+
+O cliente do libsql não informa as linhas **varridas** (o que o Turso cobra),
+só as devolvidas. Para leitura de tabela inteira ou pelo índice as duas são a
+mesma coisa. As consultas que **agrupam** uma tabela (a última contagem de cada
+produto, no app Contagem e no inventário cíclico) varrem a tabela toda e
+devolvem uma linha por produto: para elas, a tela estima consultas × tamanho
+da tabela. O tamanho sai do botão **Medir as tabelas**, que conta as linhas das
+tabelas que o app lê — e isso mesmo custa, uma vez, a leitura delas inteiras.
+
+Para comparar com o Turso: some o "≈ linhas lidas" do dia dos aparelhos da loja
+e do galpão; o que sobrar no gráfico é dos outros apps.
+
+Não entram na conta as consultas da abertura (esquema, migrações) e da
+recuperação da réplica antiga, que rodam raramente e leem pouco.
+
 ## Créditos
 
 Ícone do app: [Map icon criado por Freepik — Flaticon](https://www.flaticon.com/br/icones-gratis/mapa)

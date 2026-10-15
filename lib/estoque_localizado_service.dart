@@ -312,7 +312,11 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ? ORDER BY local_tipo, local_num, face_ou_coluna, andar_ou_nivel',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
-      return (rows as List<dynamic>).map((dynamic row) {
+      TursoService().contarLeitura(
+        'enderecos_produto',
+        (rows as List<dynamic>).length,
+      );
+      return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         return _enderecoDaLinha(r);
       }).toList();
@@ -362,6 +366,7 @@ class EstoqueLocalizadoService {
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
       final list = rows as List<dynamic>;
+      TursoService().contarLeitura('info_mestre', list.length);
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;
       return InfoEstoqueMestre(
@@ -484,6 +489,7 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura('quantidades_produto', rows.length);
       await TursoService().guardarQuantidadesProduto(
         produtoCodigo,
         rows.map((r) => Map<String, dynamic>.from(r)).toList(),

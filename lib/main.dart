@@ -145,6 +145,11 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // O Android pode matar o app em segundo plano: o diagnóstico de leituras
+    // grava o que contou antes disso.
+    if (state == AppLifecycleState.paused) {
+      unawaited(TursoService().leituras.gravarJa());
+    }
     if (state == AppLifecycleState.resumed) {
       unawaited(TursoService().atualizarConsultas());
       // A confirmação de contagem é feita no app Contagem: quem confere sai

@@ -141,6 +141,7 @@ class GalpaoService {
         'quantidade FROM galpao_racks WHERE posicao IN '
         '(${List.filled(lista.length, '?').join(', ')}) ORDER BY posicao, ordem',
         parametros: lista,
+        tipo: 'galpao_posicoes',
       );
       final copia = await TursoService().corrigirConsulta(
         TursoService.chaveGalpao,

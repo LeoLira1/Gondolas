@@ -124,6 +124,8 @@ class BarracaoService {
       );
       final rows = await stmt.query() as List<dynamic>;
       final n = (rows.first as Map<String, dynamic>)['n'] as int? ?? 0;
+      // COUNT(*) varre a tabela: conta as linhas dela, não a única devolvida.
+      TursoService().contarLeitura('barracao_seed', n);
       if (n > 0) {
         _seedFeito = true;
         return true;

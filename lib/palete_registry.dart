@@ -101,7 +101,8 @@ class PaleteRegistry {
         'FROM paletes ORDER BY num',
       );
       final rows = await stmt.query();
-      _paletes = (rows as List<dynamic>).map((dynamic row) {
+      TursoService().contarLeitura('paletes', (rows as List<dynamic>).length);
+      _paletes = rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         return Palete(
           num:      r['num']     as int?    ?? 0,
