@@ -551,18 +551,39 @@ por dia e por tipo de consulta (`lib/leituras_turso.dart`), e mostra em ⚙️ �
 **Leituras deste aparelho**. Os últimos 8 dias ficam guardados no aparelho.
 
 O cliente do libsql não informa as linhas **varridas** (o que o Turso cobra),
-só as devolvidas. Para leitura de tabela inteira ou pelo índice as duas são a
-mesma coisa. As consultas que **agrupam** uma tabela (a última contagem de cada
-produto, no app Contagem e no inventário cíclico) varrem a tabela toda e
-devolvem uma linha por produto: para elas, a tela estima consultas × tamanho
-da tabela. O tamanho sai do botão **Medir as tabelas**, que conta as linhas das
-tabelas que o app lê — e isso mesmo custa, uma vez, a leitura delas inteiras.
+só as devolvidas. Três casos:
+
+- **Tabela inteira**: as duas são a mesma coisa.
+- **Pelo índice**: o Turso soma também a busca no índice (e, numa lista
+  `IN (...)`, a passada pela lista). O real fica um pouco acima do mostrado.
+- **Agrupa ou filtra sem índice**: a última contagem de cada produto (app
+  Contagem e inventário cíclico), as divergências da baixa e os estocados com
+  saldo varrem a tabela toda e devolvem menos linhas. Para eles a tela estima
+  consultas × tamanho da tabela. O tamanho sai do botão **Medir as tabelas**,
+  que conta as linhas só dessas quatro tabelas (`contagem_itens`,
+  `inventario_cicli`, `divergencias`, `materiais_terceiros`) — e isso mesmo
+  custa, uma vez, a leitura delas inteiras. Uma tabela que falhar na medição
+  não descarta as outras.
+
+**Sem resposta**: leitura que estourou o prazo depois de enviada. O banco já
+executou (e o Turso cobrou); a tela estima as linhas pelo tamanho da cópia que
+ela renovaria.
 
 Para comparar com o Turso: some o "≈ linhas lidas" do dia dos aparelhos da loja
-e do galpão; o que sobrar no gráfico é dos outros apps.
+e do galpão. O número de cada aparelho é um **piso**, então o que sobrar no
+gráfico é dos outros apps **mais** o que fica de fora daqui:
 
-Não entram na conta as consultas da abertura (esquema, migrações) e da
-recuperação da réplica antiga, que rodam raramente e leem pouco.
+- as consultas da abertura (esquema, migrações) e da recuperação da réplica
+  antiga, que rodam raramente;
+- o que os próprios comandos de gravação leem por dentro (o DELETE de um
+  layout, os `INSERT ... SELECT` e as conferências dos lotes do galpão);
+- a busca no índice e as listas `IN`, como acima.
+
+Os SELECTs feitos dentro das gravações (estado anterior, o produto relido
+depois de salvar, o barracão relido) entram na conta.
+
+O contador grava no aparelho no máximo uma vez por minuto e, com o app em
+segundo plano, na hora. Ficam os últimos 8 dias de calendário.
 
 ## Créditos
 

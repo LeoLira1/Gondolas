@@ -8,11 +8,12 @@
 // dia a dia.
 //
 // O cliente do libsql não devolve as linhas VARRIDAS (o que o Turso cobra),
-// só as devolvidas. Para leitura sem agrupamento (tabela inteira ou pelo
-// índice) as duas são a mesma coisa. Para as consultas que agrupam a tabela
-// (a última contagem de cada produto), o banco varre a tabela inteira e
-// devolve uma linha por produto: aí a estimativa usa o tamanho da tabela,
-// medido sob pedido (ver [tabelaVarridaPor]).
+// só as devolvidas. Para leitura de tabela inteira as duas são a mesma coisa;
+// pelo índice, o Turso soma ainda a busca no índice (o real fica um pouco
+// acima). Para as consultas que agrupam a tabela (a última contagem de cada
+// produto) ou filtram sem índice (os estocados com saldo), o banco varre a
+// tabela inteira e devolve menos linhas: aí a estimativa usa o tamanho da
+// tabela, medido sob pedido (ver [tabelaVarridaPor]).
 //
 // Sem banco e sem Flutter, de propósito: a persistência entra por função.
 
@@ -29,17 +30,31 @@ class LeiturasDoTipo {
 }
 
 /// A tabela que uma consulta do tipo [tipo] varre inteira para devolver
-/// menos linhas (agrupa), ou null quando devolvido = varrido.
+/// menos linhas (agrupa, ou filtra sem índice), ou null quando devolvido =
+/// varrido.
 String? tabelaVarridaPor(String tipo) {
   if (tipo.startsWith('ultima_contagem_itens')) return 'contagem_itens';
   if (tipo.startsWith('ultima_contagem_ciclico')) return 'inventario_cicli';
   if (tipo == 'baixa_divergencias') return 'divergencias';
+  // `WHERE saldo > 0`, sem índice: a tabela do app Estocados inteira.
+  if (tipo == 'estocados') return 'materiais_terceiros';
   return null;
 }
 
+/// Todas as tabelas que [tabelaVarridaPor] devolve: só o tamanho delas entra
+/// na estimativa, então só elas são medidas.
+const List<String> tabelasVarridas = [
+  'contagem_itens',
+  'inventario_cicli',
+  'divergencias',
+  'materiais_terceiros',
+];
+
 /// Conta as leituras por dia (data local) e por tipo. Guarda no aparelho os
-/// últimos [diasGuardados] dias, gravando no máximo a cada [respiro] — cada
-/// gravação no SharedPreferences reescreve o arquivo inteiro no Android.
+/// últimos [diasGuardados] dias (pela data, não pela quantidade), gravando no
+/// máximo a cada [respiro] — cada gravação no SharedPreferences reescreve o
+/// arquivo inteiro no Android. Com o app em segundo plano
+/// ([emPrimeiroPlano] falso) grava logo: o Android pode matar o processo.
 class ContadorDeLeituras {
   ContadorDeLeituras({
     required this.carregarDisco,
@@ -65,20 +80,40 @@ class ContadorDeLeituras {
       '${t.month.toString().padLeft(2, '0')}-'
       '${t.day.toString().padLeft(2, '0')}';
 
-  /// Uma leitura feita agora: [linhas] devolvidas por uma consulta de [tipo].
-  void registrar(String tipo, int linhas) {
+  /// Falso com o app em segundo plano: aí cada leitura grava logo, em vez de
+  /// esperar o [respiro]. Ao passar para falso, grava o que estava pendente.
+  bool get emPrimeiroPlano => _emPrimeiroPlano;
+  bool _emPrimeiroPlano = true;
+  set emPrimeiroPlano(bool valor) {
+    _emPrimeiroPlano = valor;
+    if (!valor) unawaited(gravarJa().catchError((_) {}));
+  }
+
+  /// [linhas] lidas por [consultas] consultas de [tipo], agora. [consultas] 0
+  /// é para somar linhas a uma consulta já anotada.
+  void registrar(String tipo, int linhas, {int consultas = 1}) {
     final dia = _dias.putIfAbsent(diaDe(_agora()), () => {});
     final l = dia.putIfAbsent(tipo, LeiturasDoTipo.new);
-    l.consultas++;
+    l.consultas += consultas;
     l.linhas += linhas;
     _agendarGravacao();
+  }
+
+  /// O dia mais antigo que ainda fica guardado.
+  String get _primeiroDiaGuardado {
+    final hoje = _agora();
+    return diaDe(
+      DateTime(hoje.year, hoje.month, hoje.day - (diasGuardados - 1)),
+    );
   }
 
   /// Os dias guardados (mais novo primeiro), cada um com os tipos lidos.
   /// Junta o que já estava no disco com o desta sessão.
   Future<List<({String dia, Map<String, LeiturasDoTipo> tipos})>> dias() async {
     await _carregar();
-    final chaves = _dias.keys.toList()..sort((a, b) => b.compareTo(a));
+    final primeiro = _primeiroDiaGuardado;
+    final chaves = _dias.keys.where((d) => d.compareTo(primeiro) >= 0).toList()
+      ..sort((a, b) => b.compareTo(a));
     return [
       for (final d in chaves) (dia: d, tipos: Map.unmodifiable(_dias[d]!)),
     ];
@@ -102,18 +137,19 @@ class ContadorDeLeituras {
   }
 
   void _agendarGravacao() {
-    _gravacaoPendente ??= Timer(respiro, () {
-      _gravacaoPendente = null;
-      unawaited(_gravar().catchError((_) {}));
-    });
+    _gravacaoPendente ??= Timer(
+      _emPrimeiroPlano ? respiro : Duration.zero,
+      () {
+        _gravacaoPendente = null;
+        unawaited(_gravar().catchError((_) {}));
+      },
+    );
   }
 
   Future<void> _gravar() async {
     await _carregar();
-    final dias = _dias.keys.toList()..sort((a, b) => b.compareTo(a));
-    for (final velho in dias.skip(diasGuardados)) {
-      _dias.remove(velho);
-    }
+    final primeiro = _primeiroDiaGuardado;
+    _dias.removeWhere((d, _) => d.compareTo(primeiro) < 0);
     await gravarDisco(
       jsonEncode({
         for (final e in _dias.entries)

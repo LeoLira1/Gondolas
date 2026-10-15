@@ -275,8 +275,10 @@ class TursoService {
         }
         consultasEmitidas++;
         final cliente = _client!;
+        var enviada = false;
         try {
           final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+          enviada = true;
           final rows =
               await stmt
                       .query(positional: parametros)
@@ -285,6 +287,9 @@ class TursoService {
           contarLeitura(chave, rows.length);
           return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         } catch (e) {
+          if (enviada && e is TimeoutException) {
+            _contarSemResposta(_consultaCache.emMemoria(completa)?.length ?? 0);
+          }
           // Tabela ou coluna que não existe neste banco: a consulta sai das
           // conhecidas, senão o Sincronizar a relia, falhava sempre e dava o
           // banco inteiro como fora do ar. Quem pediu decide o que fazer.
@@ -419,16 +424,23 @@ class TursoService {
       throw StateError('Sem conexão com o banco');
     }
     final cliente = _client!;
+    var enviada = false;
     try {
       consultasEmitidas++;
       final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+      enviada = true;
       final rows =
           await stmt.query(positional: parametros).timeout(_timeoutLeitura)
               as List<dynamic>;
       contarLeitura(tipo, rows.length);
       return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-    } catch (_) {
-      _renovarClienteDeLeitura(cliente);
+    } catch (e) {
+      if (enviada && e is TimeoutException) _contarSemResposta(0);
+      // Tabela ou coluna que não existe é resposta do banco, não conexão
+      // quebrada (a medição das tabelas pergunta por tabelas opcionais).
+      if (!erroDeTabelaAusente(e) && !erroDeColunaAusente(e)) {
+        _renovarClienteDeLeitura(cliente);
+      }
       rethrow;
     }
   }
@@ -505,28 +517,22 @@ class TursoService {
   );
   static const String _chaveLeituras = 'leituras_turso_v1';
 
-  /// Anota [linhas] devolvidas por uma consulta de [tipo] (ver [leituras]).
-  void contarLeitura(String tipo, int linhas) =>
-      leituras.registrar(tipo, linhas);
+  /// Anota [linhas] lidas por [consultas] consultas de [tipo] (ver
+  /// [leituras]).
+  void contarLeitura(String tipo, int linhas, {int consultas = 1}) =>
+      leituras.registrar(tipo, linhas, consultas: consultas);
+
+  /// Leitura que estourou o prazo depois de enviada: o banco já a executou (e
+  /// o Turso cobrou), só a resposta não chegou. [linhas] é a estimativa — o
+  /// tamanho da cópia que ela renovaria, quando há.
+  void _contarSemResposta(int linhas) => contarLeitura('sem_resposta', linhas);
 
   static const String _chaveTamanhos = 'tamanho_tabelas_v1';
 
-  /// Tabelas que este app lê (ou que os selos e a baixa agrupam): é o
-  /// tamanho delas que dá a estimativa das linhas varridas.
-  static const List<String> tabelasMedidas = [
-    'estoque_mestre',
-    'estoque_localizado',
-    'gondola_layout',
-    'estante_layout',
-    'galpao_racks',
-    'barracao_enderecos',
-    'contagem_itens',
-    'inventario_cicli',
-    'divergencias',
-    'mapa_produtos',
-    'mapa_produtos_codigos',
-    'materiais_terceiros',
-  ];
+  /// As tabelas que as consultas agrupam ou filtram sem índice: é o tamanho
+  /// delas que dá a estimativa das linhas varridas (ver [tabelaVarridaPor]).
+  /// As lidas inteiras já aparecem com o número exato no próprio contador.
+  static const List<String> tabelasMedidas = tabelasVarridas;
 
   /// O último tamanho medido de cada tabela ([medirTabelas]), e quando.
   Future<({Map<String, int> tamanhos, DateTime? em})> tamanhosDasTabelas()
@@ -537,10 +543,11 @@ class TursoService {
       );
       if (texto == null) return (tamanhos: <String, int>{}, em: null);
       final json = jsonDecode(texto) as Map<String, dynamic>;
+      // Medida de uma versão que media mais tabelas: só as que ainda contam.
       return (
         tamanhos: {
           for (final e in (json['tabelas'] as Map<String, dynamic>).entries)
-            e.key: (e.value as num).toInt(),
+            if (tabelasMedidas.contains(e.key)) e.key: (e.value as num).toInt(),
         },
         em: DateTime.tryParse(json['em'] as String? ?? ''),
       );
@@ -551,9 +558,18 @@ class TursoService {
 
   /// Conta as linhas de cada uma das [tabelasMedidas] (COUNT(*), que no
   /// Turso custa a tabela inteira — é sob pedido, em ⚙️) e guarda. Tabela
-  /// que não existe neste banco fica de fora.
-  Future<Map<String, int>> medirTabelas() async {
-    final tamanhos = <String, int>{};
+  /// que não existe neste banco fica de fora. Uma medição em andamento é
+  /// compartilhada: sair e voltar à tela não paga as tabelas de novo.
+  Future<Map<String, int>> medirTabelas() =>
+      _medicao ??= _medirTabelas().whenComplete(() => _medicao = null);
+  Future<Map<String, int>>? _medicao;
+
+  /// True enquanto uma medição está no ar (a tela volta mostrando-a).
+  bool get medindoTabelas => _medicao != null;
+
+  Future<Map<String, int>> _medirTabelas() async {
+    final medidas = <String, int>{};
+    Object? falha;
     for (final tabela in tabelasMedidas) {
       try {
         final rows = await consultarDireto(
@@ -561,23 +577,42 @@ class TursoService {
           tipo: 'medicao_tabelas',
         );
         final n = (rows.first['n'] as num?)?.toInt() ?? 0;
-        tamanhos[tabela] = n;
-        // O COUNT varre a tabela: o que conta é ela, não a linha devolvida.
-        contarLeitura('medicao_tabelas', n - 1);
+        medidas[tabela] = n;
+        // O COUNT varre a tabela: o que conta é ela, não a linha devolvida
+        // (a consulta em si já foi anotada por consultarDireto).
+        contarLeitura('medicao_tabelas', n - 1, consultas: 0);
       } catch (e) {
-        if (!erroDeTabelaAusente(e)) rethrow;
+        // Uma tabela que falhou não joga fora as já medidas (e já pagas).
+        if (!erroDeTabelaAusente(e)) falha ??= e;
       }
     }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _chaveTamanhos,
-      jsonEncode({
-        'em': DateTime.now().toIso8601String(),
-        'tabelas': tamanhos,
-      }),
+    final tamanhos = juntarMedidas(
+      (await tamanhosDasTabelas()).tamanhos,
+      medidas,
     );
+    if (medidas.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _chaveTamanhos,
+        jsonEncode({
+          'em': DateTime.now().toIso8601String(),
+          'tabelas': tamanhos,
+        }),
+      );
+    }
+    if (falha != null) throw falha;
     return tamanhos;
   }
+
+  /// A medida anterior com a nova por cima, só das [tabelasMedidas] (as que
+  /// saíram da lista não pesam mais na tela).
+  static Map<String, int> juntarMedidas(
+    Map<String, int> anteriores,
+    Map<String, int> novas,
+  ) => {
+    for (final t in tabelasMedidas)
+      if (novas[t] ?? anteriores[t] case final n?) t: n,
+  };
 
   bool get isConnected => _connected;
 

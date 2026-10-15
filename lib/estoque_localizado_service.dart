@@ -567,6 +567,10 @@ class EstoqueLocalizadoService {
           andarOuNivel,
         ],
       );
+      TursoService().contarLeitura(
+        'gravacao_estado_anterior',
+        rowsAnterior.length,
+      );
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
           : rowsAnterior.first['quantidade'] as num?;
@@ -629,6 +633,10 @@ class EstoqueLocalizadoService {
         'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
+      );
+      TursoService().contarLeitura(
+        'quantidades_produto',
+        quantidadesConfirmadas.length,
       );
       await tx.commit();
       // A cópia das quantidades é corrigida logo abaixo com as linhas do
@@ -710,6 +718,10 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura(
+        'quantidades_produto',
+        quantidadesConfirmadas.length,
+      );
       await tx.commit();
       // A cópia das quantidades é corrigida logo abaixo com as linhas do
       // produto lidas na própria transação.
@@ -775,6 +787,7 @@ class EstoqueLocalizadoService {
         'WHERE data_contagem = ? AND produto_id = ? LIMIT 1',
         positional: [hoje, produtoCodigo],
       );
+      TursoService().contarLeitura('gravacao_estado_anterior', existe.length);
 
       if (existe.isEmpty) {
         await tx.execute(

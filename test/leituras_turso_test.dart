@@ -1,6 +1,7 @@
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/leituras_turso.dart';
+import 'package:gondola_camda/turso_service.dart';
 
 // O diagnóstico de leituras conta, por dia e por tipo, o que este aparelho
 // pediu ao Turso — o gráfico do Turso é da conta inteira.
@@ -72,6 +73,62 @@ void main() {
     ]);
   });
 
+  test('guarda pela data: um dia de meses atrás sai, mesmo sendo dos 8 '
+      'mais novos', () async {
+    String? disco = '{"2026-06-01":{"galpao":[1,10]},'
+        '"2026-10-09":{"galpao":[1,10]},"2026-10-08":{"galpao":[1,10]}}';
+    final contador = ContadorDeLeituras(
+      carregarDisco: () async => disco,
+      gravarDisco: (t) async => disco = t,
+      agora: () => DateTime(2026, 10, 15, 9),
+    );
+    // 8 dias: de 08/10 a 15/10.
+    expect((await contador.dias()).map((d) => d.dia), [
+      '2026-10-09',
+      '2026-10-08',
+    ]);
+    contador.registrar('galpao', 1);
+    await contador.gravarJa();
+    expect(disco, isNot(contains('2026-06-01')));
+    expect(disco, contains('2026-10-08'));
+  });
+
+  test('consultas: 0 soma linhas sem inventar consulta', () async {
+    final contador = ContadorDeLeituras(
+      carregarDisco: () async => null,
+      gravarDisco: (_) async {},
+    );
+    contador.registrar('medicao_tabelas', 1);
+    contador.registrar('medicao_tabelas', 4999, consultas: 0);
+    final l = (await contador.dias()).single.tipos['medicao_tabelas']!;
+    expect(l.consultas, 1);
+    expect(l.linhas, 5000);
+  });
+
+  test('em segundo plano grava logo, sem esperar o respiro', () {
+    fakeAsync((async) {
+      var gravacoes = 0;
+      final contador = ContadorDeLeituras(
+        carregarDisco: () async => null,
+        gravarDisco: (_) async => gravacoes++,
+      );
+      contador.registrar('galpao', 10);
+      contador.emPrimeiroPlano = false; // grava o pendente
+      async.flushMicrotasks();
+      expect(gravacoes, 1);
+      // Leitura que terminou já com o app em segundo plano.
+      contador.registrar('quantidades_detalhes_v2', 4000);
+      async.elapse(Duration.zero);
+      expect(gravacoes, 2);
+      contador.emPrimeiroPlano = true;
+      contador.registrar('galpao', 10);
+      async.elapse(const Duration(seconds: 59));
+      expect(gravacoes, 2);
+      async.elapse(const Duration(seconds: 2));
+      expect(gravacoes, 3);
+    });
+  });
+
   test('zerar apaga também do disco', () async {
     String? disco = '{"2026-10-14":{"galpao":[3,90]}}';
     final contador = ContadorDeLeituras(
@@ -110,6 +167,28 @@ void main() {
       );
     });
 
+    test('estocados filtra sem índice: varre materiais_terceiros', () {
+      expect(tabelaVarridaPor('estocados'), 'materiais_terceiros');
+      expect(tabelasVarridas, contains('materiais_terceiros'));
+      expect(
+        estimarVarridas({'estocados': LeiturasDoTipo(20, 3000)}, {
+          'materiais_terceiros': 3000,
+        }),
+        60000,
+      );
+    });
+
+    test('toda tabela varrida é medida', () {
+      for (final tipo in [
+        'ultima_contagem_itens_confirmado_em',
+        'ultima_contagem_ciclico_v1',
+        'baixa_divergencias',
+        'estocados',
+      ]) {
+        expect(tabelasVarridas, contains(tabelaVarridaPor(tipo)));
+      }
+    });
+
     test('sem o tamanho, fica o devolvido e o tipo é apontado', () {
       final sem = <String>{};
       expect(
@@ -118,5 +197,18 @@ void main() {
       );
       expect(sem, {'ultima_contagem_ciclico_v1'});
     });
+  });
+
+  test('medição que falhou no meio guarda o que mediu por cima da anterior',
+      () {
+    expect(
+      TursoService.juntarMedidas(
+        {'contagem_itens': 100, 'inventario_cicli': 900, 'estoque_mestre': 7},
+        {'contagem_itens': 150, 'materiais_terceiros': 40},
+      ),
+      // inventario_cicli falhou agora: fica a medida anterior; estoque_mestre
+      // não é mais medida.
+      {'contagem_itens': 150, 'inventario_cicli': 900, 'materiais_terceiros': 40},
+    );
   });
 }

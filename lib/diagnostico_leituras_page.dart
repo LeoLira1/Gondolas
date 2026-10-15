@@ -8,10 +8,13 @@ import 'turso_service.dart';
 /// Rows Read do Turso soma a conta inteira — dashboards, o app Contagem e
 /// todos os aparelhos —, então é daqui que sai quanto é do Gôndolas.
 class DiagnosticoLeiturasPage extends StatefulWidget {
-  const DiagnosticoLeiturasPage({super.key, this.contador});
+  const DiagnosticoLeiturasPage({super.key, this.contador, this.agora});
 
   /// O contador a mostrar; sem ele, o do app ([TursoService.leituras]).
   final ContadorDeLeituras? contador;
+
+  /// O relógio do "Hoje" (testes); sem ele, [DateTime.now].
+  final DateTime Function()? agora;
 
   @override
   State<DiagnosticoLeiturasPage> createState() =>
@@ -50,6 +53,8 @@ const Map<String, String> nomesDasLeituras = {
   'paletes': 'Cadastro de paletes',
   'indices_conferencia': 'Conferência dos índices',
   'medicao_tabelas': 'Medição das tabelas (este botão)',
+  'gravacao_estado_anterior': 'Gravações (estado anterior)',
+  'sem_resposta': 'Sem resposta (estimado pela cópia)',
   'leitura_avulsa': 'Outras leituras',
 };
 
@@ -65,6 +70,14 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
   void initState() {
     super.initState();
     _carregar();
+    final medicao = TursoService().medindoTabelas
+        ? TursoService().medirTabelas()
+        : null;
+    if (medicao != null) {
+      // Saiu e voltou durante uma medição: mostra-a até o fim.
+      _medindo = true;
+      _esperarMedicao(medicao);
+    }
   }
 
   ContadorDeLeituras get _contador =>
@@ -95,10 +108,11 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
           style: TextStyle(color: Colors.white, fontSize: 15),
         ),
         content: const Text(
-          'Conta as linhas das tabelas que o app lê. É o que permite estimar '
-          'o que o Turso cobra das consultas que agrupam a tabela inteira.\n\n'
-          'Contar custa, uma vez, a leitura das tabelas inteiras (a soma '
-          'delas aparece aqui depois). Basta medir de vez em quando.',
+          'Conta as linhas das tabelas que algumas consultas varrem inteiras '
+          '(agrupam ou filtram sem índice). É o que permite estimar o que o '
+          'Turso cobra delas.\n\n'
+          'Contar custa, uma vez, a leitura dessas tabelas inteiras (a soma '
+          'aparece aqui depois). Basta medir de vez em quando.',
           style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
         ),
         actions: [
@@ -115,11 +129,15 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
     );
     if (ok != true || !mounted) return;
     setState(() => _medindo = true);
+    await _esperarMedicao(TursoService().medirTabelas());
+  }
+
+  Future<void> _esperarMedicao(Future<void> medicao) async {
     String? erro;
     try {
-      await TursoService().medirTabelas();
+      await medicao;
     } catch (e) {
-      erro = 'Não deu para medir agora. Confira a conexão.';
+      erro = 'Não deu para medir todas agora. Confira a conexão.';
     }
     if (!mounted) return;
     setState(() => _medindo = false);
@@ -133,6 +151,32 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
   }
 
   Future<void> _zerar() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141a22),
+        surfaceTintColor: Colors.transparent,
+        title: const Text(
+          'Zerar a contagem?',
+          style: TextStyle(color: Colors.white, fontSize: 15),
+        ),
+        content: const Text(
+          'Apaga as leituras dos últimos dias contadas neste aparelho.',
+          style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Zerar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
     await _contador.zerar();
     await _carregar();
   }
@@ -147,10 +191,11 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
     return b.toString();
   }
 
-  static String _diaLegivel(String dia, int indice) {
+  String _diaLegivel(String dia, int indice) {
     final partes = dia.split('-');
     final curto = partes.length == 3 ? '${partes[2]}/${partes[1]}' : dia;
-    if (indice == 0 && dia == ContadorDeLeituras.diaDe(DateTime.now())) {
+    final agora = (widget.agora ?? DateTime.now)();
+    if (indice == 0 && dia == ContadorDeLeituras.diaDe(agora)) {
       return 'Hoje';
     }
     return curto;
@@ -276,7 +321,7 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
               if (semTamanho.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 const Text(
-                  'Sem a medida das tabelas, as consultas que agrupam a tabela '
+                  'Sem a medida das tabelas, as consultas que varrem a tabela '
                   'inteira contam só o que devolveram — o real é maior. Use '
                   '"Medir as tabelas" abaixo.',
                   style: TextStyle(
@@ -309,7 +354,7 @@ class _DiagnosticoLeiturasPageState extends State<DiagnosticoLeiturasPage> {
                       ),
                       Text(
                         '${_milhar(e.value.consultas)} consultas'
-                        '${tabelaVarridaPor(e.key) != null ? ' · agrupa a tabela ${tabelaVarridaPor(e.key)}' : ''}',
+                        '${tabelaVarridaPor(e.key) != null ? ' · varre a tabela ${tabelaVarridaPor(e.key)}' : ''}',
                         style: const TextStyle(
                           color: Color(0xFF5a6a78),
                           fontSize: 11,
