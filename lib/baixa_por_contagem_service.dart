@@ -399,6 +399,7 @@ class BaixaPorContagemService {
       'AND r.produto_codigo = e.produto_codigo',
     );
     final rows = await stmt.query() as List<dynamic>;
+    TursoService().contarLeitura('baixa_enderecos', rows.length);
     final porCodigo = <String, List<EnderecoLocalizado>>{};
     for (final dynamic row in rows) {
       final r = row as Map<String, dynamic>;
@@ -425,6 +426,7 @@ class BaixaPorContagemService {
         'SELECT codigo, SUM(delta) AS total FROM divergencias GROUP BY codigo',
       );
       final rows = await stmt.query() as List<dynamic>;
+      TursoService().contarLeitura('baixa_divergencias', rows.length);
       final por = <String, double>{};
       for (final dynamic row in rows) {
         final r = row as Map<String, dynamic>;

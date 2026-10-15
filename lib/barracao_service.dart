@@ -124,6 +124,8 @@ class BarracaoService {
       );
       final rows = await stmt.query() as List<dynamic>;
       final n = (rows.first as Map<String, dynamic>)['n'] as int? ?? 0;
+      // COUNT(*) varre a tabela: conta as linhas dela, não a única devolvida.
+      TursoService().contarLeitura('barracao_seed', n);
       if (n > 0) {
         _seedFeito = true;
         return true;
@@ -236,10 +238,11 @@ class BarracaoService {
     } catch (_) {}
   }
 
-  Future<List<Map<String, dynamic>>> _lerTodos(Transaction tx) async =>
-      (await tx.query(_sqlTodos))
-          .map((r) => Map<String, dynamic>.from(r))
-          .toList();
+  Future<List<Map<String, dynamic>>> _lerTodos(Transaction tx) async {
+    final rows = await tx.query(_sqlTodos);
+    TursoService().contarLeitura(chaveCache, rows.length);
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
 }
 
 /// O barracão como a pessoa o vê: o banco com as gravações ainda na fila por

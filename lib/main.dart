@@ -145,7 +145,16 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // O Android pode matar o app em segundo plano: o diagnóstico de leituras
+    // grava o que contou antes disso, e o que as leituras ainda no ar
+    // contarem depois grava na hora.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      TursoService().leituras.emPrimeiroPlano = false;
+    }
     if (state == AppLifecycleState.resumed) {
+      TursoService().leituras.emPrimeiroPlano = true;
       unawaited(TursoService().atualizarConsultas());
       // A confirmação de contagem é feita no app Contagem: quem confere sai
       // daqui e volta. A conferência do dia em memória deixa de valer.

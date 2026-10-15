@@ -18,6 +18,7 @@ import 'galpao_config.dart';
 import 'galpao_migracao_unidades.dart';
 import 'gravacao_lote.dart';
 import 'layouts_copia.dart';
+import 'leituras_turso.dart';
 import 'consulta_cache.dart';
 import 'badges_estoque.dart';
 import 'busca_local.dart';
@@ -194,7 +195,11 @@ class TursoService {
       // como sempre foi — não é "sem rede".
       final prefs = await SharedPreferences.getInstance();
       if ((prefs.getString(keyDbUrl) ?? '').isEmpty) return [];
-      return consultarDireto(sqlEstrutura, parametros: [numero]);
+      return consultarDireto(
+        sqlEstrutura,
+        parametros: [numero],
+        tipo: 'layout_estrutura',
+      );
     },
     corrigirCopia: (pertence, novas, {required deGravacao}) =>
         corrigirConsulta(chave, pertence, novas, descartarNoAr: deGravacao),
@@ -270,15 +275,21 @@ class TursoService {
         }
         consultasEmitidas++;
         final cliente = _client!;
+        var enviada = false;
         try {
           final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+          enviada = true;
           final rows =
               await stmt
                       .query(positional: parametros)
                       .timeout(_timeoutLeitura)
                   as List<dynamic>;
+          contarLeitura(chave, rows.length);
           return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         } catch (e) {
+          if (enviada && e is TimeoutException) {
+            _contarSemResposta(_consultaCache.emMemoria(completa)?.length ?? 0);
+          }
           // Tabela ou coluna que não existe neste banco: a consulta sai das
           // conhecidas, senão o Sincronizar a relia, falhava sempre e dava o
           // banco inteiro como fora do ar. Quem pediu decide o que fazer.
@@ -402,23 +413,34 @@ class TursoService {
   /// Uma leitura avulsa, sem cópia: para quem relê só um pedaço de uma cópia
   /// (pelo índice) e a corrige com [corrigirConsulta]. Com prazo, e renovando
   /// a conexão de leitura depois de uma falha, como [consultarComCache].
+  ///
+  /// [tipo] é como a leitura aparece no diagnóstico de leituras.
   Future<List<Map<String, dynamic>>> consultarDireto(
     String sql, {
     List<Object?> parametros = const [],
+    String tipo = 'leitura_avulsa',
   }) async {
     if (!await _garantirConexao()) {
       throw StateError('Sem conexão com o banco');
     }
     final cliente = _client!;
+    var enviada = false;
     try {
       consultasEmitidas++;
       final stmt = await cliente.prepare(sql).timeout(_timeoutConexao);
+      enviada = true;
       final rows =
           await stmt.query(positional: parametros).timeout(_timeoutLeitura)
               as List<dynamic>;
+      contarLeitura(tipo, rows.length);
       return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-    } catch (_) {
-      _renovarClienteDeLeitura(cliente);
+    } catch (e) {
+      if (enviada && e is TimeoutException) _contarSemResposta(0);
+      // Tabela ou coluna que não existe é resposta do banco, não conexão
+      // quebrada (a medição das tabelas pergunta por tabelas opcionais).
+      if (!erroDeTabelaAusente(e) && !erroDeColunaAusente(e)) {
+        _renovarClienteDeLeitura(cliente);
+      }
       rethrow;
     }
   }
@@ -484,6 +506,113 @@ class TursoService {
   /// para conferir, no log de debug, que reabrir uma cena já visitada não
   /// emite consulta nenhuma.
   int consultasEmitidas = 0;
+
+  /// Quanto este aparelho leu do Turso, por dia e por tipo de consulta (ver
+  /// leituras_turso.dart e ⚙️ → Leituras deste aparelho).
+  late final ContadorDeLeituras leituras = ContadorDeLeituras(
+    carregarDisco: () async =>
+        (await SharedPreferences.getInstance()).getString(_chaveLeituras),
+    gravarDisco: (texto) async =>
+        (await SharedPreferences.getInstance()).setString(_chaveLeituras, texto),
+  );
+  static const String _chaveLeituras = 'leituras_turso_v1';
+
+  /// Anota [linhas] lidas por [consultas] consultas de [tipo] (ver
+  /// [leituras]).
+  void contarLeitura(String tipo, int linhas, {int consultas = 1}) =>
+      leituras.registrar(tipo, linhas, consultas: consultas);
+
+  /// Leitura que estourou o prazo depois de enviada: o banco já a executou (e
+  /// o Turso cobrou), só a resposta não chegou. [linhas] é a estimativa — o
+  /// tamanho da cópia que ela renovaria, quando há.
+  void _contarSemResposta(int linhas) => contarLeitura('sem_resposta', linhas);
+
+  static const String _chaveTamanhos = 'tamanho_tabelas_v1';
+
+  /// As tabelas que as consultas agrupam ou filtram sem índice: é o tamanho
+  /// delas que dá a estimativa das linhas varridas (ver [tabelaVarridaPor]).
+  /// As lidas inteiras já aparecem com o número exato no próprio contador.
+  static const List<String> tabelasMedidas = tabelasVarridas;
+
+  /// O último tamanho medido de cada tabela ([medirTabelas]), e quando.
+  Future<({Map<String, int> tamanhos, DateTime? em})> tamanhosDasTabelas()
+      async {
+    try {
+      final texto = (await SharedPreferences.getInstance()).getString(
+        _chaveTamanhos,
+      );
+      if (texto == null) return (tamanhos: <String, int>{}, em: null);
+      final json = jsonDecode(texto) as Map<String, dynamic>;
+      // Medida de uma versão que media mais tabelas: só as que ainda contam.
+      return (
+        tamanhos: {
+          for (final e in (json['tabelas'] as Map<String, dynamic>).entries)
+            if (tabelasMedidas.contains(e.key)) e.key: (e.value as num).toInt(),
+        },
+        em: DateTime.tryParse(json['em'] as String? ?? ''),
+      );
+    } catch (_) {
+      return (tamanhos: <String, int>{}, em: null);
+    }
+  }
+
+  /// Conta as linhas de cada uma das [tabelasMedidas] (COUNT(*), que no
+  /// Turso custa a tabela inteira — é sob pedido, em ⚙️) e guarda. Tabela
+  /// que não existe neste banco fica de fora. Uma medição em andamento é
+  /// compartilhada: sair e voltar à tela não paga as tabelas de novo.
+  Future<Map<String, int>> medirTabelas() =>
+      _medicao ??= _medirTabelas().whenComplete(() => _medicao = null);
+  Future<Map<String, int>>? _medicao;
+
+  /// True enquanto uma medição está no ar (a tela volta mostrando-a).
+  bool get medindoTabelas => _medicao != null;
+
+  Future<Map<String, int>> _medirTabelas() async {
+    final medidas = <String, int>{};
+    Object? falha;
+    for (final tabela in tabelasMedidas) {
+      try {
+        final rows = await consultarDireto(
+          'SELECT COUNT(*) AS n FROM $tabela',
+          tipo: 'medicao_tabelas',
+        );
+        final n = (rows.first['n'] as num?)?.toInt() ?? 0;
+        medidas[tabela] = n;
+        // O COUNT varre a tabela: o que conta é ela, não a linha devolvida
+        // (a consulta em si já foi anotada por consultarDireto).
+        contarLeitura('medicao_tabelas', n - 1, consultas: 0);
+      } catch (e) {
+        // Uma tabela que falhou não joga fora as já medidas (e já pagas).
+        if (!erroDeTabelaAusente(e)) falha ??= e;
+      }
+    }
+    final tamanhos = juntarMedidas(
+      (await tamanhosDasTabelas()).tamanhos,
+      medidas,
+    );
+    if (medidas.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _chaveTamanhos,
+        jsonEncode({
+          'em': DateTime.now().toIso8601String(),
+          'tabelas': tamanhos,
+        }),
+      );
+    }
+    if (falha != null) throw falha;
+    return tamanhos;
+  }
+
+  /// A medida anterior com a nova por cima, só das [tabelasMedidas] (as que
+  /// saíram da lista não pesam mais na tela).
+  static Map<String, int> juntarMedidas(
+    Map<String, int> anteriores,
+    Map<String, int> novas,
+  ) => {
+    for (final t in tabelasMedidas)
+      if (novas[t] ?? anteriores[t] case final n?) t: n,
+  };
 
   bool get isConnected => _connected;
 
@@ -2821,6 +2950,7 @@ class TursoService {
         'WHERE gondola_num = ? ORDER BY andar, pos_x, pos_z',
         positional: [gondolaNum],
       );
+      contarLeitura('salvar_layout', antes.length);
       // Produtos que podem ter saído: os do banco agora e os da base da tela.
       // A base conta para o caso de uma tentativa anterior ter gravado sem a
       // resposta chegar — aí o banco já está sem o produto removido, e a
@@ -3060,6 +3190,7 @@ class TursoService {
         'WHERE estante_num = ? ORDER BY coluna, nivel, slot',
         positional: [estanteNum],
       );
+      contarLeitura('salvar_layout', antes.length);
       // A base da tela nunca tem a base do Expositor Nellore (nível 0, fora
       // dos endereços): as linhas antigas dela não contam como diferença, e
       // este salvamento as apaga de vez.
@@ -3190,6 +3321,7 @@ class TursoService {
         'AND $_sqlSemBaseNellore LIMIT 1',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
+      contarLeitura('busca_na_cena', (rows as List<dynamic>).length);
       final list = rows as List<dynamic>;
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;
@@ -3307,6 +3439,7 @@ class TursoService {
                   .query(positional: [localTipo, ...lista])
                   .timeout(_timeoutLeitura)
               as List<dynamic>;
+      contarLeitura('quantidades_locais', rows.length);
       await _consultaCache.atualizarParte(
         chave,
         (r) => r['local_tipo'] == localTipo && locais.contains(r['local_num']),
@@ -3508,6 +3641,7 @@ class TursoService {
         '$sqlUltimaContagemCiclicoBase AND produto_id = ? '
         'GROUP BY produto_id',
         parametros: [codigo],
+        tipo: 'contagem_concluida',
       );
       await _consultaCache.atualizarParte(
         ciclico,
@@ -3522,6 +3656,7 @@ class TursoService {
         'SELECT codigo, status_ciclo, qtd_contada_ciclo, '
         'qtd_sistema_na_contagem FROM estoque_mestre WHERE codigo = ?',
         parametros: [codigo],
+        tipo: 'contagem_concluida',
       );
       await _consultaCache.atualizarParte(
         divergentes,
@@ -3611,6 +3746,7 @@ class TursoService {
       final rows =
           await stmt.query(positional: parametros).timeout(_timeoutLeitura)
               as List<dynamic>;
+      contarLeitura('indices_conferencia', rows.length);
       return rows.isNotEmpty;
     }
 
@@ -3927,6 +4063,7 @@ class TursoService {
         'FROM gondola_layout WHERE produto_codigo = ? LIMIT 1',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
+      contarLeitura('busca_na_cena', (rows as List<dynamic>).length);
       final list = rows as List<dynamic>;
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;

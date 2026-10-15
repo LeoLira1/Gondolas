@@ -312,7 +312,11 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ? ORDER BY local_tipo, local_num, face_ou_coluna, andar_ou_nivel',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
-      return (rows as List<dynamic>).map((dynamic row) {
+      TursoService().contarLeitura(
+        'enderecos_produto',
+        (rows as List<dynamic>).length,
+      );
+      return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         return _enderecoDaLinha(r);
       }).toList();
@@ -362,6 +366,7 @@ class EstoqueLocalizadoService {
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
       final list = rows as List<dynamic>;
+      TursoService().contarLeitura('info_mestre', list.length);
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;
       return InfoEstoqueMestre(
@@ -484,6 +489,7 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura('quantidades_produto', rows.length);
       await TursoService().guardarQuantidadesProduto(
         produtoCodigo,
         rows.map((r) => Map<String, dynamic>.from(r)).toList(),
@@ -561,6 +567,10 @@ class EstoqueLocalizadoService {
           andarOuNivel,
         ],
       );
+      TursoService().contarLeitura(
+        'gravacao_estado_anterior',
+        rowsAnterior.length,
+      );
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
           : rowsAnterior.first['quantidade'] as num?;
@@ -623,6 +633,10 @@ class EstoqueLocalizadoService {
         'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
+      );
+      TursoService().contarLeitura(
+        'quantidades_produto',
+        quantidadesConfirmadas.length,
       );
       await tx.commit();
       // A cópia das quantidades é corrigida logo abaixo com as linhas do
@@ -704,6 +718,10 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura(
+        'quantidades_produto',
+        quantidadesConfirmadas.length,
+      );
       await tx.commit();
       // A cópia das quantidades é corrigida logo abaixo com as linhas do
       // produto lidas na própria transação.
@@ -769,6 +787,7 @@ class EstoqueLocalizadoService {
         'WHERE data_contagem = ? AND produto_id = ? LIMIT 1',
         positional: [hoje, produtoCodigo],
       );
+      TursoService().contarLeitura('gravacao_estado_anterior', existe.length);
 
       if (existe.isEmpty) {
         await tx.execute(

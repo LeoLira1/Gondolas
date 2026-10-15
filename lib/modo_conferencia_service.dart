@@ -430,7 +430,11 @@ class ModoConferenciaService {
       "WHERE status = 'pendente'",
     );
     final rows = await stmt.query();
-    return (rows as List<dynamic>).map((dynamic row) {
+    TursoService().contarLeitura(
+      'conferencia_pendentes',
+      (rows as List<dynamic>).length,
+    );
+    return rows.map((dynamic row) {
       final r = row as Map<String, dynamic>;
       return ItemPendente(
         codigo:     r['codigo']       as String? ?? '',
@@ -455,6 +459,10 @@ class ModoConferenciaService {
         'WHERE produto_codigo IN ($placeholders)',
       );
       final rows = await stmt.query(positional: lote);
+      TursoService().contarLeitura(
+        'conferencia_enderecos',
+        (rows as List<dynamic>).length,
+      );
       for (final dynamic row in rows as List<dynamic>) {
         final r       = row as Map<String, dynamic>;
         final codigo  = r['produto_codigo'] as String? ?? '';
@@ -483,6 +491,10 @@ class ModoConferenciaService {
         'AND estante_num NOT IN (${estantesRemovidas.join(', ')})',
       );
       final rows = await stmt.query(positional: lote);
+      TursoService().contarLeitura(
+        'conferencia_enderecos',
+        (rows as List<dynamic>).length,
+      );
       for (final dynamic row in rows as List<dynamic>) {
         final r       = row as Map<String, dynamic>;
         final codigo  = r['produto_codigo'] as String? ?? '';
@@ -515,6 +527,10 @@ class ModoConferenciaService {
         'WHERE produto_codigo IN ($placeholders)',
       );
       final rows = await stmt.query(positional: lote);
+      TursoService().contarLeitura(
+        'conferencia_enderecos',
+        (rows as List<dynamic>).length,
+      );
       for (final dynamic row in rows as List<dynamic>) {
         final r       = row as Map<String, dynamic>;
         final codigo  = r['produto_codigo'] as String? ?? '';
@@ -542,6 +558,10 @@ class ModoConferenciaService {
         'WHERE produto_codigo IN ($placeholders)',
       );
       final rows = await stmt.query(positional: lote);
+      TursoService().contarLeitura(
+        'conferencia_enderecos',
+        (rows as List<dynamic>).length,
+      );
       for (final dynamic row in rows as List<dynamic>) {
         final r = row as Map<String, dynamic>;
         final codigo = r['produto_codigo'] as String? ?? '';

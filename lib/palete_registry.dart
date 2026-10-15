@@ -101,7 +101,8 @@ class PaleteRegistry {
         'FROM paletes ORDER BY num',
       );
       final rows = await stmt.query();
-      _paletes = (rows as List<dynamic>).map((dynamic row) {
+      TursoService().contarLeitura('paletes', (rows as List<dynamic>).length);
+      _paletes = rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         return Palete(
           num:      r['num']     as int?    ?? 0,
@@ -163,6 +164,7 @@ class PaleteRegistry {
         'FROM paletes',
       );
       final rows = await stmtMax.query() as List<dynamic>;
+      TursoService().contarLeitura('gravacao_estado_anterior', rows.length);
       final num  =
           (rows.first as Map<String, dynamic>)['proximo'] as int? ?? 0;
       if (num < paleteNumMin) return null;
@@ -255,6 +257,7 @@ class PaleteRegistry {
           'WHERE num = ? LIMIT 1',
           positional: [p.num],
         );
+        TursoService().contarLeitura('gravacao_estado_anterior', antes.length);
         await tx.execute(
           'UPDATE paletes SET apelido = ?, pos_x = ?, pos_z = ?, rotacao = ?, '
           'colunas = ?, fileiras = ?, ativo = ? WHERE num = ?',

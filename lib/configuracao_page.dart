@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'loja_scene.dart' show PreferenciasMapa;
 import 'baixa_por_contagem_service.dart';
+import 'diagnostico_leituras_page.dart';
 import 'palete_registry.dart';
 import 'replica_local.dart' show resumoDoSync;
 import 'revisao_mutacoes_page.dart';
@@ -616,6 +617,27 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage> {
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF4a9d6a),
                 side: const BorderSide(color: Color(0xFF2e4a38)),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            // Quanto ESTE aparelho lê do Turso, por dia: o gráfico do Turso
+            // soma a conta inteira (dashboards, app Contagem, outros celulares).
+            OutlinedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const DiagnosticoLeiturasPage(),
+                ),
+              ),
+              icon: const Icon(Icons.query_stats, size: 16),
+              label: const Text('Leituras deste aparelho'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF8a9aa8),
+                side: const BorderSide(color: Color(0xFF232f3a)),
                 padding: const EdgeInsets.symmetric(vertical: 13),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
