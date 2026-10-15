@@ -17,7 +17,7 @@ import 'barracao_layout_migration.dart';
 import 'galpao_config.dart';
 import 'galpao_migracao_unidades.dart';
 import 'gravacao_lote.dart';
-import 'layout_cache.dart';
+import 'layouts_copia.dart';
 import 'consulta_cache.dart';
 import 'badges_estoque.dart';
 import 'busca_local.dart';
@@ -54,6 +54,9 @@ class TursoService {
 
   static const String keyDbUrl = 'turso_db_url';
   static const String keyDbToken = 'turso_db_token';
+  /// A antiga chave "Cache de consulta" de ⚙️ (removida): desligada, cada
+  /// toque relia tabelas inteiras. Só fica o nome, para apagar a preferência
+  /// dos aparelhos que a tinham.
   static const String keyCacheLocal = 'turso_cache_local';
   static const String keyUltimaSync = 'turso_ultima_sync';
   // Marca que a replica local ATUAL já puxou a base do remoto. Some junto com
@@ -134,7 +137,6 @@ class TursoService {
   // reexecutar os CREATE TABLEs a cada abertura de página.
   String? _urlAtiva;
   String? _tokenAtivo;
-  bool? _cacheLocalAtivo;
   Future<void>? _initEmAndamento;
   bool _forcarReconexao = false;
 
@@ -162,11 +164,50 @@ class TursoService {
   // cópia de formato antigo é ignorada em vez de mal interpretada.
   static const int _versaoCatalogoEmDisco = 1;
 
-  // Cache dos layouts por estrutura. Ver layout_cache.dart para o porquê de
-  // morar aqui dentro. Invalidado pelos mesmos pontos que zeram _produtosCache,
-  // mais os dois salvarLayout* (que gravam direto o que acabaram de persistir).
-  final CacheDeLayout<CaixaLayout> _cacheGondola = CacheDeLayout();
-  final CacheDeLayout<CaixaLayoutEstante> _cacheEstante = CacheDeLayout();
+  // Os layouts por estrutura, servidos da cópia completa de cada tabela (ver
+  // layouts_copia.dart): a busca, o prewarm e a cena leem a mesma cópia, e
+  // abrir uma estrutura relê só ela, pelo índice do número.
+  late final LayoutsDaCopia _layoutsGondola = _layoutsDe(
+    chave: chaveLayoutsGondola,
+    coluna: 'gondola_num',
+    sqlEstrutura:
+        'SELECT $_colunasLayoutGondola FROM gondola_layout '
+        'WHERE gondola_num = ? ORDER BY id',
+  );
+  late final LayoutsDaCopia _layoutsEstante = _layoutsDe(
+    chave: chaveLayoutsEstante,
+    coluna: 'estante_num',
+    sqlEstrutura:
+        'SELECT $_colunasLayoutEstante FROM estante_layout '
+        'WHERE estante_num = ? ORDER BY id',
+  );
+
+  LayoutsDaCopia _layoutsDe({
+    required String chave,
+    required String coluna,
+    required String sqlEstrutura,
+  }) => LayoutsDaCopia(
+    coluna: coluna,
+    janelaEstrutura: ConsultaCache.janelaPadrao,
+    lerEstrutura: (numero) async {
+      // Sem banco configurado (dados de exemplo): estrutura vazia e editável,
+      // como sempre foi — não é "sem rede".
+      final prefs = await SharedPreferences.getInstance();
+      if ((prefs.getString(keyDbUrl) ?? '').isEmpty) return [];
+      return consultarDireto(sqlEstrutura, parametros: [numero]);
+    },
+    corrigirCopia: (pertence, novas, {required deGravacao}) =>
+        corrigirConsulta(chave, pertence, novas, descartarNoAr: deGravacao),
+    copiaEmMemoria: () {
+      final completa = _chaveCompleta(chave);
+      return completa == null ? null : _consultaCache.emMemoria(completa);
+    },
+    carregarCopia: () async {
+      final completa = _chaveCompleta(chave);
+      return completa != null && await _consultaCache.carregar(completa);
+    },
+    copiaVencida: (janela) => consultaVencida(chave, janela),
+  );
 
   late final ConsultaCache _consultaCache = ConsultaCache(
     lerDisco: (key) async =>
@@ -207,6 +248,7 @@ class TursoService {
     bool somenteLeitura = false,
     bool avisar = true,
     bool atualizarSeVencida = false,
+    bool releNaVolta = true,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString(keyDbUrl) ?? '';
@@ -214,7 +256,6 @@ class TursoService {
       if (falharSemCache) throw StateError('Banco não configurado');
       return [];
     }
-    final usarCache = prefs.getBool(keyCacheLocal) ?? true;
     final completa = 'consulta_v1_${idBanco(url)}_$chave';
     // Quem decide com o dado (catálogo, baixa) espera a rede quando a cópia
     // passou da janela desde o último SUCESSO; dentro dela, a cópia basta.
@@ -249,12 +290,12 @@ class TursoService {
           rethrow;
         }
       },
-      usarCache: usarCache,
       forceRefresh: forceRefresh,
       falharSemCache: falharSemCache,
       janela: janela,
       somenteLeitura: somenteLeitura,
       avisar: avisar,
+      releNaVolta: releNaVolta,
     );
   }
 
@@ -331,68 +372,13 @@ class TursoService {
   ) async {
     final url = _urlAtiva;
     if (url == null) return;
+    // A busca do galpão e a do barracão saem destas mesmas cópias (ver
+    // _buscarNoGalpao). Os layouts de gôndola e estante não passam por aqui:
+    // ver _layoutsGondola.
     await _consultaCache.confirmar(
       'consulta_v1_${idBanco(url)}_$chave',
       linhas,
     );
-    // A busca do galpão e a do barracão saem das próprias cópias 'galpao' e
-    // 'barracao' (ver _buscarNoGalpao). A das gôndolas e estantes tem cópia
-    // própria, corrigida aqui com a MESMA forma das linhas do SQL dela —
-    // colunas e DISTINCT —, senão a releitura seguinte acusava "mudou" e
-    // recarregava o app inteiro depois de cada layout salvo.
-    final prefixo = 'consulta_v1_${idBanco(url)}_';
-    if (chave.startsWith('gondola_')) {
-      final numero = int.tryParse(chave.substring('gondola_'.length));
-      if (numero != null)
-        await _consultaCache.atualizarParte(
-          '${prefixo}busca_gondolas',
-          (r) => r['gondola_num'] == numero,
-          _distintas([
-            for (final r in linhas)
-              {
-                'produto_codigo': r['produto_codigo'],
-                'produto_nome': r['produto_nome'],
-                'gondola_num': r['gondola_num'],
-                'andar': r['andar'],
-                'pos_x': r['pos_x'],
-                'pos_z': r['pos_z'],
-              },
-          ]),
-        );
-    } else if (chave.startsWith('estante_')) {
-      final numero = int.tryParse(chave.substring('estante_'.length));
-      if (numero != null)
-        await _consultaCache.atualizarParte(
-          '${prefixo}busca_estantes',
-          (r) => r['estante_num'] == numero,
-          _distintas([
-            for (final r in linhas)
-              if (!estantesRemovidas.contains(r['estante_num']) &&
-                  !_ehBaseNelloreRemovida(
-                    r['estante_num'] as int,
-                    r['nivel'] as int,
-                  ))
-                {
-                  'produto_codigo': r['produto_codigo'],
-                  'produto_nome': r['produto_nome'],
-                  'estante_num': r['estante_num'],
-                  'nivel': r['nivel'],
-                },
-          ]),
-        );
-    }
-  }
-
-  /// As linhas sem repetição, na ordem em que apareceram (o SELECT DISTINCT
-  /// das buscas).
-  static List<Map<String, dynamic>> _distintas(
-    List<Map<String, dynamic>> linhas,
-  ) {
-    final vistas = <String>{};
-    return [
-      for (final r in linhas)
-        if (vistas.add(jsonEncode(r))) r,
-    ];
   }
 
   /// Corrige na cópia das quantidades as linhas de UM produto, relidas do
@@ -445,6 +431,7 @@ class TursoService {
     bool Function(Map<String, dynamic>) pertence,
     List<Map<String, dynamic>> novas, {
     int Function(Map<String, dynamic>, Map<String, dynamic>)? ordenar,
+    bool descartarNoAr = true,
   }) async {
     final completa = _chaveCompleta(chave);
     if (completa == null) return null;
@@ -453,6 +440,7 @@ class TursoService {
       pertence,
       novas,
       ordenar: ordenar,
+      descartarNoAr: descartarNoAr,
     );
   }
 
@@ -506,21 +494,6 @@ class TursoService {
 
   /// True quando a conexão ativa usa o cache local (arquivo no dispositivo).
   bool get modoLocal => _modoLocal;
-
-  /// True quando o cache local está LIGADO em ⚙️ mas o app acabou conectando
-  /// direto no banco online assim mesmo.
-  ///
-  /// Acontece quando `_conectarComCacheLocal` falha — tipicamente sinal ruim
-  /// durante o download do snapshot inicial, que é a única abertura em que
-  /// esse connect() usa a rede — e o `_init` cai calado para o remoto. Nesse
-  /// estado TODA gravação vai pela rede (e falha sem sinal) e o Sincronizar
-  /// não tem replica para empurrar. A tela precisa dizer isso: até aqui, ⚙️
-  /// mostrava a preferência e escondia o que estava acontecendo de verdade.
-  bool get caiuParaRemoto => false;
-
-  /// Por que a última tentativa de abrir o cache local não deu certo, ou null
-  /// se ela deu. Mostrado junto do aviso em ⚙️ — ver `_conectarComCacheLocal`.
-  String? get motivoFalhaCacheLocal => null;
 
   bool get sincronizando => _sincronizando;
 
@@ -1275,6 +1248,57 @@ class TursoService {
     return init();
   }
 
+  static const String _marcaLimpezaV1 = 'limpeza_preferencias_v1';
+  static final RegExp _consultaAntigaDeLayout = RegExp(
+    r'^consulta_v1_.+_(gondola_\d+|estante_\d+|busca_gondolas|busca_estantes)'
+    r'(\|em)?$',
+  );
+  static final RegExp _copiaAntigaDeEstrutura = RegExp(
+    r'^consulta_v1_(.+)_(gondola|estante)_(\d+)$',
+  );
+
+  /// Uma vez por aparelho: apaga o que ficou de versões anteriores e nada
+  /// mais lê — a chave "Cache de consulta" e as cópias de layout por
+  /// estrutura e da busca (hoje é uma cópia por tabela, ver
+  /// [chaveLayoutsGondola]). No Android cada gravação no SharedPreferences
+  /// reescreve o arquivo inteiro, e essas ~40 cópias iam junto toda vez.
+  ///
+  /// Antes de apagar, as cópias por estrutura (mesmas colunas da cópia nova)
+  /// viram a cópia completa de cada banco, SEM carimbo — vencida, relida na
+  /// primeira abertura com rede. Sem isso, o primeiro uso sem sinal depois
+  /// da atualização abria toda gôndola sem layout.
+  Future<void> _limparPreferenciasAntigas(SharedPreferences prefs) async {
+    if (prefs.getBool(_marcaLimpezaV1) ?? false) return;
+    try {
+      await prefs.remove(keyCacheLocal);
+      final porCopiaNova = <String, List<dynamic>>{};
+      for (final chave in prefs.getKeys()) {
+        final m = _copiaAntigaDeEstrutura.firstMatch(chave);
+        if (m == null) continue;
+        final nova = m.group(2) == 'gondola'
+            ? 'consulta_v1_${m.group(1)}_$chaveLayoutsGondola'
+            : 'consulta_v1_${m.group(1)}_$chaveLayoutsEstante';
+        if (prefs.containsKey(nova)) continue;
+        try {
+          (porCopiaNova[nova] ??= []).addAll(
+            jsonDecode(prefs.getString(chave) ?? '[]') as List,
+          );
+        } catch (_) {
+          // Cópia antiga ilegível: fica de fora.
+        }
+      }
+      for (final e in porCopiaNova.entries) {
+        await prefs.setString(e.key, jsonEncode(e.value));
+      }
+      for (final chave in prefs.getKeys().toList()) {
+        if (_consultaAntigaDeLayout.hasMatch(chave)) await prefs.remove(chave);
+      }
+      await prefs.setBool(_marcaLimpezaV1, true);
+    } catch (_) {
+      // Fica para a próxima abertura.
+    }
+  }
+
   Future<void> _init() async {
     _coordenador.definirEstado(EstadoReplica.conectando);
     // Consumido já: uma reconexão forçada vale para ESTA passada, senão toda
@@ -1284,7 +1308,7 @@ class TursoService {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString(keyDbUrl) ?? '';
     final token = prefs.getString(keyDbToken) ?? '';
-    final cacheLocal = !kIsWeb && (prefs.getBool(keyCacheLocal) ?? true);
+    await _limparPreferenciasAntigas(prefs);
     final identidade = idBanco(url);
     final anterior = prefs.getString(keyIdentidadeAtiva);
     if (anterior != null && anterior != identidade) {
@@ -1362,8 +1386,7 @@ class TursoService {
         _connected &&
         _client != null &&
         url == _urlAtiva &&
-        token == _tokenAtivo &&
-        cacheLocal == _cacheLocalAtivo) {
+        token == _tokenAtivo) {
       _coordenador.definirEstado(
         _basePendente ? EstadoReplica.basePendente : EstadoReplica.pronta,
       );
@@ -1378,7 +1401,6 @@ class TursoService {
     _clienteEscrita = null;
     _urlAtiva = null;
     _tokenAtivo = null;
-    _cacheLocalAtivo = null;
     _modoLocal = false;
     _invalidarCachesDeLeitura();
 
@@ -1423,7 +1445,6 @@ class TursoService {
       _coordenador.definirEstado(EstadoReplica.pronta);
       _urlAtiva = url;
       _tokenAtivo = token;
-      _cacheLocalAtivo = cacheLocal;
       // Fim do init: os paletes precisam estar em memória antes do primeiro
       // build do mapa e do carrossel (ordemNavegacaoEstantes consulta
       // PaleteRegistry().ativos). Numa replica sem base a tabela pode ainda
@@ -1721,8 +1742,8 @@ class TursoService {
     _locaisGravados.clear();
     _tabelasDoMapaAusentes.clear();
     _prewarmFeitoEm = null;
-    _cacheGondola.invalidarTudo();
-    _cacheEstante.invalidarTudo();
+    _layoutsGondola.esquecer();
+    _layoutsEstante.esquecer();
   }
 
   /// True se o arquivo local acabou de ser criado (nenhuma tabela ainda).
@@ -2320,7 +2341,6 @@ class TursoService {
     _clienteEscrita = null;
     _urlAtiva = null;
     _tokenAtivo = null;
-    _cacheLocalAtivo = null;
     _modoLocal = false;
     _basePendente = false;
     _ultimoErroSync = null;
@@ -2483,7 +2503,7 @@ class TursoService {
   Future<List<Produto>> _lerCatalogo({required bool forceRefresh}) async {
     final prefs = await SharedPreferences.getInstance();
     _urlConfigurada = prefs.getString(keyDbUrl) ?? '';
-    if (!forceRefresh && (prefs.getBool(keyCacheLocal) ?? true)) {
+    if (!forceRefresh) {
       final disco = await _lerCatalogoDoDisco();
       if (disco != null) {
         _produtosCache = disco;
@@ -2667,25 +2687,67 @@ class TursoService {
 
   static const String _colunasLayoutGondola =
       'gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex';
+  static const String _colunasLayoutEstante =
+      'estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex';
 
-  /// Layout da gôndola já em memória, ou null se ainda não foi lido. Síncrono
-  /// de propósito: é o que permite semear a cena no mesmo frame do toque.
-  List<CaixaLayout>? layoutEmCache(int gondolaNum) =>
-      _cacheGondola.ler(gondolaNum);
+  /// Cópias completas das duas tabelas de layout: servem a busca do mapa, o
+  /// prewarm e a cena de cada estrutura (ver [LayoutsDaCopia]). Ordem de id,
+  /// que é a da varredura (sem ordenação no banco) e a de cada estrutura.
+  /// Nomes novos de propósito: as cópias antigas da busca (DISTINCT, sem cor)
+  /// ficaram no disco com outro formato.
+  static const String chaveLayoutsGondola = 'layouts_gondola_v1';
+  static const String sqlLayoutsGondola =
+      'SELECT $_colunasLayoutGondola FROM gondola_layout ORDER BY id';
+  static const String chaveLayoutsEstante = 'layouts_estante_v1';
+  static const String sqlLayoutsEstante =
+      'SELECT $_colunasLayoutEstante FROM estante_layout ORDER BY id';
 
+  /// Lê a cópia completa de layouts. Janela de tabela grande (a busca relê
+  /// ao buscar, a cena relê a estrutura aberta), fora da volta ao app.
+  ///
+  /// [paraPrewarm]: espera a releitura quando a cópia passou da janela, e,
+  /// sem rede, aceita a cópia que houver — sem cópia nenhuma, lança.
+  Future<List<Map<String, dynamic>>> _copiaDeLayouts({
+    required bool gondola,
+    bool paraPrewarm = false,
+  }) async {
+    Future<List<Map<String, dynamic>>> ler({bool atualizarSeVencida = false}) =>
+        consultarComCache(
+          gondola ? chaveLayoutsGondola : chaveLayoutsEstante,
+          gondola ? sqlLayoutsGondola : sqlLayoutsEstante,
+          janela: janelaTabelaGrande,
+          falharSemCache: paraPrewarm,
+          atualizarSeVencida: atualizarSeVencida,
+          releNaVolta: false,
+        );
+    if (!paraPrewarm) return ler();
+    try {
+      return await ler(atualizarSeVencida: true);
+    } catch (_) {
+      return ler();
+    }
+  }
+
+  /// Layout da gôndola já em memória, ou null se nada se sabe dela ainda.
+  /// Síncrono de propósito: é o que permite semear a cena no mesmo frame do
+  /// toque. Lista vazia é "a gôndola não tem caixas" — nunca "não carregou".
+  List<CaixaLayout>? layoutEmCache(int gondolaNum) => _layoutsGondola
+      .linhasEmMemoria(gondolaNum)
+      ?.map((r) => _caixaLayoutDaLinha(r, gondolaNum))
+      .toList();
+
+  /// O layout da gôndola em dia (relê só ela, pelo índice, quando passou da
+  /// janela). Sem rede, o que houver na cópia; sem rede e sem cópia, LANÇA:
+  /// mostrar a gôndola vazia deixaria um "Salvar layout" apagar a de verdade.
   Future<List<CaixaLayout>> fetchLayout(
     int gondolaNum, {
     bool forceRefresh = false,
   }) async {
-    final rows = await consultarComCache(
-      'gondola_$gondolaNum',
-      'SELECT $_colunasLayoutGondola FROM gondola_layout WHERE gondola_num = ? ORDER BY id',
-      parametros: [gondolaNum],
-      forceRefresh: forceRefresh,
+    final rows = await _layoutsGondola.linhas(
+      gondolaNum,
+      forcar: forceRefresh,
     );
-    final itens = rows.map((r) => _caixaLayoutDaLinha(r, gondolaNum)).toList();
-    _cacheGondola.gravar(gondolaNum, itens);
-    return itens;
+    return rows.map((r) => _caixaLayoutDaLinha(r, gondolaNum)).toList();
   }
 
   // Máximo de linhas por INSERT multi-linha: 8 parâmetros por linha mantém o
@@ -2706,28 +2768,88 @@ class TursoService {
   static bool _ehBaseNelloreRemovida(int estanteNum, int nivel) =>
       estanteNum == expositorNelloreNum && nivel == 0;
 
-  Future<bool> salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
+  static const SalvamentoLayout _salvamentoFalhou = (
+    resultado: ResultadoSalvarLayout.falhou,
+    codigosAntes: <String>{},
+  );
+
+  /// Grava o layout inteiro da gôndola (apaga e regrava a estrutura).
+  ///
+  /// [base] é o layout que a tela carregou antes da edição. Se o banco já não
+  /// está igual a ela, outro aparelho salvou no meio: nada é gravado e volta
+  /// [ResultadoSalvarLayout.conflito] — antes, o último a salvar apagava a
+  /// edição do outro sem aviso nenhum. [sobrescrever] grava assim mesmo (a
+  /// pessoa escolheu "Salvar por cima").
+  Future<SalvamentoLayout> salvarLayout(
+    int gondolaNum,
+    List<CaixaLayout> itens, {
+    required List<CaixaLayout> base,
+    bool sobrescrever = false,
+  }) async {
     try {
       return await garantirReplicaProntaParaEscrita(
-        () => _salvarLayout(gondolaNum, itens),
+        () => _salvarLayout(
+          gondolaNum,
+          itens,
+          base: base,
+          sobrescrever: sobrescrever,
+        ),
       );
     } catch (_) {
-      return false;
+      return _salvamentoFalhou;
     }
   }
 
-  Future<bool> _salvarLayout(int gondolaNum, List<CaixaLayout> itens) async {
-    if (!await _garantirConexao()) return false;
-    final tx = await _client!.transaction();
+  Future<SalvamentoLayout> _salvarLayout(
+    int gondolaNum,
+    List<CaixaLayout> itens, {
+    required List<CaixaLayout> base,
+    required bool sobrescrever,
+  }) async {
+    if (!await _garantirConexao()) return _salvamentoFalhou;
+    // IMMEDIATE: a trava de escrita vem já no BEGIN, então nenhum outro
+    // aparelho grava entre a conferência abaixo e o DELETE.
+    final tx = await _client!.transaction(
+      behavior: LibsqlTransactionBehavior.immediate,
+    );
     MutacaoOutbox? mutacao;
     try {
-      // O layout de antes, lido dentro da própria transação: é ele que permite
-      // a uma pessoa ver, na revisão, o que este salvamento substituiu.
+      // O layout de antes, lido dentro da própria transação: é com ele que a
+      // base da tela é conferida, e é dele que saem os produtos removidos.
       final antes = await tx.query(
         'SELECT andar, produto_codigo, pos_x, pos_z FROM gondola_layout '
         'WHERE gondola_num = ? ORDER BY andar, pos_x, pos_z',
         positional: [gondolaNum],
       );
+      // Produtos que podem ter saído: os do banco agora e os da base da tela.
+      // A base conta para o caso de uma tentativa anterior ter gravado sem a
+      // resposta chegar — aí o banco já está sem o produto removido, e a
+      // limpeza dos endereços zerados dele não pode se perder.
+      final codigosAntes = {
+        for (final r in antes) r['produto_codigo'] as String? ?? '',
+        for (final c in base) c.produtoCodigo,
+      }..remove('');
+      Map<String, dynamic> linha(CaixaLayout c) => {
+        'andar': c.andar,
+        'produto_codigo': c.produtoCodigo,
+        'pos_x': c.posX,
+        'pos_z': c.posZ,
+      };
+      final mudouNoBanco = layoutMudouPorBaixo(
+        noBanco: antes,
+        base: base.map(linha),
+        itens: itens.map(linha),
+        colunas: colunasConteudoGondola,
+      );
+      if (mudouNoBanco && !sobrescrever) {
+        await tx.rollback();
+        // A cópia deste aparelho está velha: a próxima abertura relê.
+        _layoutsGondola.suja(gondolaNum);
+        return (
+          resultado: ResultadoSalvarLayout.conflito,
+          codigosAntes: codigosAntes,
+        );
+      }
       await tx.execute(
         'DELETE FROM gondola_layout WHERE gondola_num = ?',
         positional: [gondolaNum],
@@ -2783,9 +2905,8 @@ class TursoService {
       await carimbarMutacao(tx, mutacao);
       await confirmarCommit(tx, mutacao);
       // Write-through: as linhas recém-gravadas SÃO o novo estado persistido,
-      // então dá para atualizar o cache sem reler.
-      _cacheGondola.gravar(gondolaNum, itens);
-      await guardarConsulta('gondola_$gondolaNum', [
+      // então dá para corrigir a cópia sem reler.
+      await _layoutsGondola.salva(gondolaNum, [
         for (final i in itens)
           {
             'gondola_num': gondolaNum,
@@ -2798,16 +2919,21 @@ class TursoService {
           },
       ]);
       // Layout não grava estoque_localizado (o produto que sai é tratado à
-      // parte, por deleteEnderecosZerados, que corrige a cópia sozinho).
-      await marcarGravacaoLocal(expirarQuantidades: false);
-      return true;
+      // parte, por deleteEnderecosZerados, que corrige a cópia sozinho). Só a
+      // cópia dos layouts pode ter ficado velha numa leitura no ar.
+      await marcarGravacaoLocal(
+        expirarQuantidades: false,
+        chavesAfetadas: {chaveLayoutsGondola},
+      );
+      return (resultado: ResultadoSalvarLayout.salvo, codigosAntes: codigosAntes);
     } catch (_) {
       try {
         await tx.rollback();
       } catch (_) {}
       if (mutacao != null) await abortarMutacao(mutacao);
-      _cacheGondola.invalidar(gondolaNum);
-      return false;
+      // Resposta perdida não prova que não gravou: a próxima abertura relê.
+      _layoutsGondola.suja(gondolaNum);
+      return _salvamentoFalhou;
     }
   }
 
@@ -2824,42 +2950,47 @@ class TursoService {
     corHex: r['cor_hex'] as String? ?? '#888888',
   );
 
-  static const String _colunasLayoutEstante =
-      'estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex';
-
-  /// Layout da estante já em memória, ou null se ainda não foi lido.
+  /// Layout da estante já em memória, ou null se nada se sabe dela ainda (ver
+  /// [layoutEmCache]).
   List<CaixaLayoutEstante>? layoutEstanteEmCache(int estanteNum) =>
-      _cacheEstante.ler(estanteNum);
+      _layoutsEstante.linhasEmMemoria(estanteNum) == null
+      ? null
+      : _estanteDasLinhas(
+          estanteNum,
+          _layoutsEstante.linhasEmMemoria(estanteNum)!,
+        );
 
+  /// O layout da estante em dia (ver [fetchLayout]).
   Future<List<CaixaLayoutEstante>> fetchLayoutEstante(
     int estanteNum, {
     bool forceRefresh = false,
-  }) async {
-    final rows = await consultarComCache(
-      'estante_$estanteNum',
-      'SELECT $_colunasLayoutEstante FROM estante_layout WHERE estante_num = ? ORDER BY id',
-      parametros: [estanteNum],
-      forceRefresh: forceRefresh,
-    );
-    final itens = rows
-        .map((r) => _caixaLayoutEstanteDaLinha(r, estanteNum))
-        .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
-        .toList();
-    _cacheEstante.gravar(estanteNum, itens);
-    return itens;
-  }
+  }) async => _estanteDasLinhas(
+    estanteNum,
+    await _layoutsEstante.linhas(estanteNum, forcar: forceRefresh),
+  );
 
-  /// Carrega os layouts de TODAS as estruturas (uma consulta por estrutura,
-  /// pelo índice do número dela) e deixa os dois caches quentes, de fora do
-  /// caminho crítico enquanto o usuário olha o mapa.
+  List<CaixaLayoutEstante> _estanteDasLinhas(
+    int estanteNum,
+    List<Map<String, dynamic>> rows,
+  ) => rows
+      .map((r) => _caixaLayoutEstanteDaLinha(r, estanteNum))
+      .where((c) => !_ehBaseNelloreRemovida(c.estanteNum, c.nivel))
+      .toList();
+
+  /// Traz as duas cópias completas de layout, de fora do caminho crítico
+  /// enquanto o usuário olha o mapa: duas consultas, e toda gôndola e estante
+  /// abre na hora a partir delas. Antes era uma consulta por estrutura (~35)
+  /// além das duas da busca, que liam as mesmas tabelas.
   ///
-  /// Falha em silêncio: é otimização, não caminho obrigatório. Se não der
-  /// certo, cada estrutura volta a ser lida sob demanda como antes.
+  /// Falha em silêncio: é otimização, não caminho obrigatório. Sem cópia, cada
+  /// estrutura é lida sob demanda ao abrir.
   Future<void> precarregarLayouts() async {
-    // Cada consulta usa a proteção de geração contra respostas anteriores a um commit.
     await Future.wait([
-      for (var n = 1; n <= 12; n++) fetchLayout(n),
-      for (final n in ordemNavegacaoEstantes) fetchLayoutEstante(n),
+      for (final gondola in [true, false])
+        _copiaDeLayouts(
+          gondola: gondola,
+          paraPrewarm: true,
+        ).then<void>((_) {}, onError: (_) {}),
     ]);
   }
 
@@ -2890,25 +3021,38 @@ class TursoService {
   // no Sincronizar, junto com os outros caches de leitura).
   String? _prewarmFeitoEm;
 
-  Future<bool> salvarLayoutEstante(
+  /// Grava o layout inteiro da estante, com a mesma conferência da base que
+  /// [salvarLayout].
+  Future<SalvamentoLayout> salvarLayoutEstante(
     int estanteNum,
-    List<CaixaLayoutEstante> itens,
-  ) async {
+    List<CaixaLayoutEstante> itens, {
+    required List<CaixaLayoutEstante> base,
+    bool sobrescrever = false,
+  }) async {
     try {
       return await garantirReplicaProntaParaEscrita(
-        () => _salvarLayoutEstante(estanteNum, itens),
+        () => _salvarLayoutEstante(
+          estanteNum,
+          itens,
+          base: base,
+          sobrescrever: sobrescrever,
+        ),
       );
     } catch (_) {
-      return false;
+      return _salvamentoFalhou;
     }
   }
 
-  Future<bool> _salvarLayoutEstante(
+  Future<SalvamentoLayout> _salvarLayoutEstante(
     int estanteNum,
-    List<CaixaLayoutEstante> itens,
-  ) async {
-    if (!await _garantirConexao()) return false;
-    final tx = await _client!.transaction();
+    List<CaixaLayoutEstante> itens, {
+    required List<CaixaLayoutEstante> base,
+    required bool sobrescrever,
+  }) async {
+    if (!await _garantirConexao()) return _salvamentoFalhou;
+    final tx = await _client!.transaction(
+      behavior: LibsqlTransactionBehavior.immediate,
+    );
     MutacaoOutbox? mutacao;
     try {
       final antes = await tx.query(
@@ -2916,6 +3060,39 @@ class TursoService {
         'WHERE estante_num = ? ORDER BY coluna, nivel, slot',
         positional: [estanteNum],
       );
+      // A base da tela nunca tem a base do Expositor Nellore (nível 0, fora
+      // dos endereços): as linhas antigas dela não contam como diferença, e
+      // este salvamento as apaga de vez.
+      final antesVisiveis = [
+        for (final r in antes)
+          if (!_ehBaseNelloreRemovida(estanteNum, r['nivel'] as int? ?? -1)) r,
+      ];
+      // Ver o gêmeo em _salvarLayout: a base entra nos possíveis removidos, e
+      // o banco igual ao que vai ser gravado não é conflito.
+      final codigosAntes = {
+        for (final r in antesVisiveis) r['produto_codigo'] as String? ?? '',
+        for (final c in base) c.produtoCodigo,
+      }..remove('');
+      Map<String, dynamic> linha(CaixaLayoutEstante c) => {
+        'coluna': c.coluna,
+        'nivel': c.nivel,
+        'slot': c.slot,
+        'produto_codigo': c.produtoCodigo,
+      };
+      final mudouNoBanco = layoutMudouPorBaixo(
+        noBanco: antesVisiveis,
+        base: base.map(linha),
+        itens: itens.map(linha),
+        colunas: colunasConteudoEstante,
+      );
+      if (mudouNoBanco && !sobrescrever) {
+        await tx.rollback();
+        _layoutsEstante.suja(estanteNum);
+        return (
+          resultado: ResultadoSalvarLayout.conflito,
+          codigosAntes: codigosAntes,
+        );
+      }
       await tx.execute(
         'DELETE FROM estante_layout WHERE estante_num = ?',
         positional: [estanteNum],
@@ -2967,8 +3144,7 @@ class TursoService {
       );
       await carimbarMutacao(tx, mutacao);
       await confirmarCommit(tx, mutacao);
-      _cacheEstante.gravar(estanteNum, itens);
-      await guardarConsulta('estante_$estanteNum', [
+      await _layoutsEstante.salva(estanteNum, [
         for (final i in itens)
           {
             'estante_num': estanteNum,
@@ -2982,14 +3158,18 @@ class TursoService {
       ]);
       // Layout não grava estoque_localizado (o produto que sai é tratado à
       // parte, por deleteEnderecosZerados, que corrige a cópia sozinho).
-      await marcarGravacaoLocal(expirarQuantidades: false);
-      return true;
+      await marcarGravacaoLocal(
+        expirarQuantidades: false,
+        chavesAfetadas: {chaveLayoutsEstante},
+      );
+      return (resultado: ResultadoSalvarLayout.salvo, codigosAntes: codigosAntes);
     } catch (_) {
       try {
         await tx.rollback();
       } catch (_) {}
       if (mutacao != null) await abortarMutacao(mutacao);
-      return false;
+      _layoutsEstante.suja(estanteNum);
+      return _salvamentoFalhou;
     }
   }
 
@@ -3255,6 +3435,7 @@ class TursoService {
       janela: janelaContagem,
       somenteLeitura: true,
       avisar: false,
+      releNaVolta: false,
     );
 
     final preferida = colunaConfirmacao;
@@ -3279,13 +3460,16 @@ class TursoService {
   /// [registrarContagemConcluida] depois de uma contagem concluída aqui.
   Future<List<Map<String, dynamic>>> consultarUltimasContagensCiclico({
     bool forceRefresh = false,
+    bool atualizarSeVencida = false,
   }) => consultarComCache(
     _chaveCiclico,
     sqlUltimaContagemCiclico,
     falharSemCache: true,
     forceRefresh: forceRefresh,
+    atualizarSeVencida: atualizarSeVencida,
     janela: janelaContagem,
     avisar: false,
+    releNaVolta: false,
   );
 
   /// Produtos com divergência no ciclo (estoque_mestre.status_ciclo), com o
@@ -3293,13 +3477,16 @@ class TursoService {
   /// divergentes. Corrigida por [registrarContagemConcluida].
   Future<List<Map<String, dynamic>>> consultarDivergentesCiclo({
     bool forceRefresh = false,
+    bool atualizarSeVencida = false,
   }) => consultarComCache(
     _chaveDivergentes,
     sqlDivergentesCiclo,
     falharSemCache: true,
     forceRefresh: forceRefresh,
+    atualizarSeVencida: atualizarSeVencida,
     janela: janelaTabelaGrande,
     avisar: false,
+    releNaVolta: false,
   );
 
   /// Depois de um concluirContagem: relê do banco só as linhas do produto
@@ -3475,10 +3662,10 @@ class TursoService {
   Future<List<Map<String, dynamic>>> _quantidadesParaBusca() =>
       consultarQuantidades();
 
+  // A busca nas gôndolas e estantes sai das cópias de layout, que o prewarm
+  // já traz (precarregarLayouts).
   Future<void> _precarregarBusca() async {
     await Future.wait([
-      _buscarNasGondolas(''),
-      _buscarNasEstantes(''),
       _buscarNoGalpao(''),
       _buscarNoBarracao(''),
       _quantidadesParaBusca(),
@@ -3660,13 +3847,10 @@ class TursoService {
 
   Future<List<ProdutoEncontrado>> _buscarNasGondolas(String like) async {
     try {
+      // A cópia completa da tabela: filtrarBuscaLocal já ordena por nome e
+      // descarta as repetidas nas colunas da busca (o DISTINCT de antes).
       final rows = filtrarBuscaLocal(
-        await consultarComCache(
-          'busca_gondolas',
-          'SELECT DISTINCT produto_codigo, produto_nome, gondola_num, andar, pos_x, pos_z '
-              'FROM gondola_layout ORDER BY produto_nome',
-          janela: janelaTabelaGrande,
-        ),
+        await _copiaDeLayouts(gondola: true),
         like,
       );
       const andarNomes = ['Base', 'Meio', 'Topo'];
@@ -3703,16 +3887,12 @@ class TursoService {
 
   Future<List<ProdutoEncontrado>> _buscarNasEstantes(String like) async {
     try {
-      final rows = filtrarBuscaLocal(
-        await consultarComCache(
-          'busca_estantes',
-          'SELECT DISTINCT produto_codigo, produto_nome, estante_num, nivel '
-              'FROM estante_layout WHERE estante_num NOT IN ($_sqlEstantesRemovidas) '
-              'AND $_sqlSemBaseNellore ORDER BY produto_nome',
-          janela: janelaTabelaGrande,
-        ),
-        like,
-      );
+      // O WHERE da consulta antiga, em Dart: sem as estantes removidas e sem
+      // a base do Expositor Nellore.
+      final rows = filtrarBuscaLocal([
+        for (final r in await _copiaDeLayouts(gondola: false))
+          if (linhaDeEstanteBuscavel(r)) r,
+      ], like);
       return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         final estanteNum = r['estante_num'] as int? ?? 0;

@@ -361,6 +361,26 @@ Ainda no caminho antigo (várias idas por gravação): layouts de gôndola e
 estante, cadastro de paletes, exclusão de endereço de gôndola e conclusão de
 contagem.
 
+### Layout salvo por cima de outro aparelho
+
+"Salvar layout" apaga a estrutura inteira e regrava o que está na tela. Dois
+jeitos de perder dado com isso, os dois corrigidos:
+
+- **Outro aparelho salvou no meio da edição.** O último a salvar apagava a
+  edição do outro sem aviso. Agora o salvamento confere, dentro da própria
+  transação (`BEGIN IMMEDIATE`), se o layout no banco ainda é o que a tela
+  carregou — as caixas e os lugares delas, sem nome nem cor. Se mudou, nada é
+  gravado e aparece "Esta gôndola foi alterada em outro aparelho enquanto você
+  editava", com **Recarregar** (mostra como ela está e descarta a edição) e
+  **Salvar por cima** (grava assim mesmo). Se o banco já tem exatamente o que
+  vai ser gravado — a tentativa anterior chegou e só a resposta se perdeu —
+  não é conflito. Os endereços zerados que o salvamento limpa saem do layout
+  lido nessa mesma transação e da base da tela, não da cópia do aparelho.
+- **A gôndola abria vazia quando a leitura falhava** (sem rede e sem cópia,
+  como numa instalação nova) e continuava editável: um "Salvar layout" ali
+  apagava a de verdade. Agora ela mostra "Não foi possível carregar o layout"
+  e a edição fica bloqueada até carregar.
+
 ## Leitura no Turso (rows read)
 
 O Turso cobra por linha **varrida**, não por linha devolvida: um `SELECT` sem
@@ -469,18 +489,58 @@ inteiro, com as estimativas, está em `docs/plano-rows-read-fase2.md`.
 | `idx_gondolas_estoque_mestre_codigo` | `estoque_mestre(codigo)` | concluir contagem |
 | `idx_gondolas_inventario_cicli_produto` | `inventario_cicli(produto_id, data_contagem)` | concluir contagem |
 
-Ainda de fora (anotado no plano): juntar os layouts por estrutura com a busca
-de gôndolas/estantes, janela maior para layouts, "Ver no mapa" voltando à
-raiz em vez de empilhar, leitura incremental de `contagem_itens` e pular o
-SELECT "antes" do salvar layout. Um comportamento antigo foi mantido como
-estava: depois de "Concluir contagem", todos os endereços do produto ficam
-âmbar até serem regravados.
+Um comportamento antigo foi mantido como estava: depois de "Concluir
+contagem", todos os endereços do produto ficam âmbar até serem regravados.
 
 Verificado em `test/leitura_turso_test.dart` (janela em disco, sucesso ×
 tentativa, uso, avisos, geração por chave, ordem da correção parcial),
 `test/badges_estoque_test.dart`, `test/conferencia_guardada_test.dart`,
 `test/baixa_por_contagem_test.dart` (barracão) e `tool/verify_badges_sql.py`.
-Falta o gráfico de Rows Read de um dia de loja e galpão.
+
+### Terceira rodada: layouts, volta ao app e a chave de cache
+
+O que sobrava de maior nas tabelas de layout (estimativa, sem medição) era a
+volta ao app — relia a busca inteira e cada gôndola ou estante aberta na
+sessão, mesmo sem ninguém olhando — e a abertura e o Sincronizar, que liam as
+mesmas tabelas duas vezes (uma cópia por estrutura, ~35, mais as duas da
+busca).
+
+- **Uma cópia por tabela de layout** (`lib/layouts_copia.dart`). A cópia
+  completa de `gondola_layout` e a de `estante_layout` servem a busca do mapa,
+  a pré-carga e a cena de cada estrutura. Abrir uma gôndola relê só ela, pelo
+  índice do número, e corrige a cópia no lugar (o mesmo que o galpão faz com as
+  posições gravadas). A abertura do app lê 2 consultas em vez de ~37, e o
+  Sincronizar não relê nada em dobro. A busca continua com os mesmos
+  resultados, paletes desativados incluídos.
+- **A volta ao app relê só o que está na tela.** Layouts, buscas e as cópias de
+  contagem saíram da releitura da volta; a gôndola ou estante à vista relê a
+  própria estrutura e os selos quando o app volta. O Sincronizar continua
+  relendo tudo.
+- **Tela escondida fica parada.** Uma gôndola com "Ver no mapa" (ou ⚙️, ou o
+  modelo 3D) por cima não relê mais nada a cada aviso de dados; ela se
+  recarrega da cópia ao voltar. A navegação ficou como era.
+- **Sem a chave "Cache de consulta" em ⚙️.** Ela vinha da época da réplica
+  local. Desligada, cada toque relia tabelas inteiras (estimativa: 1,5 a 2
+  milhões de linhas por dia num aparelho movimentado) e, sem rede, as telas
+  abriam vazias. Agora todo aparelho reaproveita as leituras recentes; "Atualizar
+  dados" e o Sincronizar continuam relendo tudo na hora. Na primeira abertura
+  depois da atualização, o app apaga a preferência e as cópias antigas de
+  layout — antes juntando as cópias por estrutura na cópia nova, para o
+  primeiro uso sem sinal ainda abrir as gôndolas.
+
+Duas correções de layout que não são de leitura vieram junto (ver "Gravação
+com internet ruim").
+
+Ficou para depois de medir no campo: leitura incremental de `contagem_itens` e
+`inventario_cicli` (o desenho do plano dava resultado errado: a linha volta para
+"pendente" sem mudar `confirmado_em`, e o "Limpar lista" apaga tudo) e uma
+sonda de versão (`MAX(id)`) por estrutura no lugar da releitura de 30 s.
+
+Verificado em `test/layouts_copia_test.dart` (fatia da cópia, releitura por
+estrutura, corrida com a gravação, sem rede com e sem cópia, conferência do
+conflito, paridade da busca nas estantes) e `test/leitura_turso_test.dart`
+(cópias fora da volta ao app). Falta o gráfico de Rows Read de um dia de loja
+e galpão.
 
 ## Créditos
 

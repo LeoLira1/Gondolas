@@ -215,6 +215,13 @@ Bugs de correção achados (não são de leitura):
 
 ## Fora desta rodada (vai como nota)
 
+> **Rodada 3 (feita):** layouts e busca numa cópia por tabela (com releitura por estrutura, sem mudar a
+> busca nem os paletes inativos); "Ver no mapa" mantido, com as telas escondidas paradas; chave de cache
+> removida de ⚙️; o SELECT "antes" do salvar layout ficou e virou a conferência de conflito. A leitura
+> incremental de `contagem_itens` como escrita aqui daria resultado errado (a linha volta para
+> "pendente" sem mudar `confirmado_em`; o "Limpar lista" apaga tudo) e fica para depois de medir, junto
+> com a janela maior/sonda `MAX(id)` dos layouts. Ver README, "Terceira rodada".
+
 - **Unificar os layouts por estrutura com `busca_gondolas`/`busca_estantes`.** Muda o comportamento com
   paletes inativos e custa mais na abertura de uma estrutura.
 - **Janela maior para layouts.** O salvamento é destrutivo.

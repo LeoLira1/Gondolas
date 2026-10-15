@@ -49,6 +49,7 @@ class ConsultaCache {
   final _janelas = <String, Duration>{};
   final _somenteLeitura = <String>{};
   final _semAviso = <String>{};
+  final _semVolta = <String>{};
   final _geracoes = <String, int>{};
   int _geracao = 0;
   Future<void>? _passada;
@@ -82,15 +83,21 @@ class ConsultaCache {
   /// [aoAtualizar]. É para cópias que mudam o dia todo (contagens feitas em
   /// outro app) e que as telas recalculam quando precisam — avisar a cada
   /// mudança recarregaria o app inteiro em cascata.
+  ///
+  /// [releNaVolta] falso: a volta ao app não relê a chave (o Sincronizar
+  /// relê). É para cópia que quem usa relê quando precisa — a tela aberta
+  /// relê a própria estrutura ao voltar, a busca relê a cópia ao buscar, os
+  /// selos e a baixa releem as contagens vencidas —, e que a volta relia a
+  /// cada desbloqueio sem ninguém olhando.
   Future<LinhasConsulta> ler(
     String chave,
     Future<LinhasConsulta> Function() consultar, {
-    bool usarCache = true,
     bool forceRefresh = false,
     bool falharSemCache = false,
     Duration janela = janelaPadrao,
     bool somenteLeitura = false,
     bool avisar = true,
+    bool releNaVolta = true,
   }) async {
     _consultas[chave] = consultar;
     _janelas[chave] = janela;
@@ -104,10 +111,15 @@ class ConsultaCache {
     } else {
       _semAviso.add(chave);
     }
+    if (releNaVolta) {
+      _semVolta.remove(chave);
+    } else {
+      _semVolta.add(chave);
+    }
     if (Zone.current[zonaSemUso] != true) _usadas.add(chave);
-    if (usarCache) await _carregarDoDisco(chave);
+    await _carregarDoDisco(chave);
     final atual = _valores[chave];
-    if (usarCache && !forceRefresh && atual != null) {
+    if (!forceRefresh && atual != null) {
       final ultima = _ultimaTentativa[chave];
       if (ultima == null || DateTime.now().difference(ultima) > janela) {
         unawaited(_atualizar(chave).then<void>((_) {}, onError: (_) {}));
@@ -117,9 +129,8 @@ class ConsultaCache {
     try {
       return _copiar(await _atualizar(chave));
     } catch (_) {
-      if (forceRefresh || (falharSemCache && (!usarCache || atual == null)))
-        rethrow;
-      return usarCache ? _copiar(atual ?? []) : [];
+      if (forceRefresh || (falharSemCache && atual == null)) rethrow;
+      return _copiar(atual ?? []);
     }
   }
 
@@ -228,12 +239,16 @@ class ConsultaCache {
   ///
   /// [renovarJanela] falso é para cópia que só foi CORRIGIDA em parte (ver
   /// [atualizarParte]): o resto dela continua com a idade que tinha.
+  ///
+  /// [descartarNoAr] falso: as linhas vieram de uma leitura (não de um
+  /// commit), e a leitura de [chave] que estiver no ar continua valendo.
   Future<void> confirmar(
     String chave,
     LinhasConsulta linhas, {
     bool renovarJanela = true,
+    bool descartarNoAr = true,
   }) async {
-    _geracoes[chave] = (_geracoes[chave] ?? 0) + 1;
+    if (descartarNoAr) _geracoes[chave] = (_geracoes[chave] ?? 0) + 1;
     _valores[chave] = _copiar(linhas);
     if (renovarJanela) {
       final agora = DateTime.now();
@@ -255,19 +270,30 @@ class ConsultaCache {
   /// Sem cópia, a leitura completa que estiver no ar é descartada: ela pode
   /// ter saído antes da gravação que se queria corrigir, e guardá-la como
   /// fresca esconderia a gravação até a janela vencer.
+  ///
+  /// [descartarNoAr] falso: a correção veio de uma LEITURA do servidor (não
+  /// de um commit deste aparelho), e a leitura completa que estiver no ar
+  /// continua valendo — ela sai na mesma fila e é tão nova quanto. Jogá-la
+  /// fora só fazia ler a tabela inteira de novo.
   Future<LinhasConsulta?> atualizarParte(
     String chave,
     bool Function(Map<String, dynamic>) pertence,
     LinhasConsulta novas, {
     int Function(Map<String, dynamic>, Map<String, dynamic>)? ordenar,
+    bool descartarNoAr = true,
   }) async {
     if (!await _carregarDoDisco(chave)) {
-      invalidarConsultasEmAndamento([chave]);
+      if (descartarNoAr) invalidarConsultasEmAndamento([chave]);
       return null;
     }
     final linhas = [..._valores[chave]!.where((r) => !pertence(r)), ...novas];
     if (ordenar != null) linhas.sort(ordenar);
-    await confirmar(chave, linhas, renovarJanela: false);
+    await confirmar(
+      chave,
+      linhas,
+      renovarJanela: false,
+      descartarNoAr: descartarNoAr,
+    );
     return _copiar(linhas);
   }
 
@@ -295,8 +321,19 @@ class ConsultaCache {
     _consultas.remove(chave);
     _janelas.remove(chave);
     _usadas.remove(chave);
+    _semVolta.remove(chave);
     _emAndamento.remove(chave);
   }
+
+  /// A cópia de [chave] em memória, sem cópia defensiva e sem ir ao disco
+  /// nem ao banco — ou null. O objeto é trocado (nunca alterado) a cada
+  /// atualização, então quem deriva dados dele pode guardar o resultado
+  /// enquanto o objeto for o mesmo. Quem recebe NÃO pode alterá-lo.
+  LinhasConsulta? emMemoria(String chave) => _valores[chave];
+
+  /// Traz a cópia de [chave] do disco para a memória, sem ir ao banco.
+  /// True quando há cópia.
+  Future<bool> carregar(String chave) => _carregarDoDisco(chave);
 
   /// True quando a cópia de [chave] não teve leitura bem-sucedida dentro de
   /// [janela] (ou não existe). Lê o carimbo do disco se preciso.
@@ -329,9 +366,10 @@ class ConsultaCache {
   /// Relê as consultas conhecidas.
   ///
   /// Com [soVencidas], só as que passaram da própria janela; com [soUsadas],
-  /// só as que alguém leu nesta sessão (o prewarm não conta). É o que a volta
-  /// ao app usa, para não reler o estoque_mestre inteiro nem os ~35 layouts
-  /// que ninguém abriu a cada desbloqueio de tela. Sem prazo no uso: a tela
+  /// só as que alguém leu nesta sessão (o prewarm não conta) e que não pediram
+  /// para ficar fora da volta (ver `releNaVolta` em [ler]). É o que a volta
+  /// ao app usa, para não reler o estoque_mestre inteiro nem os layouts que
+  /// ninguém está vendo a cada desbloqueio de tela. Sem prazo no uso: a tela
   /// que ficou aberta com o celular bloqueado horas a fio não relê nada
   /// enquanto isso, e é ela que precisa estar em dia no desbloqueio. Uma
   /// volta ao app com outra passada no ar não faz nada.
@@ -350,7 +388,8 @@ class ConsultaCache {
     final agora = DateTime.now();
     final chaves = _consultas.keys.where((chave) {
       if (soVencidas && !_tentativaVencida(chave, agora)) return false;
-      return !soUsadas || _usadas.contains(chave);
+      if (!soUsadas) return true;
+      return _usadas.contains(chave) && !_semVolta.contains(chave);
     }).toList();
     final futuro = Future.wait(chaves.map(_atualizar));
     _passada = futuro;

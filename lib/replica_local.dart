@@ -24,7 +24,7 @@ String idBanco(String url) {
 /// arquivo de metadados do sync, como reconhecer uma replica que divergiu do
 /// servidor e como explicar uma falha de sincronização para o usuário.
 ///
-/// Mora fora do `TursoService` pelo mesmo motivo do `layout_cache.dart`: sem
+/// Mora fora do `TursoService` pelo mesmo motivo do `layouts_copia.dart`: sem
 /// Flutter, sem libsql e sem I/O, dá para testar direto em `flutter test` — e
 /// é justamente aqui que ficam as decisões que quebraram o app em produção
 /// (ver `frameDuravelDaReplica` e `erroDeReplicaDivergente`).

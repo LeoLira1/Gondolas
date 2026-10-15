@@ -169,15 +169,26 @@ class EstoqueLocalizadoService {
   ///
   /// Sem alguma das cópias (e sem rede para buscá-la), devolve o último
   /// cálculo — como antes, quando a consulta falhava.
+  ///
+  /// [atualizarSeVencida]: espera a releitura das contagens que passaram da
+  /// janela (a tela que volta do bloqueio; as cópias de contagem não avisam
+  /// quando mudam, então releitura por trás não repintaria os selos).
   Future<Set<String>> fetchEnderecosDesatualizados({
     bool forceRefresh = false,
+    bool atualizarSeVencida = false,
   }) async {
     try {
       final turso = TursoService();
       final resultados = await Future.wait([
         turso.consultarQuantidades(falharSemCache: true),
-        turso.consultarUltimasContagensCiclico(forceRefresh: forceRefresh),
-        turso.consultarUltimasContagensItens(forceRefresh: forceRefresh),
+        turso.consultarUltimasContagensCiclico(
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+        ),
+        turso.consultarUltimasContagensItens(
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+        ),
       ]);
       final novo = <String, EnderecoDesatualizado>{};
       for (final a in calcularDesatualizados(
@@ -220,12 +231,16 @@ class EstoqueLocalizadoService {
   /// status_ciclo, lê só os divergentes.
   Future<Set<String>> fetchEnderecosDivergentes({
     bool forceRefresh = false,
+    bool atualizarSeVencida = false,
   }) async {
     try {
       final turso = TursoService();
       final resultados = await Future.wait([
         turso.consultarQuantidades(falharSemCache: true),
-        turso.consultarDivergentesCiclo(forceRefresh: forceRefresh),
+        turso.consultarDivergentesCiclo(
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+        ),
       ]);
       final calculo = calcularDivergentes(
         enderecos: resultados[0],
