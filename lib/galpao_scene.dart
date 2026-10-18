@@ -173,6 +173,42 @@ Color corRackGalpao({
   return corPorProduto[produtoCodigo] ?? _corRack;
 }
 
+/// [corRackGalpao] para o rack inteiro: num rack misto, o produto que pede
+/// atenção ganha do principal — conferir hoje, busca, falta, sobra, nessa
+/// ordem (a mesma precedência de [corRackGalpao]). Sem nada disso, o rack
+/// fica na cor do principal.
+Color corDoRackGalpao(
+  RackGalpao rack, {
+  Map<String, Color> corPorProduto = const {},
+  String? destacadoCodigo,
+  bool modoConferencia = false,
+  Set<String> codigosConferencia = const {},
+  bool mostrarSaldo = false,
+  Map<String, SaldoProduto> saldos = const {},
+}) {
+  Color cor(String codigo) => corRackGalpao(
+    produtoCodigo: codigo,
+    corPorProduto: corPorProduto,
+    destacadoCodigo: destacadoCodigo,
+    modoConferencia: modoConferencia,
+    codigosConferencia: codigosConferencia,
+    mostrarSaldo: mostrarSaldo,
+    saldos: saldos,
+  );
+  final principal = cor(rack.produtoCodigo);
+  if (!rack.misto) return principal;
+  final cores = [for (final p in rack.produtos) cor(p.produtoCodigo)];
+  for (final alerta in [
+    if (modoConferencia) corConferenciaCiano,
+    if (!modoConferencia) corCamda,
+    if (!modoConferencia && mostrarSaldo) corEnderecoDivergente,
+    if (!modoConferencia && mostrarSaldo) corEnderecoDivergentePositiva,
+  ]) {
+    if (cores.contains(alerta)) return alerta;
+  }
+  return principal;
+}
+
 /// Os 3 tons de um cubo: topo cheio, uma lateral média e a outra escura.
 /// Sem textura e sem especular — o galpão quer leitura de posição, não
 /// aparência de rack.
@@ -398,8 +434,8 @@ class GalpaoPainter extends CustomPainter {
           // resultados — é o que permite ler as oito posições do mesmo
           // herbicida de uma olhada no mapa. No Modo Conferência a leitura de
           // rota tem precedência, como nas estantes.
-          final cor = corRackGalpao(
-            produtoCodigo: rack.produtoCodigo,
+          final cor = corDoRackGalpao(
+            rack,
             corPorProduto: corPorProduto,
             destacadoCodigo: codigoAceso,
             modoConferencia: modoConferencia,
@@ -410,7 +446,7 @@ class GalpaoPainter extends CustomPainter {
           final destacadoAceso =
               !modoConferencia &&
               codigoAceso != null &&
-              rack.produtoCodigo == codigoAceso;
+              rack.contem(codigoAceso);
           _desenharCubo(
             canvas,
             proj,
@@ -433,6 +469,7 @@ class GalpaoPainter extends CustomPainter {
             // Durante a descida o de cima está um pouco acima, mas continua
             // cobrindo o topo do de baixo na projeção — a regra se mantém.
             desenharTopo: k == pilha.length - 1,
+            misto: rack.misto,
             dy: dyDe(posicao.numero, k + 1),
           );
         }
@@ -625,10 +662,25 @@ class GalpaoPainter extends CustomPainter {
     required Paint preenchimento,
     required Paint contorno,
     required bool desenharTopo,
+    bool misto = false,
     double dy = 0,
   }) {
     if (!_projetarCantos(proj, p, ordem, dy: dy)) return;
     final (faceX, faceZ) = _lateraisVisiveis(proj, p);
+
+    // Rack misto: duas listras claras atravessando as laterais, a 1/3 e 2/3
+    // da altura — o palete com vários produtos se distingue de longe sem
+    // perder a cor que diz o resto (categoria, saldo, busca).
+    void listrar(List<int> face) {
+      final baixo = [for (final i in face) if (i & 2 == 0) i];
+      for (final t in const [1 / 3, 2 / 3]) {
+        canvas.drawLine(
+          Offset.lerp(_cantos[baixo[0]], _cantos[baixo[0] | 2], t)!,
+          Offset.lerp(_cantos[baixo[1]], _cantos[baixo[1] | 2], t)!,
+          _tracoMisto,
+        );
+      }
+    }
 
     void pintar(List<int> face, double tom) {
       final path = Path()..moveTo(_cantos[face[0]].dx, _cantos[face[0]].dy);
@@ -646,7 +698,16 @@ class GalpaoPainter extends CustomPainter {
     if (faceX != null) pintar(faceX, _tomLateral(faceX, faceZ));
     if (faceZ != null) pintar(faceZ, _tomLateral(faceZ, faceX));
     if (desenharTopo) pintar(_faceTopo, _tomTopo);
+    if (misto) {
+      if (faceX != null) listrar(faceX);
+      if (faceZ != null) listrar(faceZ);
+    }
   }
+
+  static final Paint _tracoMisto = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.4
+    ..color = Colors.white.withValues(alpha: 0.6);
 
   void _desenharVazio(
     Canvas canvas,

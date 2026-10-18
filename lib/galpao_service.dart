@@ -7,7 +7,7 @@ import 'codigos_vinculados.dart';
 import 'fila_gravacao.dart' show executarOperacao;
 import 'galpao_config.dart';
 import 'galpao_saldo.dart';
-import 'galpao_scene.dart' show RackGalpao;
+import 'galpao_scene.dart' show ProdutoNoRack, RackGalpao;
 import 'gravacao_lote.dart';
 import 'turso_service.dart';
 import 'outbox.dart' show gerarUuidV4;
@@ -97,9 +97,13 @@ class GalpaoService {
     }
   }
 
+  /// Racks e itens dos racks mistos numa consulta só: cada rack vem na sua
+  /// linha (item_uuid NULL) seguida das linhas dos itens dele, na ordem em
+  /// que entraram.
   static const String _sqlPilhas =
-      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-      'FROM galpao_racks ORDER BY posicao, ordem';
+      'SELECT rack_uuid, item_uuid, posicao, ordem, produto_codigo, '
+      'produto_nome, quantidade FROM $sqlProdutosGalpao '
+      'ORDER BY posicao, ordem, seq';
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
   ///
@@ -141,6 +145,28 @@ class GalpaoService {
       // Linha órfã (posição que não existe mais na planta) é ignorada, como
       // as cenas fazem com endereço fora da grade.
       if (GalpaoConfig.porNumero(posicao) == null) continue;
+      final itemUuid = r['item_uuid'] as String?;
+      if (itemUuid != null) {
+        // Item de rack misto: vai para o rack que veio logo antes dele.
+        final pilha = pilhas[posicao];
+        final rackUuid = r['rack_uuid'] as String?;
+        if (pilha == null || pilha.last.rackUuid != rackUuid) continue;
+        final rack = pilha.removeLast();
+        pilha.add(
+          rack.copiar(
+            itens: [
+              ...rack.itens,
+              ProdutoNoRack(
+                itemUuid: itemUuid,
+                produtoCodigo: r['produto_codigo'] as String? ?? '',
+                produtoNome: r['produto_nome'] as String? ?? '',
+                quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+              ),
+            ],
+          ),
+        );
+        continue;
+      }
       pilhas.putIfAbsent(posicao, () => <RackGalpao>[]).add(
             RackGalpao(
               rackUuid: r['rack_uuid'] as String?,
@@ -208,7 +234,7 @@ class GalpaoService {
 
   Future<Set<String>> _codigosComRack(LibsqlClient client) async {
     final stmt = await client.prepare(
-      'SELECT DISTINCT produto_codigo FROM galpao_racks',
+      'SELECT DISTINCT produto_codigo FROM $sqlProdutosGalpao',
     );
     final rows = await stmt.query() as List<dynamic>;
     final codigos = <String>{};
@@ -339,12 +365,16 @@ class GalpaoService {
   /// mesmo produto, só o número muda. O rack é o de [rackUuid] (o nível pode
   /// ter mudado desde a leitura; o palete não). Quantidade não positiva é
   /// recusada: zerar é [esvaziar].
+  ///
+  /// [itemUuid] escolhe um produto DENTRO de um rack misto; null é o
+  /// principal.
   Future<bool> ajustarQuantidade({
     required int posicao,
     required int ordem,
     required double quantidade,
     String? origem,
     String? rackUuid,
+    String? itemUuid,
   }) async {
     if (quantidade <= 0 || rackUuid == null) return false;
     try {
@@ -356,6 +386,7 @@ class GalpaoService {
           criadaEm: DateTime.now(),
           local: posicao,
           rackUuid: rackUuid,
+          itemUuid: itemUuid,
           quantidade: quantidade,
           origem: origem,
         ),
@@ -384,6 +415,36 @@ class GalpaoService {
           criadaEm: DateTime.now(),
           local: posicao,
           rackUuid: rackUuid,
+          origem: origem,
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Tira UM produto do rack de [rackUuid] ([itemUuid] null é o principal).
+  /// Se era o último produto do rack, o rack sai e a pilha desce — é o
+  /// esvaziar de um rack comum. Ver pilhaAposRemoverProduto.
+  Future<bool> removerProduto({
+    required int posicao,
+    required int ordem,
+    String? origem,
+    String? rackUuid,
+    String? itemUuid,
+  }) async {
+    if (rackUuid == null) return false;
+    try {
+      await executarOperacao(
+        OperacaoPendente(
+          uuid: gerarUuidV4(),
+          tipo: TipoOperacao.galpaoRemoverProduto,
+          banco: TursoService().identidadeAtiva ?? '',
+          criadaEm: DateTime.now(),
+          local: posicao,
+          rackUuid: rackUuid,
+          itemUuid: itemUuid,
           origem: origem,
         ),
       );

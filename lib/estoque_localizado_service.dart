@@ -12,6 +12,10 @@ import 'replica_coordinator.dart';
 /// físico (gôndola, estante ou galpão).
 class EnderecoLocalizado {
   final String? rackUuid;
+
+  /// Produto dentro de um rack misto do galpão. Null é o principal do rack
+  /// (ou endereço que não é do galpão).
+  final String? itemUuid;
   final int? id; // null enquanto não gravado em estoque_localizado
   final String produtoCodigo;
   final String localTipo; // 'gondola' | 'estante'
@@ -23,6 +27,7 @@ class EnderecoLocalizado {
 
   const EnderecoLocalizado({
     this.rackUuid,
+    this.itemUuid,
     this.id,
     required this.produtoCodigo,
     required this.localTipo,
