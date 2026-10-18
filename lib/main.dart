@@ -18,6 +18,7 @@ import 'expositor_nellore_scene.dart';
 import 'galpao_page.dart';
 import 'galpao_scene.dart' show corCamda;
 import 'gondola_scene.dart';
+import 'ilha_paletes_scene.dart';
 import 'layouts_copia.dart' show ResultadoSalvarLayout;
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
@@ -1400,8 +1401,8 @@ class _SearchBox extends StatelessWidget {
                                             child: Text(
                                               p.tipo == localTipoBarracao
                                                   ? 'Barracão · ${p.nivelDescricao}'
-                                                  : '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : 'Estante'}'
-                                                    ' nº ${p.numero} · ${p.nivelDescricao}',
+                                                  : '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : ehIlhaPaletes(p.numero) ? 'Ilha de paletes' : 'Estante'}'
+                                                    '${ehIlhaPaletes(p.numero) ? '' : ' nº ${p.numero}'} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
                                             ),
@@ -1444,6 +1445,8 @@ class _LegendRow extends StatelessWidget {
         _chip(corGondolaLoja, 'Gôndola', hexagon: true),
         const SizedBox(height: 6),
         _chip(corEstanteLoja, 'Estante'),
+        const SizedBox(height: 6),
+        _chip(IlhaPaletesGeometry.corTapume, 'Paletes'),
       ],
     );
   }
@@ -1517,6 +1520,7 @@ class _LocationCard extends StatelessWidget {
     final numero     = item?.numero ?? produto!.numero;
 
     final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
+    final ehIlhaAqui   = tipo == 'estante' && ehIlhaPaletes(numero);
     final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
     final ehGalpaoAqui = tipo == localTipoGalpao;
     final ehBarracaoAqui = tipo == localTipoBarracao;
@@ -1545,6 +1549,8 @@ class _LocationCard extends StatelessWidget {
                 ? 'Barracão'
             : ehPaleteAqui
                 ? 'Palete'
+                : ehIlhaAqui
+                    ? 'Ilha de paletes'
                 : ehParede
                     ? 'Estante Parede'
                     : 'Estante';
@@ -1554,6 +1560,8 @@ class _LocationCard extends StatelessWidget {
         ? produto!.nivelDescricao
         : ehParede
         ? 'E$estanteParedeMin–E$estanteParedeMax'
+        : ehIlhaAqui
+        ? 'Ilha'
         : '$prefixo$numero';
     final numeroTexto =
         produto != null && produto!.tipo == tipo ? produto!.numero : numero;
@@ -2509,6 +2517,10 @@ class _GondolaPageState extends State<GondolaPage>
             ? '📦 ${produto.nome}\n'
                 'Palete ${naEstante.estanteNum} · posição '
                 '${letraEstanteCelula(naEstante.estanteNum, col, niv)}'
+            : ehIlhaPaletes(naEstante.estanteNum)
+            ? '📦 ${produto.nome}\n'
+                'Ilha de paletes · espaço ${espacoIlhaPaletes(niv)} · '
+                'produto ${produtoIlhaPaletes(col)}'
             : '📦 ${produto.nome}\n'
                 'Estante ${naEstante.estanteNum} · ${colNomes[col]} · '
                 '${nivelNomes[niv]} · Slot ${naEstante.slot + 1}';
@@ -3845,6 +3857,17 @@ class _EstantePageState extends State<EstantePage>
     // aqui (como cada uma das outras geometrias) porque o fallback lá embaixo
     // usa EstanteGeometry, que tem 3 colunas fixas e estouraria no firstWhere
     // nas colunas 3 e 4 do palete.
+    // Ilha de paletes: um produto por posição (5 por espaço), slot sempre 0.
+    if (ehIlhaPaletes(_estanteAtual)) {
+      final celula = IlhaPaletesGeometry.celulas()
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      return (
+        maxSlots: 1,
+        xMin:     celula.xCenter - IlhaPaletesGeometry.wCaixa / 2,
+        wCaixa:   IlhaPaletesGeometry.wCaixa,
+        gap:      0.0,
+      );
+    }
     if (ehPalete(_estanteAtual)) {
       final celula = PaleteGeometry.celulas()
           .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
@@ -3942,6 +3965,12 @@ class _EstantePageState extends State<EstantePage>
     // No palete o prefixo é P (não E) e não há slot a mostrar — uma caixa por
     // posição —, então o chip fica só 'P102 · 7', igual à etiqueta no chão.
     if (ehPalete(_estanteAtual)) return 'P$_estanteAtual · $letra';
+    // Ilha: 'Ilha · espaço 3 · produto 2' — o "3-2" sozinho não diz qual
+    // número é o palete.
+    if (ehIlhaPaletes(_estanteAtual)) {
+      return 'Ilha · espaço ${espacoIlhaPaletes(_nivelSelecionado!)} · '
+          'produto ${produtoIlhaPaletes(_colunaSelecionada!)}';
+    }
     // Na parede o chip mostra também a posição global P1–P12 (derivada),
     // ex.: 'E15 · AH · Slot 2 (P6)'.
     final sufixoParede = ehEstanteParede(_estanteAtual)
@@ -4190,7 +4219,11 @@ class _EstantePageState extends State<EstantePage>
     if (r.resultado == ResultadoSalvarLayout.conflito) {
       final escolha = await perguntarConflitoDeLayout(
         context,
-        ehPalete(numero) ? 'Este palete' : 'Esta estante',
+        ehPalete(numero)
+            ? 'Este palete'
+            : ehIlhaPaletes(numero)
+                ? 'Esta ilha de paletes'
+                : 'Esta estante',
       );
       if (!mounted) return;
       if (escolha == EscolhaConflitoLayout.salvarPorCima &&
@@ -4625,6 +4658,19 @@ class _EstantePageState extends State<EstantePage>
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:    _destacadosCodigos,
                       )
+                : ehIlhaPaletes(_estanteAtual)
+                    ? IlhaPaletesScene(
+                        caixas:               _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:        _corPorProduto,
+                        onTapCelula:          _onTapCelula,
+                        onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                        destacadoCodigo:      _destacadoCodigo,
+                        desatualizados:       _desatualizados,
+                        divergentes:          _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
+                        destacadosCodigos:    _destacadosCodigos,
+                      )
                 : ehPalete(_estanteAtual)
                     ? PaleteScene(
                         estanteAtual:         _estanteAtual,
@@ -4889,7 +4935,11 @@ class _EstanteSelector extends StatelessWidget {
             // O carrossel mistura estantes e paletes: o título acompanha o que
             // está na tela, senão um palete aparece rotulado como "ESTANTE".
             Text(
-              ehPalete(estanteAtual) ? 'PALETE' : 'ESTANTE',
+              ehPalete(estanteAtual)
+                  ? 'PALETE'
+                  : ehIlhaPaletes(estanteAtual)
+                      ? 'ILHA DE PALETES'
+                      : 'ESTANTE',
               style: const TextStyle(
                 color: Color(0xFF8a9aa8),
                 fontSize: 10,
@@ -4915,7 +4965,11 @@ class _EstanteSelector extends StatelessWidget {
                       ? 'de ${ordemNavegacaoEstantes.length} · 3× EDR-300'
                       : ehPalete(estanteAtual)
                           ? _subtituloPalete(estanteAtual)
-                          : 'de ${ordemNavegacaoEstantes.length}',
+                          : ehIlhaPaletes(estanteAtual)
+                              ? 'de ${ordemNavegacaoEstantes.length} · '
+                                  '$espacosIlhaPaletes espaços × '
+                                  '$produtosPorEspacoIlha produtos'
+                              : 'de ${ordemNavegacaoEstantes.length}',
               style: const TextStyle(
                 color: Color(0xFF5a6a78),
                 fontSize: 10,

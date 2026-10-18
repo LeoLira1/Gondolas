@@ -12,10 +12,13 @@ import 'expositor_monitor_scene.dart' show expositorMonitorLoja;
 import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, ProjecaoCamera, faceAngle;
+import 'ilha_paletes_scene.dart' show IlhaPaletesGeometry, ilhaPaletesLoja;
 import 'models.dart'
     show balcaoNum, colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
-         ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
-         expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum;
+         ehEstanteParede, ehIlhaPaletes, colunasEspacosIlha,
+         espacoIlhaPaletes, espacosIlhaPaletes, estanteEdr300TriplaNum,
+         estanteParedeMin, expositorMagnojetNum, expositorMonitorNum,
+         expositorNelloreNum, ilhaPaletesNum, rotuloCurtoEstrutura;
 import 'scene_gestures.dart';
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
@@ -121,6 +124,14 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: balcaoNum,
       x: 1.45, z: lojaH - LojaGeometry._paredeEsp - 7.95 / 2,
       w: 0.60, d: 7.95),
+  // Ilha de paletes: os 12 paletes com tapume verde no corredor central, entre
+  // a Gôndola 7 (caixa) e a Gôndola 6 (entrada), 2 de largura × 6 de
+  // comprimento. Medida de MAPA, não a real (2,40 × 6,00 m): a planta
+  // simplificada põe as colunas de gôndolas a 2 m uma da outra, e a ilha em
+  // tamanho real não deixaria corredor dos lados. A proporção 2 × 6 e a
+  // numeração 1–12 é que importam aqui; a cena de detalhe usa a medida real.
+  ItemLoja(tipo: 'estante', numero: ilhaPaletesNum,
+      x: 5.0, z: 8.0, w: 1.8, d: 5.6),
 ];
 
 // ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
@@ -130,10 +141,10 @@ const List<ItemLoja> itensLoja = [
 const double alturaBoneco = LojaGeometry.alturaGondola;
 
 /// Rotas de caminhada — dado, não código espalhado. Todas passam só pelos
-/// corredores: os verticais x = 4, x = 6, x = 2.05 e x = 8.4 e os horizontais
-/// z = 2.8 (antes da primeira fileira, em z = 4), z = 5 (entre as fileiras
-/// z = 4 e z = 6) e z ≈ 13 (entre a última fileira, em z = 12, e a parede da
-/// entrada).
+/// corredores: os verticais x = 3.86, x = 6.14 (dos dois lados da ilha de
+/// paletes), x = 2.05 e x = 8.4 e os horizontais z = 2.8 (antes da primeira
+/// fileira, em z = 4), z = 4.91 (entre a Gôndola 7 e a ilha) e z ≈ 13 (entre a
+/// última fileira, em z = 12, e a parede da entrada).
 ///
 /// As colunas de gôndolas ficam em x = 3, 5 e 7, com raio 0.62; as estantes de
 /// parede em x ≤ 1.35 e x ≥ 9.1. O corredor da esquerda é o mais apertado dos
@@ -141,13 +152,15 @@ const double alturaBoneco = LojaGeometry.alturaGondola;
 /// parede esquerda, então a perna de volta corre em x = 2.05 — o meio da folga
 /// entre a borda do balcão (x 1.75) e a das gôndolas 8–12 (x 2.38).
 final List<RotaBoneco> rotasLoja = [
-  // Funcionário: sobe e desce o corredor central da loja, atravessando pela
-  // faixa livre entre as fileiras z = 4 e z = 6.
+  // Funcionário: dá a volta na ilha de paletes do corredor central, pelos
+  // dois corredores entre ela e as colunas de gôndolas (x 3.62–4.10 e
+  // 5.90–6.38) e atravessando entre a Gôndola 7 (borda em z 4.62) e a ponta
+  // da ilha (z 5.20).
   RotaBoneco(const [
-    (x: 4.0, z: 5.00),
-    (x: 4.0, z: 12.85),
-    (x: 6.0, z: 12.85),
-    (x: 6.0, z: 5.00),
+    (x: 3.86, z: 4.91),
+    (x: 3.86, z: 12.85),
+    (x: 6.14, z: 12.85),
+    (x: 6.14, z: 4.91),
   ]),
   // Cliente: volta grande pelas laterais, por fora das gôndolas.
   RotaBoneco(const [
@@ -350,7 +363,9 @@ class LojaGeometry {
           ? corGondolaLoja
           : item.numero == balcaoNum
               ? corBalcaoCorpo
-              : corEstanteLoja);
+              : ehIlhaPaletes(item.numero)
+                  ? IlhaPaletesGeometry.corTapume
+                  : corEstanteLoja);
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
@@ -369,6 +384,8 @@ class LojaGeometry {
             corTampo: aplicar(corBalcaoTampo));
       } else if (ehEstanteParede(item.numero)) {
         _estanteParede(faces, item, cor);
+      } else if (ehIlhaPaletes(item.numero)) {
+        ilhaPaletesLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else {
         _estante(faces, item, cor);
       }
@@ -779,6 +796,33 @@ class LojaPainter extends CustomPainter {
       }
     }
 
+    // Números 1–12 dos espaços da ilha de paletes, escritos no tapume como no
+    // croqui da loja: de 2 em 2, do caixa para a entrada.
+    for (final item in itensLoja) {
+      if (!ehIlhaPaletes(item.numero)) continue;
+      const fileiras = espacosIlhaPaletes ~/ colunasEspacosIlha;
+      final pw = item.w / colunasEspacosIlha, pd = item.d / fileiras;
+      for (var e = 0; e < espacosIlhaPaletes; e++) {
+        final x = item.x - item.w / 2 + (e % colunasEspacosIlha + 0.5) * pw;
+        final z = item.z - item.d / 2 + (e ~/ colunasEspacosIlha + 0.5) * pd;
+        final hit = project(Vec3(x, 0.125, z));
+        if (hit == null) continue;
+        final (screen, cz) = hit;
+        final tp = TextPainter(
+          text: TextSpan(
+            text: '${espacoIlhaPaletes(e)}',
+            style: TextStyle(
+              color:      const Color(0xCC0b2614),
+              fontSize:   20.0 * (9.0 / cz).clamp(0.6, 1.5),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+      }
+    }
+
     for (final item in itensLoja) {
       // Sem badges A–E nas EDR-300 (a 8 e a tripla da 6), nos expositores
       // (MagnoJet/Nellore/Monitor) nem na Estante Parede (os rótulos deles
@@ -790,6 +834,7 @@ class LojaPainter extends CustomPainter {
           item.numero == expositorNelloreNum ||
           item.numero == expositorMonitorNum ||
           item.numero == balcaoNum ||
+          ehIlhaPaletes(item.numero) ||
           ehEstanteParede(item.numero)) {
         continue;
       }
@@ -832,8 +877,8 @@ class LojaPainter extends CustomPainter {
         if (hit == null) continue;
         final (screen, cz) = hit;
 
-        final prefixo = item.tipo == 'gondola' ? 'G' : 'E';
-        final texto   = '$prefixo${item.numero} · ${entry.value}';
+        final texto   =
+            '${rotuloCurtoEstrutura(item.tipo, item.numero)} · ${entry.value}';
         final fontSize = 13.0 * (9.0 / cz).clamp(0.6, 1.4);
 
         final tp = TextPainter(

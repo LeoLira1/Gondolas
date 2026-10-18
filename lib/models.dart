@@ -148,6 +148,26 @@ const int fileirasPalete   = 3;   // posições na profundidade (1,00 m ÷ 3 ≈
 
 bool ehPalete(int estanteNum) => estanteNum >= paleteNumMin;
 
+// Ilha de paletes: 12 paletes encostados no corredor central da loja (entre a
+// Gôndola 7 e a Gôndola 6), forrados com o mesmo tapume verde — uma peça FIXA,
+// desenhada no mapa, diferente dos paletes soltos (101+) cadastrados em
+// runtime. Cada palete é um ESPAÇO (1–12) com até 5 produtos lado a lado.
+// Reutiliza a infra de estante: local_tipo 'estante', número próprio, slot
+// sempre 0, `nivel` = espaço (0–11) e `coluna` = produto no espaço (0–4).
+// Geometria e numeração dos espaços em lib/ilha_paletes_scene.dart.
+const int ilhaPaletesNum        = 22;
+const int espacosIlhaPaletes    = 12;
+const int colunasEspacosIlha    = 2;   // paletes lado a lado na largura
+const int produtosPorEspacoIlha = 5;
+
+bool ehIlhaPaletes(int estanteNum) => estanteNum == ilhaPaletesNum;
+
+/// Número do espaço (1–12) da ilha a partir do `nivel` gravado (0–11).
+int espacoIlhaPaletes(int nivel) => nivel + 1;
+
+/// Número do produto (1–5) dentro do espaço a partir da `coluna` (0–4).
+int produtoIlhaPaletes(int coluna) => coluna + 1;
+
 /// Rótulo curto de uma estrutura, do jeito que ela é etiquetada na loja:
 /// "G7", "E5", "P101". Paletes reutilizam local_tipo 'estante' no banco, mas
 /// nunca são apresentados como estante ao usuário.
@@ -155,7 +175,9 @@ String rotuloCurtoEstrutura(String tipo, int numero) => tipo == 'gondola'
     ? 'G$numero'
     : ehPalete(numero)
         ? 'P$numero'
-        : 'E$numero';
+        : ehIlhaPaletes(numero)
+            ? 'Ilha'
+            : 'E$numero';
 
 /// "1 produto" / "3 produtos" — contagem já flexionada.
 ///
@@ -171,7 +193,9 @@ String nomeEstrutura(String tipo, int numero) => tipo == 'gondola'
     ? 'Gôndola $numero'
     : ehPalete(numero)
         ? 'Palete $numero'
-        : 'Estante $numero';
+        : ehIlhaPaletes(numero)
+            ? 'Ilha de paletes'
+            : 'Estante $numero';
 
 /// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
 /// filosofia do faceFromPos): cada seção contribui com 2 posições.
@@ -179,9 +203,11 @@ int posicaoGlobalParede(int estanteNum, int coluna) =>
     (estanteNum - estanteParedeMin) * colunasParede + coluna + 1;
 
 /// Parte FIXA da ordem de navegação do carrossel de estantes. As seções da
-/// parede (13–18) ocupam o lugar onde ficavam as estantes 3 e 4.
+/// parede (13–18) ocupam o lugar onde ficavam as estantes 3 e 4; a ilha de
+/// paletes (22) entra depois dos expositores.
 const List<int> ordemNavegacaoBase = [
   1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20,
+  ilhaPaletesNum,
 ];
 
 /// Ordem completa do carrossel: a base fixa seguida dos paletes ativos
@@ -217,6 +243,7 @@ bool temNivelTopoPara(int estanteNum) =>
 // única família cujo conjunto de números cresce em runtime.
 int niveisProdutoPara(int estanteNum) {
   if (ehPalete(estanteNum)) return fileirasPalete;
+  if (ehIlhaPaletes(estanteNum)) return espacosIlhaPaletes;
   return ehEstanteEdr300(estanteNum)
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
@@ -236,6 +263,7 @@ int niveisProdutoPara(int estanteNum) {
 /// encontrada numa busca sem estourar a grade real da estrutura.
 int numColunasPara(int estanteNum) {
   if (ehPalete(estanteNum)) return colunasPalete;
+  if (ehIlhaPaletes(estanteNum)) return produtosPorEspacoIlha;
   return estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == estanteEdr300TriplaNum
@@ -290,6 +318,12 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   // MagnoJet e a Estante Parede.
   if (ehPalete(estanteNum)) {
     return '${nivel * colunasPalete + coluna + 1}';
+  }
+  // Na ilha de paletes o endereço é "espaço-produto": 3-2 é o produto 2 do
+  // espaço 3. É como se fala na loja — "no palete 3, o segundo" — e evita uma
+  // contagem corrida de 1 a 60 que ninguém acha no chão.
+  if (ehIlhaPaletes(estanteNum)) {
+    return '${espacoIlhaPaletes(nivel)}-${produtoIlhaPaletes(coluna)}';
   }
   final nNiveis  = niveisProdutoPara(estanteNum);
   if (ehEstanteParede(estanteNum)) {

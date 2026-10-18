@@ -11,8 +11,32 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 - Modo Conferência para auditoria física do estoque
 - Sincronização de quantidades com os apps `inventariocamda` e `camda-estoque` via `estoque_localizado`
 - **Baixa automática da venda pela contagem** — o que foi vendido sai sozinho dos racks e prateleiras
+- Ilha de paletes no corredor central da loja (12 espaços × 5 produtos)
 - Mapa 3D do galpão de racks (botão na barra do mapa da loja)
 - Mapa 3D do barracão de paletes (botão ao lado do galpão, na mesma barra)
+
+## Ilha de paletes (loja)
+
+No corredor central da loja, entre a Gôndola 7 (lado do caixa) e a Gôndola 6
+(lado da entrada), ficam 12 paletes encostados e forrados com tapume verde —
+uma plataforma baixa só, 2 paletes de largura × 6 de comprimento. Cada palete
+é um **espaço** (1–12) e recebe até **5 produtos** lado a lado.
+
+- **Numeração dos espaços** igual ao croqui: de 2 em 2, do caixa para a
+  entrada, esquerda antes da direita (1–2 perto do caixa, 11–12 perto da
+  entrada). O número aparece no tapume do mapa e flutuando sobre cada palete
+  na cena de detalhe.
+- **Endereço `espaço-produto`**: `3-2` é o produto 2 do espaço 3. O chip da
+  cena mostra `Ilha · espaço 3 · produto 2`, e a busca, `Espaço 3`.
+- **Estrutura fixa nº 22** na infra de estante (`local_tipo = 'estante'`,
+  slot sempre 0), com `nivel` = espaço (0–11) e `coluna` = produto (0–4) — sem
+  coluna nem tabela nova. Por isso busca, saldo, Modo Conferência e baixa
+  pela contagem já enxergam a ilha. Não confundir com os paletes soltos
+  (101+), cadastrados em runtime e sem maquete no mapa.
+- No carrossel de estantes ela vem depois dos expositores. Geometria (palete
+  PBR de 1,20 × 1,00 m, medidas reais) em `lib/ilha_paletes_scene.dart`; no
+  mapa ela entra em escala de planta (1,8 × 5,6 m) para deixar corredor dos
+  dois lados, e a rota do boneco funcionário passou a contorná-la.
 
 ## Galpão de racks
 
