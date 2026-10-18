@@ -261,6 +261,10 @@ class IlhaPaletesPainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 1.4;
 
+    // As etiquetas são desenhadas do fundo para a frente, como as faces: senão
+    // o número de um palete do fundo cai por cima das etiquetas da frente.
+    final etiquetas = <(Vec3, String, double, bool)>[];
+
     void badge(Vec3 pos, String texto, double base, {bool forte = false}) {
       final hit = proj.projetar(pos);
       if (hit == null) return;
@@ -292,15 +296,20 @@ class IlhaPaletesPainter extends CustomPainter {
     const yRotulo = IlhaPaletesGeometry.yTopo + 0.01;
     for (var e = 0; e < espacosIlhaPaletes; e++) {
       final o = IlhaPaletesGeometry.origemEspaco(e);
-      badge(
+      etiquetas.add((
         Vec3(o.x0 + IlhaPaletesGeometry.larguraPalete / 2,
             IlhaPaletesGeometry.yTopo + IlhaPaletesGeometry.hCaixa + 0.18,
             o.z0 + IlhaPaletesGeometry.profundidadePalete / 2),
-        '${espacoIlhaPaletes(e)}', 16, forte: true);
+        '${espacoIlhaPaletes(e)}', 16, true));
     }
     for (final c in IlhaPaletesGeometry.celulas()) {
-      badge(Vec3(c.xCenter, yRotulo, c.zMax - 0.08),
-          '${produtoIlhaPaletes(c.coluna)}', 9);
+      etiquetas.add((Vec3(c.xCenter, yRotulo, c.zMax - 0.08),
+          '${produtoIlhaPaletes(c.coluna)}', 9, false));
+    }
+    etiquetas.sort((a, b) =>
+        proj.profundidade(b.$1).compareTo(proj.profundidade(a.$1)));
+    for (final (pos, texto, base, forte) in etiquetas) {
+      badge(pos, texto, base, forte: forte);
     }
   }
 

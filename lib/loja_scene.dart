@@ -813,7 +813,7 @@ class LojaPainter extends CustomPainter {
             text: '${espacoIlhaPaletes(e)}',
             style: TextStyle(
               color:      const Color(0xCC0b2614),
-              fontSize:   12.0 * (9.0 / cz).clamp(0.6, 1.5),
+              fontSize:   20.0 * (9.0 / cz).clamp(0.6, 1.5),
               fontWeight: FontWeight.bold,
             ),
           ),
