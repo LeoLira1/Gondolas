@@ -392,6 +392,33 @@ class GalpaoService {
     }
   }
 
+  /// Onde [produtoCodigo] está AGORA no rack de [rackUuid], lido do banco:
+  /// item (com o item_uuid) ou principal (itemUuid null). Null quando o
+  /// produto não está mais no rack, ou a leitura falhou.
+  ///
+  /// É para quem grava em sequência a partir de uma leitura antiga (a baixa
+  /// automática): tirar o principal faz o item mais antigo subir a principal,
+  /// e o item_uuid dele deixa de existir.
+  Future<({String? itemUuid})?> localizarNoRack({
+    required String rackUuid,
+    required String produtoCodigo,
+  }) async {
+    try {
+      final rows = await TursoService().consultarDireto(
+        'SELECT item_uuid FROM galpao_rack_itens '
+        'WHERE rack_uuid = ? AND produto_codigo = ? '
+        'UNION ALL SELECT NULL FROM galpao_racks '
+        'WHERE rack_uuid = ? AND produto_codigo = ?',
+        parametros: [rackUuid, produtoCodigo, rackUuid, produtoCodigo],
+        tipo: 'galpao_produto_no_rack',
+      );
+      if (rows.isEmpty) return null;
+      return (itemUuid: rows.first['item_uuid'] as String?);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Tira UM produto do rack de [rackUuid] ([itemUuid] null é o principal).
   /// Se era o último produto do rack, o rack sai e a pilha desce — é o
   /// esvaziar de um rack comum. Ver pilhaAposRemoverProduto.

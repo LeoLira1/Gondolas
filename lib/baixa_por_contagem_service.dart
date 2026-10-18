@@ -521,19 +521,32 @@ class BaixaPorContagemService {
     // em teste.
     for (final a in ordenarGravacaoGalpao(plano.ajustes)) {
       if (a.endereco.rackUuid == null) return false;
+      // Item de rack misto: o plano de OUTRO produto do mesmo rack, gravado
+      // antes nesta passada, pode ter tirado o principal — e aí este item
+      // subiu a principal e o item_uuid lido no começo já não existe.
+      // Relê onde o produto está agora no rack.
+      var itemUuid = a.endereco.itemUuid;
+      if (itemUuid != null) {
+        final atual = await GalpaoService().localizarNoRack(
+          rackUuid: a.endereco.rackUuid!,
+          produtoCodigo: a.endereco.produtoCodigo,
+        );
+        if (atual == null) return false;
+        itemUuid = atual.itemUuid;
+      }
       // Zerar tira só ESTE produto do rack: num rack misto os outros ficam
       // no palete; sozinho no rack, é o rack saindo (e a pilha desce).
       final ok = a.esvazia
           ? await GalpaoService().removerProduto(
               rackUuid: a.endereco.rackUuid,
-              itemUuid: a.endereco.itemUuid,
+              itemUuid: itemUuid,
               posicao: a.endereco.localNum,
               ordem: a.endereco.andarOuNivel,
               origem: origemLog,
             )
           : await GalpaoService().ajustarQuantidade(
               rackUuid: a.endereco.rackUuid,
-              itemUuid: a.endereco.itemUuid,
+              itemUuid: itemUuid,
               posicao: a.endereco.localNum,
               ordem: a.endereco.andarOuNivel,
               quantidade: a.qtdNova,
