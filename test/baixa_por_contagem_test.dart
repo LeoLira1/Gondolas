@@ -99,6 +99,36 @@ void main() {
     });
   });
 
+  group('barracão', () {
+    test('conta na soma, mas a baixa nunca tira dele', () {
+      // Sistema 70, endereçado 30 na gôndola + 100 no barracão = 130: saem
+      // 60. A gôndola dá 30; os outros 30 ficam por cobrir — baixar só o
+      // espelho do palete do barracão era desfeito na próxima gravação dele.
+      final plano = planejarBaixa(
+        contagem:  contagem(sistema: 70),
+        enderecos: [gondola(3, 30), _endereco('barracao', 7, 100, nivel: 0)],
+      );
+
+      expect(plano.enderecadoAntes, 130);
+      expect(plano.ajustes.map((a) => a.endereco.localTipo), ['gondola']);
+      expect(plano.deduzido, 30);
+      expect(plano.naoCoberto, 30);
+      // Como em todo plano que não cobre o excesso inteiro, nada é gravado:
+      // o produto fica para uma pessoa resolver.
+      expect(plano.aplicavel, isFalse);
+    });
+
+    test('produto só no barracão não ganha ajuste nenhum', () {
+      final plano = planejarBaixa(
+        contagem:  contagem(sistema: 10),
+        enderecos: [_endereco('barracao', 7, 40, nivel: 0)],
+      );
+
+      expect(plano.ajustes, isEmpty);
+      expect(plano.naoCoberto, 30);
+    });
+  });
+
   group('de onde sai primeiro', () {
     test('a loja antes do galpão, e a gôndola antes da estante', () {
       final plano = planejarBaixa(

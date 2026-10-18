@@ -208,6 +208,23 @@ class Lotes(unittest.TestCase):
         self.assertEqual([(r[0], r[1], r[2]) for r in self.pilha()], [(1, 'u2', '200')])
         self.assertEqual(self.espelho(), [('200', 1, 7.5)])
 
+    def test_baixa_zera_principal_e_item_do_mesmo_rack(self):
+        # A baixa leu o rack com P (principal) e X (item i1) e zera os dois.
+        for n in ('l1', 'm1'):
+            self.assertIsNone(self.lote(n))
+        self.assertIsNone(self.lote('mTiraPrincipal'))      # P sai, X sobe
+        # O item_uuid lido antes não existe mais: é por isso que a baixa relê
+        # (GalpaoService.localizarNoRack) antes de gravar o item.
+        self.assertIn('GONDOLAS_CONFLITO:item_ausente', self.lote('mTiraItemDeNovo'))
+        achado = self.db.execute(
+            'SELECT item_uuid FROM galpao_rack_itens WHERE rack_uuid = ? AND produto_codigo = ? '
+            'UNION ALL SELECT NULL FROM galpao_racks WHERE rack_uuid = ? AND produto_codigo = ?',
+            ('u1', '501', 'u1', '501')).fetchall()
+        self.assertEqual(achado, [(None,)])                 # agora é o principal
+        self.assertIsNone(self.lote('mTiraPrincipal2'))     # e sai como principal
+        self.assertEqual(self.pilha(), [])
+        self.assertEqual(self.espelho(), [])
+
     def test_tirar_principal_de_rack_comum_e_esvaziar(self):
         for n in ('l1', 'l2', 'l3'):
             self.lote(n)

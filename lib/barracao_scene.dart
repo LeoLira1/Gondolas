@@ -7,6 +7,7 @@ import 'barracao_config.dart';
 import 'barracao_service.dart' show EnderecoBarracao;
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, ProjecaoCamera;
+import 'estocados_busca.dart' show chaveDestaque;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 
@@ -66,6 +67,7 @@ const Color _corDestaqueBorda = Color(0xFFffc98a);
 /// barracão inteiro.
 Color corBagBarracao({
   required String produtoCodigo,
+  String produtoNome = '',
   Map<String, Color> corPorProduto = const {},
   String? destacadoCodigo,
   bool modoConferencia = false,
@@ -77,7 +79,7 @@ Color corBagBarracao({
   }
   if (destacadoCodigo != null &&
       destacadoCodigo.isNotEmpty &&
-      produtoCodigo == destacadoCodigo) {
+      chaveDestaque(produtoCodigo, produtoNome) == destacadoCodigo) {
     return corCamdaBarracao;
   }
   return corPorProduto[produtoCodigo] ?? _corBagPadrao;
@@ -244,6 +246,7 @@ class BarracaoGeometry {
     const bz = BarracaoConfig.bagZ / 2;
     final cor = corBagBarracao(
       produtoCodigo:   e.produtoCodigo,
+      produtoNome:     e.produtoNome,
       corPorProduto:   corPorProduto,
       destacadoCodigo: destacadoCodigo,
       modoConferencia: modoConferencia,
@@ -507,7 +510,8 @@ class BarracaoPainter extends CustomPainter {
     for (final e in enderecos) {
       final sel = e.id == selecionadoId;
       final destacado =
-          codigoAceso != null && e.produtoCodigo == codigoAceso;
+          codigoAceso != null &&
+          chaveDestaque(e.produtoCodigo, e.produtoNome) == codigoAceso;
       if (!sel && !destacado && e.ocupado) continue;
 
       final contorno = _contornoDaCarga(proj, e);

@@ -143,12 +143,26 @@ class _BarracaoPageState extends State<BarracaoPage> {
     if (_persistindo) _fila.removeListener(_aoMudarFila);
     unawaited(_eventosFila?.cancel());
     _recargaAposFila?.cancel();
+    _recargaPorAviso?.cancel();
     _buscaCtrl.dispose();
     super.dispose();
   }
 
+  // Os avisos de dados novos chegam em rajada (uma volta ao app relê várias
+  // consultas); um respiro junta todos numa recarga só — o mesmo do galpão.
+  Timer? _recargaPorAviso;
+
   void _aoAtualizarDados() {
     if (!mounted || !_persistindo) return;
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(
+      const Duration(milliseconds: 800),
+      _recarregarPorAviso,
+    );
+  }
+
+  void _recarregarPorAviso() {
+    if (!mounted) return;
     unawaited(_carregarEnderecos());
     unawaited(_carregarCatalogo());
     if (_modoConferencia && _consultandoConferencia) {
@@ -394,7 +408,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
   void _escolherResultado(EnderecoBarracao e) {
     FocusScope.of(context).unfocus();
     setState(() {
-      _destacadoCodigo = e.produtoCodigo;
+      _destacadoCodigo = chaveDestaque(e.produtoCodigo, e.produtoNome);
       _selecionadoId   = e.id;
       _buscaCtrl.clear();
       _resultadosBusca = const [];
@@ -417,12 +431,17 @@ class _BarracaoPageState extends State<BarracaoPage> {
       return;
     }
     setState(() => _modoConferencia = true);
-    if (_consultandoConferencia) await _carregarConferencia();
+    if (_consultandoConferencia) await _carregarConferencia(forcar: true);
   }
 
-  Future<void> _carregarConferencia() async {
+  /// [forcar]: ligar o modo e o botão de atualizar leem o banco na hora; os
+  /// outros pedidos (aviso de dados novos, abertura pelo banner) aceitam a
+  /// conferência de menos de um minuto que o serviço guarda.
+  Future<void> _carregarConferencia({bool forcar = false}) async {
     setState(() => _carregandoConferencia = true);
-    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia(
+      forcar: forcar,
+    );
     if (!mounted) return;
     setState(() {
       _conferencia = resultado;
@@ -609,7 +628,8 @@ class _BarracaoPageState extends State<BarracaoPage> {
                     carregando: _carregandoConferencia,
                     resultado: _conferencia,
                     onRefresh: _carregandoConferencia || !_consultandoConferencia
-                        ? null : _carregarConferencia,
+                        ? null
+                        : () => _carregarConferencia(forcar: true),
                   ),
                 ),
               ),
@@ -698,7 +718,8 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final codigo = _destacadoCodigo;
     if (codigo == null) return '';
     for (final e in _enderecos) {
-      if (e.produtoCodigo == codigo && e.produtoNome.isNotEmpty) {
+      if (chaveDestaque(e.produtoCodigo, e.produtoNome) == codigo &&
+          e.produtoNome.isNotEmpty) {
         return e.produtoNome;
       }
     }
@@ -708,7 +729,9 @@ class _BarracaoPageState extends State<BarracaoPage> {
   int get _paletesComDestaque {
     final codigo = _destacadoCodigo;
     if (codigo == null) return 0;
-    return _enderecos.where((e) => e.produtoCodigo == codigo).length;
+    return _enderecos
+        .where((e) => chaveDestaque(e.produtoCodigo, e.produtoNome) == codigo)
+        .length;
   }
 }
 

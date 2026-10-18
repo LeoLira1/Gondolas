@@ -14,6 +14,11 @@ Future<List<ItemEstocado>> carregarEstocados({bool forceRefresh = false}) async 
     'SELECT * FROM materiais_terceiros WHERE saldo > 0 '
         'ORDER BY razao_social, descricao',
     forceRefresh: forceRefresh,
+    // Tabela do app Estocados, varrida inteira pelo filtro de saldo: o galpão
+    // e o barracão a pedem a cada abertura, e o botão de atualizar da lista
+    // continua indo ao banco na hora (forceRefresh).
+    janela: TursoService.janelaTabelaGrande,
+    somenteLeitura: true,
   );
   return rows.map(ItemEstocado.deLinha).toList();
 }

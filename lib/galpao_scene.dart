@@ -16,6 +16,7 @@ import 'gondola_scene.dart'
         luzCena,
         corEnderecoDivergente,
         corEnderecoDivergentePositiva;
+import 'estocados_busca.dart' show chaveDestaque;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 import 'textura_piso.dart';
@@ -145,6 +146,7 @@ const Color _corVazioFraco = Color(0x1FFFFFFF);
 /// casaria com ele e acenderia o galpão todo.
 Color corRackGalpao({
   required String produtoCodigo,
+  String produtoNome = '',
   Map<String, Color> corPorProduto = const {},
   String? destacadoCodigo,
   bool modoConferencia = false,
@@ -159,7 +161,7 @@ Color corRackGalpao({
   }
   if (destacadoCodigo != null &&
       destacadoCodigo.isNotEmpty &&
-      produtoCodigo == destacadoCodigo) {
+      chaveDestaque(produtoCodigo, produtoNome) == destacadoCodigo) {
     return corCamda;
   }
   if (mostrarSaldo) {
@@ -186,8 +188,9 @@ Color corDoRackGalpao(
   bool mostrarSaldo = false,
   Map<String, SaldoProduto> saldos = const {},
 }) {
-  Color cor(String codigo) => corRackGalpao(
-    produtoCodigo: codigo,
+  Color cor(ProdutoNoRack p) => corRackGalpao(
+    produtoCodigo: p.produtoCodigo,
+    produtoNome: p.produtoNome,
     corPorProduto: corPorProduto,
     destacadoCodigo: destacadoCodigo,
     modoConferencia: modoConferencia,
@@ -195,9 +198,9 @@ Color corDoRackGalpao(
     mostrarSaldo: mostrarSaldo,
     saldos: saldos,
   );
-  final principal = cor(rack.produtoCodigo);
+  final principal = cor(rack.produtos.first);
   if (!rack.misto) return principal;
-  final cores = [for (final p in rack.produtos) cor(p.produtoCodigo)];
+  final cores = [for (final p in rack.produtos) cor(p)];
   for (final alerta in [
     if (modoConferencia) corConferenciaCiano,
     if (!modoConferencia) corCamda,
@@ -446,7 +449,11 @@ class GalpaoPainter extends CustomPainter {
           final destacadoAceso =
               !modoConferencia &&
               codigoAceso != null &&
-              rack.contem(codigoAceso);
+              rack.produtos.any(
+                (p) =>
+                    chaveDestaque(p.produtoCodigo, p.produtoNome) ==
+                    codigoAceso,
+              );
           _desenharCubo(
             canvas,
             proj,

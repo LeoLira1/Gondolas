@@ -40,7 +40,6 @@ void main() {
       const url = 'libsql://teste-dialogo-cache';
       SharedPreferences.setMockInitialValues({
         TursoService.keyDbUrl: url,
-        TursoService.keyCacheLocal: true,
         'consulta_v1_${idBanco(url)}_quantidades_detalhes_v2': jsonEncode([
           {
             'id': 1,

@@ -9,6 +9,7 @@ import 'configuracao_page.dart';
 import 'estante_edr300_scene.dart';
 import 'estante_parede_scene.dart';
 import 'estante_scene.dart';
+import 'estocados_busca.dart' show chaveDestaque;
 import 'estoque_localizado_service.dart';
 import 'fila_gravacao.dart';
 import 'expositor_magnojet_scene.dart';
@@ -18,6 +19,7 @@ import 'galpao_page.dart';
 import 'galpao_scene.dart' show corCamda;
 import 'gondola_scene.dart';
 import 'ilha_paletes_scene.dart';
+import 'layouts_copia.dart' show ResultadoSalvarLayout;
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
 import 'models.dart';
@@ -144,8 +146,20 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // O Android pode matar o app em segundo plano: o diagnóstico de leituras
+    // grava o que contou antes disso, e o que as leituras ainda no ar
+    // contarem depois grava na hora.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      TursoService().leituras.emPrimeiroPlano = false;
+    }
     if (state == AppLifecycleState.resumed) {
+      TursoService().leituras.emPrimeiroPlano = true;
       unawaited(TursoService().atualizarConsultas());
+      // A confirmação de contagem é feita no app Contagem: quem confere sai
+      // daqui e volta. A conferência do dia em memória deixa de valer.
+      ModoConferenciaService().esquecer();
       // Voltar ao app costuma ser voltar ao sinal: a gravação que estava
       // esperando a próxima tentativa vai já.
       FilaGravacao().tentarAgora();
@@ -183,6 +197,9 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       // Junto do prewarm: a baixa é a primeira coisa que precisa acontecer no
       // dia, porque é ela que tira do mapa o azul do que já foi vendido. Roda
       // sozinha e sem segurar a tela — o mapa abre enquanto ela trabalha.
+      // Só no mapa da abertura: o "Ver no mapa" das prateleiras empilha outra
+      // LojaPage, e a baixa já roda na abertura do app e na do galpão.
+      if (widget.itemTipoInicial != null) return null;
       return _rodarBaixaAutomatica();
     }));
 
@@ -231,7 +248,11 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
   }
 
   void _atualizarBuscaVisivel() {
-    if (mounted && _searchCtrl.text.trim().length >= 2) {
+    // Só com a loja no topo da pilha: a LojaPage embaixo de uma prateleira
+    // guarda no campo o produto escolhido e refazia a busca a cada aviso, sem
+    // ninguém vendo. Ao voltar para ela, a próxima tecla busca de novo.
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+    if (_searchCtrl.text.trim().length >= 2) {
       _onSearchChanged(_searchCtrl.text);
     }
   }
@@ -336,14 +357,18 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => GalpaoPage(
           posicaoInicial:  numero,
-          codigoDestacado: produto?.produtoCodigo,
+          codigoDestacado: produto == null
+              ? null
+              : chaveDestaque(produto.produtoCodigo, produto.nome),
         ),
       ));
     } else if (tipo == localTipoBarracao) {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => BarracaoPage(
           enderecoInicialId: numero,
-          codigoDestacado: produto?.produtoCodigo,
+          codigoDestacado: produto == null
+              ? null
+              : chaveDestaque(produto.produtoCodigo, produto.nome),
         ),
       ));
     } else if (tipo == 'gondola') {
@@ -385,12 +410,19 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       _selecionadoIdx     = null;
       _produtoSelecionado = null;
     });
-    await _carregarConferencia();
+    await _carregarConferencia(forcar: true);
   }
 
-  Future<void> _carregarConferencia() async {
+  /// [forcar]: ligar o modo, o botão de atualizar e o Sincronizar leem o
+  /// banco na hora. A volta de uma estrutura aceita a conferência de menos
+  /// de um minuto que o serviço guarda — antes, cada volta varria
+  /// contagem_itens inteira (a volta ao app esquece a guardada, porque a
+  /// confirmação é feita no app de contagem).
+  Future<void> _carregarConferencia({bool forcar = false}) async {
     setState(() => _carregandoConferencia = true);
-    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia(
+      forcar: forcar,
+    );
     if (!mounted) return;
     setState(() {
       _conferencia           = resultado;
@@ -538,7 +570,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       duration: Duration(
           seconds: ok ? (TursoService().ultimoAvisoSync != null ? 6 : 2) : 6),
     ));
-    if (ok && _modoConferencia) _carregarConferencia();
+    if (ok && _modoConferencia) _carregarConferencia(forcar: true);
   }
 
   void _mostrarForaDoMapa() {
@@ -748,7 +780,7 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                         child: _BannerConferencia(
                           carregando: _carregandoConferencia,
                           resultado:  _conferencia,
-                          onRefresh:  _carregarConferencia,
+                          onRefresh:  () => _carregarConferencia(forcar: true),
                           onVerSemEndereco: _mostrarSemEndereco,
                           foraDoMapa: _estruturasForaDoMapa,
                           onVerForaDoMapa: _mostrarForaDoMapa,
@@ -1639,6 +1671,63 @@ class _LocationCard extends StatelessWidget {
 // GondolaPage
 // ══════════════════════════════════════════════════════════════════════════════
 
+/// O que fazer quando outro aparelho salvou a mesma estrutura durante a
+/// edição (ver [ResultadoSalvarLayout.conflito]).
+enum EscolhaConflitoLayout { recarregar, salvarPorCima }
+
+/// Pergunta o que fazer com a edição quando o banco mudou por baixo dela.
+/// [estrutura] é o sujeito da frase ("Esta gôndola", "Esta estante"). Null
+/// é fechar sem escolher: a edição fica na tela, sem gravar.
+Future<EscolhaConflitoLayout?> perguntarConflitoDeLayout(
+  BuildContext context,
+  String estrutura,
+) => showDialog<EscolhaConflitoLayout>(
+  context: context,
+  builder: (ctx) => AlertDialog(
+    backgroundColor: const Color(0xFF141a22),
+    surfaceTintColor: Colors.transparent,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    title: const Text(
+      'Alterada em outro aparelho',
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    content: Text(
+      '$estrutura foi alterada em outro aparelho enquanto você editava.\n\n'
+      'Recarregar mostra como ela está agora e descarta a sua edição. '
+      'Salvar por cima grava a sua edição e apaga a do outro aparelho.',
+      style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 13),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(ctx),
+        child: const Text(
+          'Cancelar',
+          style: TextStyle(color: Color(0xFF8a9aa8)),
+        ),
+      ),
+      TextButton(
+        onPressed: () => Navigator.pop(ctx, EscolhaConflitoLayout.recarregar),
+        child: const Text(
+          'Recarregar',
+          style: TextStyle(color: Color(0xFF4a9d6a)),
+        ),
+      ),
+      TextButton(
+        onPressed: () =>
+            Navigator.pop(ctx, EscolhaConflitoLayout.salvarPorCima),
+        child: const Text(
+          'Salvar por cima',
+          style: TextStyle(color: Color(0xFFe57373)),
+        ),
+      ),
+    ],
+  ),
+);
+
 class GondolaPage extends StatefulWidget {
   final int          gondolaInicial;
   final ProdutoLoja? produtoDestacado;
@@ -1657,7 +1746,8 @@ class GondolaPage extends StatefulWidget {
   State<GondolaPage> createState() => _GondolaPageState();
 }
 
-class _GondolaPageState extends State<GondolaPage> {
+class _GondolaPageState extends State<GondolaPage>
+    with WidgetsBindingObserver {
   late int _gondolaAtual;
   String? _produtoSelecionadoId;
   String? _destacadoCodigo;
@@ -1675,6 +1765,19 @@ class _GondolaPageState extends State<GondolaPage> {
 
   final Set<int> _editadas = {};
   final Map<int, List<CaixaColocada>> _caixas = {};
+
+  // O layout de cada gôndola como veio do serviço (antes do clamp da cena),
+  // guardado só enquanto ela não está sendo editada: é a BASE que o salvar
+  // confere com o banco, para não apagar o que outro aparelho gravou no meio
+  // da edição.
+  final Map<int, List<CaixaLayout>> _base = {};
+
+  // Gôndolas que não carregaram (sem rede e sem cópia) e já foram avisadas.
+  final Set<int> _avisadasSemLayout = {};
+
+  // Outra tela por cima (Ver no mapa, ⚙️): esta fica parada — não relê nada
+  // a cada aviso de dados — e se recarrega ao voltar.
+  bool _coberta = false;
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
   // e recarregado após salvar no dialog de quantidade.
@@ -1768,21 +1871,70 @@ class _GondolaPageState extends State<GondolaPage> {
     _destacadosCodigos  = widget.codigosConferencia ?? {};
     _inicializar();
     TursoService().dataRevision.addListener(_aoAtualizarDados);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    _recargaPorAviso?.cancel();
     _highlightTimer?.cancel();
     _ctrl1.dispose();
     _ctrl2.dispose();
     super.dispose();
   }
 
+  // A volta ao app não relê mais os layouts nem as contagens de tudo o que
+  // foi aberto na sessão (ver releNaVolta em ConsultaCache): é a tela à vista
+  // que relê a própria gôndola e os selos.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Só volta de verdade (app em segundo plano, tela bloqueada) relê: puxar
+    // a cortina de notificações também passa por inactive → resumed, e cada
+    // puxada relia a gôndola.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _saiuDoApp = true;
+      return;
+    }
+    if (state != AppLifecycleState.resumed || !_saiuDoApp) return;
+    _saiuDoApp = false;
+    if (!mounted || _coberta) return;
+    _carregarLayout(_gondolaAtual);
+    unawaited(_carregarDesatualizados(atualizarSeVencida: true));
+  }
+
+  bool _saiuDoApp = false;
+
+  /// Abre [pagina] por cima desta e a deixa parada até voltar: com a gôndola
+  /// escondida, cada aviso de dados relia o layout dela e mantinha as cópias
+  /// dos selos quentes sem ninguém olhando. Na volta, recarrega tudo da cópia.
+  Future<void> _abrirPorCima(Widget pagina) async {
+    _recargaPorAviso?.cancel();
+    _coberta = true;
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(builder: (_) => pagina),
+      );
+    } finally {
+      _coberta = false;
+    }
+    if (!mounted) return;
+    _caixas.removeWhere((k, _) => k != _gondolaAtual && !_editadas.contains(k));
+    _carregarLayout(_gondolaAtual);
+    unawaited(_carregarDesatualizados());
+    unawaited(_carregarCatalogo());
+  }
+
   Future<void> _inicializar() async {
     setState(() {
       _carregandoProdutos = true;
       _dbConectado        = false;
+      // A gôndola já está na cópia de layouts (a pré-carga a trouxe): a cena
+      // abre com ela na hora, e a releitura abaixo só a confere.
+      _carregandoLayout   = !_semearDoCache(_gondolaAtual);
     });
 
     unawaited(_carregarLayout(_gondolaAtual));
@@ -1830,22 +1982,46 @@ class _GondolaPageState extends State<GondolaPage> {
   // caminho de recarga pós-sync — o botão Sincronizar não chama _inicializar,
   // senão tudo rodaria em dobro.
   void _aoAtualizarDados() {
-    if (!mounted) return;
+    if (!mounted || _coberta) return;
     // Descarta só as OUTRAS estruturas: limpar a atual aqui (fora de setState,
     // com o reload assíncrono) daria um frame com a gôndola vazia.
     _caixas.removeWhere((k, _) => k != _gondolaAtual && !_editadas.contains(k));
     _carregarLayout(_gondolaAtual);
-    unawaited(_carregarDesatualizados(forceRefresh: true));
-    // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
-    // era o que o _inicializar do botão Sincronizar fazia.
-    unawaited(_carregarCatalogo());
+    _agendarSelosECatalogo();
   }
 
-  Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
+  // Selos e catálogo esperam a rajada de avisos passar. Antes cada aviso
+  // forçava as duas consultas dos selos — tabelas inteiras — e um Salvar de N
+  // linhas no diálogo dava N+1 rodadas, em cada tela empilhada. Os selos
+  // agora saem das cópias (ver fetchEnderecosDesatualizados): recalcular não
+  // vai ao banco, e o Sincronizar já relê as cópias antes de avisar.
+  Timer? _recargaPorAviso;
+
+  void _agendarSelosECatalogo() {
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(const Duration(milliseconds: 800), () {
+      if (!mounted) return;
+      unawaited(_carregarDesatualizados());
+      // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
+      // era o que o _inicializar do botão Sincronizar fazia.
+      unawaited(_carregarCatalogo());
+    });
+  }
+
+  Future<void> _carregarDesatualizados({
+    bool forceRefresh = false,
+    bool atualizarSeVencida = false,
+  }) async {
     final servico = EstoqueLocalizadoService();
     final resultados = await Future.wait([
-      servico.fetchEnderecosDesatualizados(forceRefresh: forceRefresh),
-      servico.fetchEnderecosDivergentes(forceRefresh: forceRefresh),
+      servico.fetchEnderecosDesatualizados(
+        forceRefresh: forceRefresh,
+        atualizarSeVencida: atualizarSeVencida,
+      ),
+      servico.fetchEnderecosDivergentes(
+        forceRefresh: forceRefresh,
+        atualizarSeVencida: atualizarSeVencida,
+      ),
     ]);
     if (!mounted) return;
     setState(() {
@@ -1890,6 +2066,8 @@ class _GondolaPageState extends State<GondolaPage> {
   /// nomes que vem nas próprias linhas. Deve ser chamado de dentro de setState.
   void _aplicarLayout(int gondolaNum, List<CaixaLayout> layouts) {
     if (_editadas.contains(gondolaNum)) return;
+    _base[gondolaNum] = layouts;
+    _avisadasSemLayout.remove(gondolaNum);
     _caixas[gondolaNum] = layouts.map(_caixaDoLayout).toList();
     if (gondolaNum == _gondolaAtual) {
       _hexDoLayout   = {for (final l in layouts) l.produtoCodigo: l.corHex};
@@ -1913,14 +2091,70 @@ class _GondolaPageState extends State<GondolaPage> {
     );
   }
 
-  Future<void> _carregarLayout(int gondolaNum) async {
-    final layouts = await TursoService().fetchLayout(gondolaNum);
+  Future<void> _carregarLayout(
+    int gondolaNum, {
+    bool forceRefresh = false,
+  }) async {
+    final List<CaixaLayout> layouts;
+    try {
+      layouts = await TursoService().fetchLayout(
+        gondolaNum,
+        forceRefresh: forceRefresh,
+      );
+    } catch (_) {
+      // Sem rede e sem cópia: nada se sabe desta gôndola. Mostrá-la vazia
+      // deixaria um "Salvar layout" apagar a de verdade, então ela fica sem
+      // caixas e sem edição até carregar.
+      if (!mounted || gondolaNum != _gondolaAtual) return;
+      if (_carregandoLayout) setState(() => _carregandoLayout = false);
+      if (!_layoutCarregado(gondolaNum)) _avisarSemLayout(gondolaNum);
+      return;
+    }
     if (!mounted || _salvando || _editadas.contains(gondolaNum)) return;
     setState(() => _aplicarLayout(gondolaNum, layouts));
   }
 
+  /// A gôndola está na tela como ela é (lida do banco ou da cópia) ou já em
+  /// edição. Antes disso, nenhuma edição: ver [_carregarLayout].
+  bool _layoutCarregado(int gondolaNum) =>
+      _caixas.containsKey(gondolaNum) || _editadas.contains(gondolaNum);
+
+  /// Avisa uma vez por gôndola que o layout não carregou. Devolve true quando
+  /// ele não está carregado (para quem ia editar desistir).
+  bool _semLayoutParaEditar() {
+    if (_layoutCarregado(_gondolaAtual)) return false;
+    if (_carregandoLayout) {
+      _avisarAindaCarregando();
+      return true;
+    }
+    _avisadasSemLayout.remove(_gondolaAtual);
+    _avisarSemLayout(_gondolaAtual);
+    return true;
+  }
+
+  void _avisarAindaCarregando() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('O layout ainda está carregando — um instante.'),
+      backgroundColor: Color(0xFF1a3040),
+      duration: Duration(seconds: 2),
+    ));
+  }
+
+  void _avisarSemLayout(int gondolaNum) {
+    if (!_avisadasSemLayout.add(gondolaNum)) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text(
+        'Não foi possível carregar o layout desta gôndola. '
+        'Confira a conexão — sem ele, a edição fica bloqueada.',
+      ),
+      backgroundColor: Color(0xFF8b1a1a),
+      duration: Duration(seconds: 4),
+    ));
+  }
+
   void _onTapAndar(int andar, double x, double z) {
     if (_salvando || _produtoSelecionadoId == null) return;
+    if (_semLayoutParaEditar()) return;
     final nova = CaixaColocada(
       andar:     andar,
       produtoId: _produtoSelecionadoId!,
@@ -2030,14 +2264,16 @@ class _GondolaPageState extends State<GondolaPage> {
     _carregarDesatualizados();
   }
 
-  void _limparGondola() => setState(() {
-    if (_salvando) return;
-    _editadas.add(_gondolaAtual);
-    _caixas.remove(_gondolaAtual);
-  });
+  void _limparGondola() {
+    if (_salvando || _semLayoutParaEditar()) return;
+    setState(() {
+      _editadas.add(_gondolaAtual);
+      _caixas.remove(_gondolaAtual);
+    });
+  }
 
   void _limparPorProduto(String produtoId) {
-    if (_salvando) return;
+    if (_salvando || _semLayoutParaEditar()) return;
     setState(() {
       _editadas.add(_gondolaAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
@@ -2050,6 +2286,7 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   void _mostrarDialogLimpar() {
+    if (_semLayoutParaEditar()) return;
     final produtos = produtosComCaixa(
       idsComCaixa: _caixasAtuais.map((c) => c.produtoId),
       catalogo:    _catalogoAtual,
@@ -2123,8 +2360,10 @@ class _GondolaPageState extends State<GondolaPage> {
     );
   }
 
-  Future<void> _salvarLayout() async {
-    if (_salvando) return;
+  /// [sobrescrever]: a pessoa viu o aviso de que outro aparelho mudou a
+  /// gôndola e escolheu "Salvar por cima".
+  Future<void> _salvarLayout({bool sobrescrever = false}) async {
+    if (_salvando || _semLayoutParaEditar()) return;
     if (!_dbConectado) {
       await TursoService().init();
       if (!mounted) return;
@@ -2158,33 +2397,53 @@ class _GondolaPageState extends State<GondolaPage> {
       );
     }).toList();
 
-    // Produtos que estavam no layout PERSISTIDO e saíram nesta edição: os
-    // endereços ZERADOS deles nesta gôndola são apagados junto (quantidades
-    // > 0 são estoque contado e só somem pela lixeira do dialog).
-    //
-    // Tem de ser o layout persistido, não `_caixasAtuais`: este último é a
-    // edição em curso, e comparado consigo mesmo nunca acusaria remoção
-    // nenhuma. O cache do serviço guarda exatamente as linhas persistidas, daí
-    // dar para pular a releitura quando ele está quente.
-    final persistido = TursoService().layoutEmCache(_gondolaAtual) ??
-        await TursoService().fetchLayout(_gondolaAtual);
-    final antes = persistido.map((c) => c.produtoCodigo).toSet();
-
-    final ok = await TursoService().salvarLayout(_gondolaAtual, itens);
-    if (ok) {
-      _editadas.remove(_gondolaAtual);
+    final numero = _gondolaAtual;
+    final r = await TursoService().salvarLayout(
+      numero,
+      itens,
+      base: _base[numero] ?? const [],
+      sobrescrever: sobrescrever,
+    );
+    if (r.resultado == ResultadoSalvarLayout.salvo) {
+      _editadas.remove(numero);
+      _base[numero] = itens;
+      if (mounted) setState(() => _caixas.putIfAbsent(numero, () => []));
+      // Produtos que estavam no banco logo antes do salvamento (lidos na
+      // própria transação) e saíram nesta edição: os endereços ZERADOS deles
+      // nesta gôndola são apagados junto (quantidades > 0 são estoque contado
+      // e só somem pela lixeira do dialog).
       final depois = itens.map((i) => i.produtoCodigo).toSet();
-      for (final codigo in antes.difference(depois)) {
+      for (final codigo in r.codigosAntes.difference(depois)) {
         await EstoqueLocalizadoService().deleteEnderecosZerados(
           produtoCodigo: codigo,
           localTipo:     'gondola',
-          localNum:      _gondolaAtual,
+          localNum:      numero,
         );
       }
     }
     if (!mounted) return;
     setState(() => _salvando = false);
 
+    if (r.resultado == ResultadoSalvarLayout.conflito) {
+      final escolha = await perguntarConflitoDeLayout(context, 'Esta gôndola');
+      if (!mounted) return;
+      // A pessoa decide sobre a gôndola que deu conflito; se a tela já está
+      // em outra, nada é gravado (a edição continua na gôndola dela).
+      if (escolha == EscolhaConflitoLayout.salvarPorCima &&
+          numero == _gondolaAtual) {
+        await _salvarLayout(sobrescrever: true);
+      } else if (escolha == EscolhaConflitoLayout.recarregar) {
+        setState(() {
+          _editadas.remove(numero);
+          _caixas.remove(numero);
+          _carregandoLayout = numero == _gondolaAtual;
+        });
+        await _carregarLayout(numero, forceRefresh: true);
+      }
+      return;
+    }
+
+    final ok = r.resultado == ResultadoSalvarLayout.salvo;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok ? 'Layout salvo ✓' : 'Gravação não confirmada. Verifique a conexão e tente salvar novamente.'),
       backgroundColor: ok ? const Color(0xFF2e6b46) : const Color(0xFF8b1a1a),
@@ -2220,6 +2479,8 @@ class _GondolaPageState extends State<GondolaPage> {
   }
 
   Future<void> _buscarProduto(Produto produto) async {
+    // Sem trocar de estrutura no meio de um salvamento (ver _trocarGondola).
+    if (_salvando) return;
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Configure o banco em ⚙️ para buscar no Turso'),
@@ -2286,13 +2547,24 @@ class _GondolaPageState extends State<GondolaPage> {
     // Navigate to the gondola and load its layout
     setState(() {
       _gondolaAtual     = encontrado.gondolaNum;
-      _carregandoLayout = true;
+      _carregandoLayout = !_semearDoCache(encontrado.gondolaNum);
       _expanderAberto   = null;
       _sugestoes2       = [];
     });
     _ctrl2.clear();
 
-    final layouts = await TursoService().fetchLayout(encontrado.gondolaNum);
+    final List<CaixaLayout> layouts;
+    try {
+      layouts = await TursoService().fetchLayout(encontrado.gondolaNum);
+    } catch (_) {
+      // Sem rede e sem cópia: ver _carregarLayout.
+      if (!mounted) return;
+      setState(() => _carregandoLayout = false);
+      if (!_layoutCarregado(encontrado.gondolaNum)) {
+        _avisarSemLayout(encontrado.gondolaNum);
+      }
+      return;
+    }
     if (!mounted) return;
 
     _highlightTimer?.cancel();
@@ -2361,14 +2633,25 @@ class _GondolaPageState extends State<GondolaPage> {
 
   Future<void> _abrirConfiguracoes() async {
     if (_salvando) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
-    );
+    // Parada enquanto ⚙️ está por cima (ver _abrirPorCima): a volta abaixo
+    // recomeça a tela do zero.
+    _recargaPorAviso?.cancel();
+    _coberta = true;
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
+      );
+    } finally {
+      _coberta = false;
+    }
+    if (!mounted) return;
     // Reset after possible credential change
     setState(() {
       _editadas.clear();
       _caixas.clear();
+      _base.clear();
+      _avisadasSemLayout.clear();
       _produtoSelecionadoId = null;
       _produtoChip          = null;
       _expanderAberto       = null;
@@ -2447,13 +2730,10 @@ class _GondolaPageState extends State<GondolaPage> {
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
             tooltip: 'Ver no mapa',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => LojaPage(
-                  itemTipoInicial:   'gondola',
-                  itemNumeroInicial: _gondolaAtual,
-                ),
+            onPressed: () => _abrirPorCima(
+              LojaPage(
+                itemTipoInicial:   'gondola',
+                itemNumeroInicial: _gondolaAtual,
               ),
             ),
           ),
@@ -2632,7 +2912,7 @@ class _GondolaPageState extends State<GondolaPage> {
                   ),
                   const Spacer(),
                   ElevatedButton.icon(
-                    onPressed: _salvando ? null : _salvarLayout,
+                    onPressed: _salvando ? null : () => _salvarLayout(),
                     icon: _salvando
                         ? const SizedBox(
                             width: 14,
@@ -3163,7 +3443,8 @@ class EstantePage extends StatefulWidget {
   State<EstantePage> createState() => _EstantePageState();
 }
 
-class _EstantePageState extends State<EstantePage> {
+class _EstantePageState extends State<EstantePage>
+    with WidgetsBindingObserver {
   int     _estanteAtual        = 1;
   String? _produtoSelecionadoId;
   String? _destacadoCodigo;
@@ -3177,6 +3458,12 @@ class _EstantePageState extends State<EstantePage> {
 
   final Set<int> _editadas = {};
   final Map<int, List<CaixaColocadaEstante>> _caixas = {};
+
+  // Ver os gêmeos em _GondolaPageState: a base que o salvar confere com o
+  // banco, os avisos de layout que não carregou e a tela coberta.
+  final Map<int, List<CaixaLayoutEstante>> _base = {};
+  final Set<int> _avisadasSemLayout = {};
+  bool _coberta = false;
 
   // Endereços desatualizados (Fase 2) — carregado uma vez ao abrir a página
   // e recarregado após salvar no dialog de quantidade.
@@ -3258,11 +3545,14 @@ class _EstantePageState extends State<EstantePage> {
     _destacadosCodigos = widget.codigosConferencia ?? {};
     _inicializar();
     TursoService().dataRevision.addListener(_aoAtualizarDados);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     TursoService().dataRevision.removeListener(_aoAtualizarDados);
+    _recargaPorAviso?.cancel();
     _highlightTimer?.cancel();
     _ctrl1.dispose();
     _ctrl2.dispose();
@@ -3273,6 +3563,8 @@ class _EstantePageState extends State<EstantePage> {
     setState(() {
       _carregandoProdutos = true;
       _dbConectado        = false;
+      // Ver o gêmeo em _GondolaPageState.
+      _carregandoLayout   = !_semearDoCache(_estanteAtual);
     });
 
     unawaited(_carregarLayout(_estanteAtual));
@@ -3313,18 +3605,75 @@ class _EstantePageState extends State<EstantePage> {
   // ou botão Sincronizar) traz dados novos, sem travar a abertura. É o ÚNICO
   // caminho de recarga pós-sync — ver a nota do gêmeo em _GondolaPageState.
   void _aoAtualizarDados() {
+    if (!mounted || _coberta) return;
+    _caixas.removeWhere((k, _) => k != _estanteAtual && !_editadas.contains(k));
+    _carregarLayout(_estanteAtual);
+    _agendarSelosECatalogo();
+  }
+
+  // Ver o gêmeo em _GondolaPageState.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _saiuDoApp = true;
+      return;
+    }
+    if (state != AppLifecycleState.resumed || !_saiuDoApp) return;
+    _saiuDoApp = false;
+    if (!mounted || _coberta) return;
+    _carregarLayout(_estanteAtual);
+    unawaited(_carregarDesatualizados(atualizarSeVencida: true));
+  }
+
+  bool _saiuDoApp = false;
+
+  // Ver o gêmeo em _GondolaPageState.
+  Future<void> _abrirPorCima(Widget pagina) async {
+    _recargaPorAviso?.cancel();
+    _coberta = true;
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(builder: (_) => pagina),
+      );
+    } finally {
+      _coberta = false;
+    }
     if (!mounted) return;
     _caixas.removeWhere((k, _) => k != _estanteAtual && !_editadas.contains(k));
     _carregarLayout(_estanteAtual);
-    unawaited(_carregarDesatualizados(forceRefresh: true));
+    unawaited(_carregarDesatualizados());
     unawaited(_carregarCatalogo());
   }
 
-  Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
+  // Ver o gêmeo em _GondolaPageState: selos e catálogo esperam a rajada de
+  // avisos, e saem das cópias.
+  Timer? _recargaPorAviso;
+
+  void _agendarSelosECatalogo() {
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(const Duration(milliseconds: 800), () {
+      if (!mounted) return;
+      unawaited(_carregarDesatualizados());
+      unawaited(_carregarCatalogo());
+    });
+  }
+
+  Future<void> _carregarDesatualizados({
+    bool forceRefresh = false,
+    bool atualizarSeVencida = false,
+  }) async {
     final servico = EstoqueLocalizadoService();
     final resultados = await Future.wait([
-      servico.fetchEnderecosDesatualizados(forceRefresh: forceRefresh),
-      servico.fetchEnderecosDivergentes(forceRefresh: forceRefresh),
+      servico.fetchEnderecosDesatualizados(
+        forceRefresh: forceRefresh,
+        atualizarSeVencida: atualizarSeVencida,
+      ),
+      servico.fetchEnderecosDivergentes(
+        forceRefresh: forceRefresh,
+        atualizarSeVencida: atualizarSeVencida,
+      ),
     ]);
     if (!mounted) return;
     setState(() {
@@ -3377,6 +3726,8 @@ class _EstantePageState extends State<EstantePage> {
   /// nelas. Chamar de dentro de setState.
   void _aplicarLayout(int estanteNum, List<CaixaLayoutEstante> layouts) {
     if (_editadas.contains(estanteNum)) return;
+    _base[estanteNum] = layouts;
+    _avisadasSemLayout.remove(estanteNum);
     _caixas[estanteNum] = layouts
         .map((l) => CaixaColocadaEstante(
               coluna:    l.coluna,
@@ -3393,10 +3744,60 @@ class _EstantePageState extends State<EstantePage> {
     }
   }
 
-  Future<void> _carregarLayout(int estanteNum) async {
-    final layouts = await TursoService().fetchLayoutEstante(estanteNum);
+  Future<void> _carregarLayout(
+    int estanteNum, {
+    bool forceRefresh = false,
+  }) async {
+    final List<CaixaLayoutEstante> layouts;
+    try {
+      layouts = await TursoService().fetchLayoutEstante(
+        estanteNum,
+        forceRefresh: forceRefresh,
+      );
+    } catch (_) {
+      // Ver o gêmeo em _GondolaPageState: sem rede e sem cópia, a estante não
+      // aparece vazia nem fica editável.
+      if (!mounted || estanteNum != _estanteAtual) return;
+      if (_carregandoLayout) setState(() => _carregandoLayout = false);
+      if (!_layoutCarregado(estanteNum)) _avisarSemLayout(estanteNum);
+      return;
+    }
     if (!mounted || _salvando || _editadas.contains(estanteNum)) return;
     setState(() => _aplicarLayout(estanteNum, layouts));
+  }
+
+  bool _layoutCarregado(int estanteNum) =>
+      _caixas.containsKey(estanteNum) || _editadas.contains(estanteNum);
+
+  bool _semLayoutParaEditar() {
+    if (_layoutCarregado(_estanteAtual)) return false;
+    if (_carregandoLayout) {
+      _avisarAindaCarregando();
+      return true;
+    }
+    _avisadasSemLayout.remove(_estanteAtual);
+    _avisarSemLayout(_estanteAtual);
+    return true;
+  }
+
+  void _avisarAindaCarregando() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('O layout ainda está carregando — um instante.'),
+      backgroundColor: Color(0xFF1a3040),
+      duration: Duration(seconds: 2),
+    ));
+  }
+
+  void _avisarSemLayout(int estanteNum) {
+    if (!_avisadasSemLayout.add(estanteNum)) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text(
+        'Não foi possível carregar o layout desta estante. '
+        'Confira a conexão — sem ele, a edição fica bloqueada.',
+      ),
+      backgroundColor: Color(0xFF8b1a1a),
+      duration: Duration(seconds: 4),
+    ));
   }
 
   ({int maxSlots, double xMin, double wCaixa, double gap}) _geometriaCelula(
@@ -3606,6 +4007,7 @@ class _EstantePageState extends State<EstantePage> {
 
   void _onTapCelula(int coluna, int nivel, double hx) {
     if (_salvando || _produtoSelecionadoId == null) return;
+    if (_semLayoutParaEditar()) return;
 
     final geo = _geometriaCelula(coluna, nivel);
     final maxSlots = geo.maxSlots;
@@ -3658,14 +4060,16 @@ class _EstantePageState extends State<EstantePage> {
     });
   }
 
-  void _limparEstante() => setState(() {
-    if (_salvando) return;
-    _editadas.add(_estanteAtual);
-    _caixas.remove(_estanteAtual);
-  });
+  void _limparEstante() {
+    if (_salvando || _semLayoutParaEditar()) return;
+    setState(() {
+      _editadas.add(_estanteAtual);
+      _caixas.remove(_estanteAtual);
+    });
+  }
 
   void _limparEstantePorProduto(String produtoId) {
-    if (_salvando) return;
+    if (_salvando || _semLayoutParaEditar()) return;
     setState(() {
       _editadas.add(_estanteAtual);
       final restantes = _caixasAtuais.where((c) => c.produtoId != produtoId).toList();
@@ -3678,6 +4082,7 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   void _mostrarDialogLimparEstante() {
+    if (_semLayoutParaEditar()) return;
     final produtos = produtosComCaixa(
       idsComCaixa: _caixasAtuais.map((c) => c.produtoId),
       catalogo:    _catalogoAtual,
@@ -3751,8 +4156,9 @@ class _EstantePageState extends State<EstantePage> {
     );
   }
 
-  Future<void> _salvarLayout() async {
-    if (_salvando) return;
+  /// Ver o gêmeo em _GondolaPageState.
+  Future<void> _salvarLayout({bool sobrescrever = false}) async {
+    if (_salvando || _semLayoutParaEditar()) return;
     if (!_dbConectado) {
       await TursoService().init();
       if (!mounted) return;
@@ -3784,30 +4190,57 @@ class _EstantePageState extends State<EstantePage> {
       );
     }).toList();
 
-    // Produtos que estavam no layout PERSISTIDO e saíram nesta edição: os
-    // endereços ZERADOS deles nesta estante são apagados junto (quantidades
-    // > 0 são estoque contado e só somem pela lixeira do dialog). Tem de ser o
-    // persistido, não `_caixasAtuais` — ver a nota do gêmeo em
-    // _GondolaPageState._salvarLayout.
-    final persistido = TursoService().layoutEstanteEmCache(_estanteAtual) ??
-        await TursoService().fetchLayoutEstante(_estanteAtual);
-    final antes = persistido.map((c) => c.produtoCodigo).toSet();
-
-    final ok = await TursoService().salvarLayoutEstante(_estanteAtual, itens);
-    if (ok) {
-      _editadas.remove(_estanteAtual);
+    final numero = _estanteAtual;
+    final r = await TursoService().salvarLayoutEstante(
+      numero,
+      itens,
+      base: _base[numero] ?? const [],
+      sobrescrever: sobrescrever,
+    );
+    if (r.resultado == ResultadoSalvarLayout.salvo) {
+      _editadas.remove(numero);
+      _base[numero] = itens;
+      if (mounted) setState(() => _caixas.putIfAbsent(numero, () => []));
+      // Produtos que estavam no banco logo antes do salvamento e saíram nesta
+      // edição: os endereços ZERADOS deles nesta estante são apagados junto —
+      // ver a nota do gêmeo em _GondolaPageState._salvarLayout.
       final depois = itens.map((i) => i.produtoCodigo).toSet();
-      for (final codigo in antes.difference(depois)) {
+      for (final codigo in r.codigosAntes.difference(depois)) {
         await EstoqueLocalizadoService().deleteEnderecosZerados(
           produtoCodigo: codigo,
           localTipo:     'estante',
-          localNum:      _estanteAtual,
+          localNum:      numero,
         );
       }
     }
     if (!mounted) return;
     setState(() => _salvando = false);
 
+    if (r.resultado == ResultadoSalvarLayout.conflito) {
+      final escolha = await perguntarConflitoDeLayout(
+        context,
+        ehPalete(numero)
+            ? 'Este palete'
+            : ehIlhaPaletes(numero)
+                ? 'Esta ilha de paletes'
+                : 'Esta estante',
+      );
+      if (!mounted) return;
+      if (escolha == EscolhaConflitoLayout.salvarPorCima &&
+          numero == _estanteAtual) {
+        await _salvarLayout(sobrescrever: true);
+      } else if (escolha == EscolhaConflitoLayout.recarregar) {
+        setState(() {
+          _editadas.remove(numero);
+          _caixas.remove(numero);
+          _carregandoLayout = numero == _estanteAtual;
+        });
+        await _carregarLayout(numero, forceRefresh: true);
+      }
+      return;
+    }
+
+    final ok = r.resultado == ResultadoSalvarLayout.salvo;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok ? 'Layout salvo ✓' : 'Gravação não confirmada. Verifique a conexão e tente salvar novamente.'),
       backgroundColor:
@@ -3843,6 +4276,8 @@ class _EstantePageState extends State<EstantePage> {
   }
 
   Future<void> _buscarProduto(Produto produto) async {
+    // Sem trocar de estrutura no meio de um salvamento (ver _trocarGondola).
+    if (_salvando) return;
     if (!_dbConectado) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Configure o banco em ⚙️ para buscar no Turso'),
@@ -3889,14 +4324,23 @@ class _EstantePageState extends State<EstantePage> {
 
     setState(() {
       _estanteAtual     = encontrado.estanteNum;
-      _carregandoLayout = true;
+      _carregandoLayout = !_semearDoCache(encontrado.estanteNum);
       _expanderAberto   = null;
       _sugestoes2       = [];
     });
     _ctrl2.clear();
 
-    final layouts =
-        await TursoService().fetchLayoutEstante(encontrado.estanteNum);
+    final List<CaixaLayoutEstante> layouts;
+    try {
+      layouts = await TursoService().fetchLayoutEstante(encontrado.estanteNum);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _carregandoLayout = false);
+      if (!_layoutCarregado(encontrado.estanteNum)) {
+        _avisarSemLayout(encontrado.estanteNum);
+      }
+      return;
+    }
     if (!mounted) return;
 
     _highlightTimer?.cancel();
@@ -3960,13 +4404,24 @@ class _EstantePageState extends State<EstantePage> {
 
   Future<void> _abrirConfiguracoes() async {
     if (_salvando) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
-    );
+    // Parada enquanto ⚙️ está por cima (ver _abrirPorCima): a volta abaixo
+    // recomeça a tela do zero.
+    _recargaPorAviso?.cancel();
+    _coberta = true;
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ConfiguracaoPage()),
+      );
+    } finally {
+      _coberta = false;
+    }
+    if (!mounted) return;
     setState(() {
       _editadas.clear();
       _caixas.clear();
+      _base.clear();
+      _avisadasSemLayout.clear();
       _produtoSelecionadoId = null;
       _produtoChip          = null;
       _expanderAberto       = null;
@@ -4046,46 +4501,36 @@ class _EstantePageState extends State<EstantePage> {
               icon: const Icon(Icons.view_in_ar_outlined,
                   color: Color(0xFFe0772b), size: 22),
               tooltip: 'Ver modelo 3D',
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const EstanteEdr300Page())),
+              onPressed: () => _abrirPorCima(const EstanteEdr300Page()),
             ),
           if (_estanteAtual == expositorMagnojetNum)
             IconButton(
               icon: const Icon(Icons.view_in_ar_outlined,
                   color: Color(0xFFe0772b), size: 22),
               tooltip: 'Ver modelo 3D',
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(
-                      builder: (_) => const ExpositorMagnojetPage())),
+              onPressed: () => _abrirPorCima(const ExpositorMagnojetPage()),
             ),
           if (_estanteAtual == expositorNelloreNum)
             IconButton(
               icon: const Icon(Icons.view_in_ar_outlined,
                   color: Color(0xFFe0772b), size: 22),
               tooltip: 'Ver modelo 3D',
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(
-                      builder: (_) => const ExpositorNellorePage())),
+              onPressed: () => _abrirPorCima(const ExpositorNellorePage()),
             ),
           if (_estanteAtual == expositorMonitorNum)
             IconButton(
               icon: const Icon(Icons.view_in_ar_outlined,
                   color: Color(0xFFe0772b), size: 22),
               tooltip: 'Ver modelo 3D',
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(
-                      builder: (_) => const ExpositorMonitorPage())),
+              onPressed: () => _abrirPorCima(const ExpositorMonitorPage()),
             ),
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Color(0xFFe8a022)),
             tooltip: 'Ver no mapa',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => LojaPage(
-                  itemTipoInicial:   'estante',
-                  itemNumeroInicial: _estanteAtual,
-                ),
+            onPressed: () => _abrirPorCima(
+              LojaPage(
+                itemTipoInicial:   'estante',
+                itemNumeroInicial: _estanteAtual,
               ),
             ),
           ),
@@ -4323,7 +4768,7 @@ class _EstantePageState extends State<EstantePage> {
                   ),
                   const Spacer(),
                   ElevatedButton.icon(
-                    onPressed: _salvando ? null : _salvarLayout,
+                    onPressed: _salvando ? null : () => _salvarLayout(),
                     icon: _salvando
                         ? const SizedBox(
                             width: 14,
