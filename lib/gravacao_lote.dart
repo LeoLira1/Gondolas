@@ -192,10 +192,30 @@ const String localTipoGalpaoSql = 'galpao';
 const String localTipoBarracaoSql = 'barracao';
 const String prefixoEstocadoSql = 'EST:';
 
+/// Todos os produtos do galpão, um por linha: o principal de cada rack (a
+/// própria linha de `galpao_racks`, `item_uuid` NULL) e os itens dos racks
+/// mistos (`galpao_rack_itens`), com a posição e a ordem do rack que os
+/// leva. `seq` põe o principal antes dos itens, e os itens na ordem em que
+/// entraram — é essa ordem que decide quem sobe a principal quando o
+/// principal sai.
+///
+/// É o que tudo que pergunta "o que tem no galpão" lê (a tela, a busca, a
+/// conferência, o espelho em estoque_localizado), para um produto que entrou
+/// num rack misto não sumir de nenhum deles.
+const String sqlProdutosGalpao =
+    '(SELECT rack_uuid, NULL AS item_uuid, posicao, ordem, produto_codigo, '
+    'produto_nome, quantidade, 0 AS seq FROM galpao_racks '
+    'UNION ALL '
+    'SELECT r.rack_uuid, i.item_uuid, r.posicao, r.ordem, i.produto_codigo, '
+    'i.produto_nome, i.quantidade, i.id AS seq FROM galpao_rack_itens i '
+    'JOIN galpao_racks r ON r.rack_uuid = i.rack_uuid)';
+
 enum TipoOperacao {
   galpaoLancar('galpao.lancar'),
   galpaoAjustar('galpao.ajustarQuantidade'),
   galpaoEsvaziar('galpao.esvaziar'),
+  galpaoAdicionarProduto('galpao.adicionarProduto'),
+  galpaoRemoverProduto('galpao.removerProduto'),
   barracaoAtribuir('barracao.atribuir'),
   barracaoEsvaziar('barracao.esvaziar');
 
@@ -205,7 +225,11 @@ enum TipoOperacao {
   const TipoOperacao(this.operacao);
 
   bool get doGalpao =>
-      this == galpaoLancar || this == galpaoAjustar || this == galpaoEsvaziar;
+      this == galpaoLancar ||
+      this == galpaoAjustar ||
+      this == galpaoEsvaziar ||
+      this == galpaoAdicionarProduto ||
+      this == galpaoRemoverProduto;
 }
 
 /// Uma gravação que a pessoa já fez na tela e que ainda não foi confirmada
@@ -237,6 +261,11 @@ class OperacaoPendente {
   /// Rack alvo de ajuste/esvaziamento no galpão.
   final String? rackUuid;
 
+  /// Produto alvo DENTRO de um rack misto (ajuste e remoção). Null é o
+  /// principal do rack — que é também o único produto de um rack comum, e o
+  /// que toda gravação anterior ao rack misto quis dizer.
+  final String? itemUuid;
+
   final String produtoCodigo;
   final String produtoNome;
 
@@ -260,6 +289,7 @@ class OperacaoPendente {
     required this.criadaEm,
     required this.local,
     this.rackUuid,
+    this.itemUuid,
     this.produtoCodigo = '',
     this.produtoNome = '',
     this.quantidade = 0,
@@ -275,6 +305,7 @@ class OperacaoPendente {
         'criadaEm': criadaEm.toIso8601String(),
         'local': local,
         'rackUuid': rackUuid,
+        'itemUuid': itemUuid,
         'produtoCodigo': produtoCodigo,
         'produtoNome': produtoNome,
         'quantidade': quantidade,
@@ -295,6 +326,7 @@ class OperacaoPendente {
         criadaEm: DateTime.parse(json['criadaEm'] as String),
         local: (json['local'] as num).toInt(),
         rackUuid: json['rackUuid'] as String?,
+        itemUuid: json['itemUuid'] as String?,
         produtoCodigo: json['produtoCodigo'] as String? ?? '',
         produtoNome: json['produtoNome'] as String? ?? '',
         quantidade: (json['quantidade'] as num?)?.toDouble() ?? 0,
@@ -328,8 +360,11 @@ class OperacaoPendente {
 
   /// Delta que a gravação causa no endereçado do produto.
   double get deltaEnderecado => switch (tipo) {
-        TipoOperacao.galpaoLancar => quantidade,
+        TipoOperacao.galpaoLancar ||
+        TipoOperacao.galpaoAdicionarProduto =>
+          quantidade,
         TipoOperacao.galpaoEsvaziar ||
+        TipoOperacao.galpaoRemoverProduto ||
         TipoOperacao.barracaoEsvaziar =>
           -(quantidadeAnterior ?? 0),
         _ => quantidade - (quantidadeAnterior ?? 0),
@@ -344,6 +379,9 @@ class OperacaoPendente {
       TipoOperacao.barracaoAtribuir =>
         '$nome · $qtd em $rotulo',
       TipoOperacao.galpaoAjustar => '$nome · $rotulo → $qtd',
+      TipoOperacao.galpaoAdicionarProduto => '+ $nome · $qtd em $rotulo',
+      TipoOperacao.galpaoRemoverProduto =>
+        'Tirar ${nome.isEmpty ? 'produto' : nome} de $rotulo',
       TipoOperacao.galpaoEsvaziar ||
       TipoOperacao.barracaoEsvaziar =>
         'Esvaziar $rotulo${nome.isEmpty ? '' : ' ($nome)'}',
@@ -382,6 +420,14 @@ class OperacaoPendente {
         ],
       TipoOperacao.galpaoEsvaziar => [
           ..._esvaziarGalpao(agora, naoAplicada),
+          carimbo,
+        ],
+      TipoOperacao.galpaoAdicionarProduto => [
+          ..._adicionarProdutoGalpao(agora, u, naoAplicada),
+          carimbo,
+        ],
+      TipoOperacao.galpaoRemoverProduto => [
+          ..._removerProdutoGalpao(agora, naoAplicada),
           carimbo,
         ],
       TipoOperacao.barracaoAtribuir => [
@@ -433,7 +479,9 @@ class OperacaoPendente {
         'rack_ausente',
       );
 
-  List<String> _ajustarGalpao(String agora, String naoAplicada) => [
+  List<String> _ajustarGalpao(String agora, String naoAplicada) {
+    if (itemUuid != null) return _ajustarItemGalpao(agora, naoAplicada);
+    return [
         _guardaRack(naoAplicada),
         // O log antes do UPDATE: é a linha ainda intacta que dá a quantidade
         // anterior.
@@ -447,6 +495,7 @@ class OperacaoPendente {
             'atualizado_em = $agora WHERE $_rackAlvo AND $naoAplicada',
         ..._espelhoGalpao(agora, naoAplicada),
       ];
+  }
 
   /// Tira o rack e DESCE a pilha. Renumeração em dois passos pelos negativos,
   /// como sempre foi (ver GalpaoService): um `ordem = ordem - 1` direto
@@ -461,27 +510,190 @@ class OperacaoPendente {
             'quantidade, 0, '
             '${sqlTexto(origem ?? 'gondolas_app_galpao_exclusao')}, $agora '
             'FROM galpao_racks WHERE $_rackAlvo AND $naoAplicada',
-        'UPDATE galpao_racks SET ordem = -(ordem - 1) WHERE posicao = $_p '
-            'AND ordem > (SELECT ordem FROM galpao_racks WHERE $_rackAlvo) '
+        // O rack sai com tudo o que leva: num rack misto cada produto ganha
+        // a sua linha de log, como se tivesse sido zerado um a um.
+        'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+            'qtd_nova, origem, registrado_em) '
+            "SELECT i.produto_codigo, 'GALPAO·' || r.posicao || '·N' || "
+            'r.ordem, i.quantidade, 0, '
+            '${sqlTexto(origem ?? 'gondolas_app_galpao_exclusao')}, $agora '
+            'FROM galpao_rack_itens i JOIN galpao_racks r '
+            'ON r.rack_uuid = i.rack_uuid WHERE r.$_rackAlvo '
+            'AND $naoAplicada ORDER BY i.id',
+        ..._tirarRack(agora, naoAplicada),
+        'DELETE FROM galpao_rack_itens WHERE rack_uuid = $_rackUuid '
             'AND $naoAplicada',
-        'DELETE FROM galpao_racks WHERE $_rackAlvo AND $naoAplicada',
-        'UPDATE galpao_racks SET ordem = -ordem, atualizado_em = $agora '
-            'WHERE posicao = $_p AND ordem < 0 AND $naoAplicada',
         ..._espelhoGalpao(agora, naoAplicada),
       ];
+
+  /// O rack sai e a pilha desce — os três passos pelos negativos de
+  /// [_esvaziarGalpao]. [condicao] restringe os três de uma vez (é o "só se
+  /// não sobrou produto" da remoção do principal).
+  List<String> _tirarRack(
+    String agora,
+    String naoAplicada, {
+    String condicao = '',
+  }) => [
+        'UPDATE galpao_racks SET ordem = -(ordem - 1) WHERE posicao = $_p '
+            'AND ordem > (SELECT ordem FROM galpao_racks WHERE $_rackAlvo) '
+            'AND $naoAplicada$condicao',
+        'DELETE FROM galpao_racks WHERE $_rackAlvo AND $naoAplicada$condicao',
+        'UPDATE galpao_racks SET ordem = -ordem, atualizado_em = $agora '
+            'WHERE posicao = $_p AND ordem < 0 AND $naoAplicada',
+      ];
+
+  // ── Rack misto ──────────────────────────────────────────────────────────
+
+  String get _rackUuid => sqlTexto(rackUuid);
+
+  String get _itensDoRack =>
+      'SELECT 1 FROM galpao_rack_itens WHERE rack_uuid = $_rackUuid';
+
+  String _guardaItem(String naoAplicada) => guardaConflito(
+        '$naoAplicada AND NOT EXISTS ($_itensDoRack '
+            'AND item_uuid = ${sqlTexto(itemUuid)})',
+        'item_ausente',
+      );
+
+  /// Mexer num item muda o rack: o `atualizado_em` dele acompanha, que é o
+  /// que o carimbo da réplica (replica_local.dart) olha em galpao_racks.
+  String _tocarRack(String agora, String naoAplicada) =>
+      'UPDATE galpao_racks SET atualizado_em = $agora '
+      'WHERE $_rackAlvo AND $naoAplicada';
+
+  /// Log de um item do rack, com o endereço do rack que o leva.
+  String _logItem(String agora, String naoAplicada, String qtdNova,
+          String origemPadrao) =>
+      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+      'qtd_nova, origem, registrado_em) '
+      "SELECT i.produto_codigo, 'GALPAO·' || r.posicao || '·N' || r.ordem, "
+      'i.quantidade, $qtdNova, ${sqlTexto(origem ?? origemPadrao)}, $agora '
+      'FROM galpao_rack_itens i JOIN galpao_racks r '
+      'ON r.rack_uuid = i.rack_uuid WHERE i.item_uuid = ${sqlTexto(itemUuid)} '
+      'AND r.$_rackAlvo AND $naoAplicada';
+
+  /// Mais um produto no rack. O item nasce com o UUID da gravação, como o
+  /// rack no lançamento. Rack cheio e produto que já está no rack são
+  /// conflito: outro aparelho pode ter enchido o palete enquanto este estava
+  /// offline.
+  List<String> _adicionarProdutoGalpao(
+    String agora,
+    String u,
+    String naoAplicada,
+  ) {
+    final codigo = sqlTexto(produtoCodigo);
+    return [
+      _guardaRack(naoAplicada),
+      guardaConflito(
+        '$naoAplicada AND 1 + (SELECT COUNT(*) FROM galpao_rack_itens '
+            'WHERE rack_uuid = $_rackUuid) >= '
+            '${GalpaoConfig.produtosMaxPorRack}',
+        'rack_cheio',
+      ),
+      guardaConflito(
+        '$naoAplicada AND (EXISTS (SELECT 1 FROM galpao_racks WHERE '
+            '$_rackAlvo AND produto_codigo = $codigo) OR EXISTS '
+            '($_itensDoRack AND produto_codigo = $codigo))',
+        'produto_repetido',
+      ),
+      'INSERT INTO galpao_rack_itens (item_uuid, rack_uuid, produto_codigo, '
+          'produto_nome, quantidade, atualizado_em) '
+          'SELECT $u, $_rackUuid, $codigo, ${sqlTexto(produtoNome)}, '
+          '${sqlNumero(quantidade)}, $agora WHERE $naoAplicada',
+      _tocarRack(agora, naoAplicada),
+      ..._espelhoGalpao(agora, naoAplicada),
+      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+          'qtd_nova, origem, registrado_em) '
+          "SELECT $codigo, 'GALPAO·' || posicao || '·N' || ordem, NULL, "
+          '${sqlNumero(quantidade)}, '
+          '${sqlTexto(origem ?? 'gondolas_app_galpao')}, $agora '
+          'FROM galpao_racks WHERE $_rackAlvo AND $naoAplicada',
+    ];
+  }
+
+  List<String> _ajustarItemGalpao(String agora, String naoAplicada) => [
+        _guardaRack(naoAplicada),
+        _guardaItem(naoAplicada),
+        _logItem(agora, naoAplicada, sqlNumero(quantidade),
+            'gondolas_app_galpao'),
+        'UPDATE galpao_rack_itens SET quantidade = ${sqlNumero(quantidade)}, '
+            'atualizado_em = $agora WHERE item_uuid = ${sqlTexto(itemUuid)} '
+            'AND $naoAplicada',
+        _tocarRack(agora, naoAplicada),
+        ..._espelhoGalpao(agora, naoAplicada),
+      ];
+
+  /// UM produto sai do rack (ver pilhaAposRemoverProduto, que é a mesma regra
+  /// na tela):
+  /// - item: a linha dele sai, o rack fica;
+  /// - principal com itens: o item mais antigo sobe a principal;
+  /// - principal sozinho: é o rack saindo, e a pilha desce.
+  ///
+  /// Quem decide entre os dois últimos é o banco, na hora: se outro aparelho
+  /// tirou os itens enquanto este estava offline, o principal saindo esvazia
+  /// o rack em vez de deixar um palete sem produto.
+  List<String> _removerProdutoGalpao(String agora, String naoAplicada) {
+    const origemPadrao = 'gondolas_app_galpao_exclusao';
+    if (itemUuid != null) {
+      return [
+        _guardaRack(naoAplicada),
+        _guardaItem(naoAplicada),
+        _logItem(agora, naoAplicada, '0', origemPadrao),
+        'DELETE FROM galpao_rack_itens WHERE item_uuid = '
+            '${sqlTexto(itemUuid)} AND $naoAplicada',
+        _tocarRack(agora, naoAplicada),
+        ..._espelhoGalpao(agora, naoAplicada),
+      ];
+    }
+    final primeiro = 'SELECT %s FROM galpao_rack_itens WHERE rack_uuid = '
+        '$_rackUuid ORDER BY id LIMIT 1';
+    return [
+      _guardaRack(naoAplicada),
+      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+          'qtd_nova, origem, registrado_em) '
+          "SELECT produto_codigo, 'GALPAO·' || posicao || '·N' || ordem, "
+          'quantidade, 0, ${sqlTexto(origem ?? origemPadrao)}, $agora '
+          'FROM galpao_racks WHERE $_rackAlvo AND $naoAplicada',
+      // Sem item nenhum: o rack sai inteiro.
+      ..._tirarRack(
+        agora,
+        naoAplicada,
+        condicao: ' AND NOT EXISTS ($_itensDoRack)',
+      ),
+      // Com itens: o mais antigo sobe a principal e deixa de ser item. O
+      // DELETE só acha linha quando houve promoção — sem itens, não há o que
+      // apagar.
+      'UPDATE galpao_racks SET '
+          'produto_codigo = (${primeiro.replaceFirst('%s', 'produto_codigo')}), '
+          'produto_nome = (${primeiro.replaceFirst('%s', 'produto_nome')}), '
+          'quantidade = (${primeiro.replaceFirst('%s', 'quantidade')}), '
+          'atualizado_em = $agora '
+          'WHERE $_rackAlvo AND $naoAplicada AND EXISTS ($_itensDoRack)',
+      'DELETE FROM galpao_rack_itens WHERE id = (SELECT MIN(id) FROM '
+          'galpao_rack_itens WHERE rack_uuid = $_rackUuid) AND $naoAplicada',
+      ..._espelhoGalpao(agora, naoAplicada),
+    ];
+  }
 
   /// Reescreve o espelho da POSIÇÃO inteira a partir da pilha que ficou no
   /// banco — a mesma regra de sempre (ver GalpaoService), agora dentro do
   /// servidor. Estocado (material de cooperado) não entra: já saiu do sistema.
+  ///
+  /// Os itens dos racks mistos entram como linhas próprias no mesmo nível —
+  /// o UNIQUE de estoque_localizado tem o produto_codigo, então cabem. O
+  /// GROUP BY é guarda: o mesmo código duas vezes no mesmo rack não deveria
+  /// existir (o lote recusa), mas se existir vira uma linha somada em vez de
+  /// derrubar a gravação no UNIQUE.
   List<String> _espelhoGalpao(String agora, String naoAplicada) => [
         'DELETE FROM estoque_localizado WHERE local_tipo = '
             "'$localTipoGalpaoSql' AND local_num = $_p AND $naoAplicada",
         'INSERT INTO estoque_localizado (produto_codigo, local_tipo, local_num, '
             'face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '
-            "SELECT produto_codigo, '$localTipoGalpaoSql', posicao, 0, ordem, "
-            'quantidade, $agora FROM galpao_racks WHERE posicao = $_p '
+            "SELECT produto_codigo, '$localTipoGalpaoSql', $_p, 0, ordem, "
+            'SUM(quantidade), $agora FROM $sqlProdutosGalpao WHERE posicao = $_p '
             "AND substr(produto_codigo, 1, ${prefixoEstocadoSql.length}) <> "
-            "'$prefixoEstocadoSql' AND $naoAplicada",
+            "'$prefixoEstocadoSql' AND $naoAplicada "
+            'GROUP BY produto_codigo, ordem',
       ];
 
   // ── Barracão ────────────────────────────────────────────────────────────

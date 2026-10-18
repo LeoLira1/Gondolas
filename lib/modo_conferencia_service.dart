@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:libsql_dart/libsql_dart.dart';
 import 'galpao_config.dart';
+import 'gravacao_lote.dart' show sqlProdutosGalpao;
 import 'models.dart' show estantesRemovidas;
 import 'turso_service.dart';
 
@@ -523,7 +524,7 @@ class ModoConferenciaService {
       final lote = codigos.sublist(i, fim);
       final placeholders = List.filled(lote.length, '?').join(', ');
       final stmt = await client.prepare(
-        'SELECT DISTINCT produto_codigo, posicao FROM galpao_racks '
+        'SELECT DISTINCT produto_codigo, posicao FROM $sqlProdutosGalpao '
         'WHERE produto_codigo IN ($placeholders)',
       );
       final rows = await stmt.query(positional: lote);
