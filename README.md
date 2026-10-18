@@ -53,6 +53,18 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   `galpao_racks` (ocupação, com renumeração transacional), espelhadas em
   `estoque_localizado` com `local_tipo = 'galpao'` para o estoque do galpão
   contar nos mesmos totais dos apps irmãos.
+- **Rack misto: até 5 produtos no mesmo palete.** Quando sobra pouco de um
+  produto, ele vai junto no palete de outro em vez de ocupar uma gaiola
+  sozinho. No painel do rack, `Adicionar outro produto neste rack (n/5)`
+  põe mais um. O rack misto lista cada produto com a sua quantidade, e 0 num
+  deles tira só aquele (o palete fica com os outros). O último produto que
+  sai tira o rack, e a pilha desce como sempre. No mapa o rack misto ganha
+  duas listras claras nas laterais, e acende se QUALQUER produto dele for o
+  procurado, estiver pendente de conferência ou com falta/sobra. O primeiro
+  produto continua na linha de `galpao_racks`. Os demais ficam em
+  `galpao_rack_itens`, presos pelo `rack_uuid`, e cada um vira uma linha
+  própria no espelho de `estoque_localizado` (mesmo nível), então busca,
+  saldo, Modo Conferência e baixa automática enxergam todos eles.
 - **Quantidade em UNIDADES, do ERP ao cubo.** O galpão já converteu para
   litros (baldes/caixas × 20) e isso era discrepância garantida contra o
   `qtd_sistema` do `estoque_mestre`, que está em unidade: o mesmo produto que

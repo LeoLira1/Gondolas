@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'fila_gravacao.dart';
+import 'galpao_config.dart';
 import 'gravacao_lote.dart';
 
 /// Aviso de uma operação que o banco não aceitou — o texto do snackbar.
@@ -21,6 +22,16 @@ String mensagemFalhaFila(EventoFila evento) {
             '(alguém mexeu nele antes).',
       'endereco_ausente' =>
         'Não gravou ${op.descricao}: esse palete não existe mais no banco.',
+      'rack_cheio' =>
+        'Não gravou ${op.descricao}: o rack já estava com '
+            '${GalpaoConfig.produtosMaxPorRack} produtos no banco (outro '
+            'aparelho adicionou antes).',
+      'produto_repetido' =>
+        'Não gravou ${op.descricao}: esse produto já estava no rack — '
+            'corrija a quantidade dele.',
+      'item_ausente' =>
+        'Não gravou ${op.descricao}: esse produto já não está no rack '
+            '(alguém mexeu nele antes).',
       _ => 'Não gravou ${op.descricao}: o banco mudou antes do envio.',
     };
   }

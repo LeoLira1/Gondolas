@@ -55,14 +55,7 @@ List<RackGalpao> pilhaAposEsvaziar(List<RackGalpao> pilha, int ordem) {
       if (r.ordem < ordem)
         r
       else if (r.ordem > ordem)
-        RackGalpao(
-          rackUuid: r.rackUuid,
-          posicao: r.posicao,
-          ordem: r.ordem - 1,
-          produtoCodigo: r.produtoCodigo,
-          produtoNome: r.produtoNome,
-          quantidade: r.quantidade,
-        ),
+        r.copiar(ordem: r.ordem - 1),
   ];
 }
 
@@ -89,15 +82,114 @@ List<RackGalpao> pilhaAposAjustar(
       if (r.ordem != ordem)
         r
       else
-        RackGalpao(
-          rackUuid: r.rackUuid,
-          posicao: r.posicao,
-          ordem: r.ordem,
-          produtoCodigo: r.produtoCodigo,
-          produtoNome: r.produtoNome,
-          quantidade: quantidade,
+        r.copiar(quantidade: quantidade),
+  ];
+}
+
+// ── Rack misto ───────────────────────────────────────────────────────────────
+//
+// Um rack pode levar até GalpaoConfig.produtosMaxPorRack produtos. O primeiro
+// é o principal (a própria linha do rack); os outros são itens, achados pelo
+// UUID. Nada disto mexe na pilha: o rack continua no mesmo nível — só o
+// último produto saindo é que tira o rack e faz os de cima descerem.
+
+/// Pilha com [produtoCodigo] acrescentado ao rack de [ordem], ou null quando
+/// não cabe: rack cheio, produto que já está nele, ordem inexistente ou
+/// quantidade não positiva. Produto repetido não é segundo item — é a
+/// quantidade do que já está lá que se corrige.
+List<RackGalpao>? pilhaAposAdicionarProduto(
+  List<RackGalpao> pilha,
+  int ordem, {
+  required String itemUuid,
+  required String produtoCodigo,
+  required String produtoNome,
+  required double quantidade,
+}) {
+  final i = pilha.indexWhere((r) => r.ordem == ordem);
+  if (i < 0 || quantidade <= 0) return null;
+  final rack = pilha[i];
+  if (rack.produtos.length >= GalpaoConfig.produtosMaxPorRack) return null;
+  if (rack.contem(produtoCodigo)) return null;
+  return [
+    for (final r in pilha)
+      if (r.ordem != ordem)
+        r
+      else
+        r.copiar(
+          itens: [
+            ...r.itens,
+            ProdutoNoRack(
+              itemUuid: itemUuid,
+              produtoCodigo: produtoCodigo,
+              produtoNome: produtoNome,
+              quantidade: quantidade,
+            ),
+          ],
         ),
   ];
+}
+
+/// Pilha com a quantidade de UM produto do rack de [ordem] trocada. [itemUuid]
+/// null é o principal (o mesmo que [pilhaAposAjustar]).
+List<RackGalpao> pilhaAposAjustarProduto(
+  List<RackGalpao> pilha,
+  int ordem,
+  String? itemUuid,
+  double quantidade,
+) {
+  if (itemUuid == null) return pilhaAposAjustar(pilha, ordem, quantidade);
+  if (quantidade <= 0) return pilha;
+  return [
+    for (final r in pilha)
+      if (r.ordem != ordem || !r.itens.any((p) => p.itemUuid == itemUuid))
+        r
+      else
+        r.copiar(
+          itens: [
+            for (final p in r.itens)
+              p.itemUuid == itemUuid ? p.comQuantidade(quantidade) : p,
+          ],
+        ),
+  ];
+}
+
+/// Pilha com UM produto a menos no rack de [ordem].
+///
+/// - Item ([itemUuid] não nulo): sai da lista, o rack fica.
+/// - Principal num rack misto: o item mais antigo sobe a principal — o palete
+///   continua lá, com o que sobrou nele.
+/// - Último produto do rack: é o rack saindo, e a pilha desce
+///   ([pilhaAposEsvaziar]).
+List<RackGalpao> pilhaAposRemoverProduto(
+  List<RackGalpao> pilha,
+  int ordem,
+  String? itemUuid,
+) {
+  final i = pilha.indexWhere((r) => r.ordem == ordem);
+  if (i < 0) return pilha;
+  final rack = pilha[i];
+  if (itemUuid != null && !rack.itens.any((p) => p.itemUuid == itemUuid)) {
+    return pilha;
+  }
+  if (!rack.misto) return pilhaAposEsvaziar(pilha, ordem);
+  final RackGalpao novo;
+  if (itemUuid == null) {
+    final sobe = rack.itens.first;
+    novo = rack.copiar(
+      produtoCodigo: sobe.produtoCodigo,
+      produtoNome: sobe.produtoNome,
+      quantidade: sobe.quantidade,
+      itens: rack.itens.sublist(1),
+    );
+  } else {
+    novo = rack.copiar(
+      itens: [
+        for (final p in rack.itens)
+          if (p.itemUuid != itemUuid) p,
+      ],
+    );
+  }
+  return [for (final r in pilha) r.ordem == ordem ? novo : r];
 }
 
 /// O galpão como a pessoa o vê: o que veio do banco com as gravações ainda na
@@ -136,11 +228,34 @@ Map<int, List<RackGalpao>> aplicarPendentesGalpao(
       case TipoOperacao.galpaoAjustar:
         final i = pilha.indexWhere((r) => r.rackUuid == op.rackUuid);
         if (i < 0) continue;
-        resultado[op.local] = pilhaAposAjustar(
+        resultado[op.local] = pilhaAposAjustarProduto(
           pilha,
           pilha[i].ordem,
+          op.itemUuid,
           op.quantidade,
         );
+      case TipoOperacao.galpaoAdicionarProduto:
+        final i = pilha.indexWhere((r) => r.rackUuid == op.rackUuid);
+        if (i < 0) continue;
+        if (pilha[i].itens.any((p) => p.itemUuid == op.uuid)) continue;
+        final nova = pilhaAposAdicionarProduto(
+          pilha,
+          pilha[i].ordem,
+          itemUuid: op.uuid,
+          produtoCodigo: op.produtoCodigo,
+          produtoNome: op.produtoNome,
+          quantidade: op.quantidade,
+        );
+        if (nova != null) resultado[op.local] = nova;
+      case TipoOperacao.galpaoRemoverProduto:
+        final i = pilha.indexWhere((r) => r.rackUuid == op.rackUuid);
+        if (i < 0) continue;
+        final nova = pilhaAposRemoverProduto(pilha, pilha[i].ordem, op.itemUuid);
+        if (nova.isEmpty) {
+          resultado.remove(op.local);
+        } else {
+          resultado[op.local] = nova;
+        }
       case TipoOperacao.galpaoEsvaziar:
         final i = pilha.indexWhere((r) => r.rackUuid == op.rackUuid);
         if (i < 0) continue;

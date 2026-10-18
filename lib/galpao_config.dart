@@ -181,6 +181,12 @@ class GalpaoConfig {
   /// Máximo de racks empilhados numa posição.
   static const int niveisMax = 4;
 
+  /// Máximo de produtos diferentes dentro de UM rack. O rack misto existe
+  /// porque às vezes sobra tão pouco de um produto que não vale a gaiola
+  /// inteira para ele — juntam-se alguns no mesmo palete. Cinco cabem no
+  /// painel do celular sem rolar e ainda dá para achar na mão.
+  static const int produtosMaxPorRack = 5;
+
   /// Folga entre a borda da posição e a etiqueta do número, no chão.
   static const double recuoEtiqueta = 0.30;
 
