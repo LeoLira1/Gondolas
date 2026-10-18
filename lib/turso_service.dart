@@ -314,9 +314,13 @@ class TursoService {
   /// conferência leem a mesma (e o mesmo SQL, senão cada um registraria a
   /// sua consulta para a chave).
   static const String chaveGalpao = 'galpao';
+  ///
+  /// Inclui os itens dos racks mistos (sqlProdutosGalpao): cada rack vem na
+  /// sua linha, com item_uuid NULL, seguida das linhas dos itens dele.
   static const String sqlGalpao =
-      'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, quantidade '
-      'FROM galpao_racks ORDER BY posicao, ordem';
+      'SELECT rack_uuid, item_uuid, posicao, ordem, produto_codigo, '
+      'produto_nome, quantidade, seq FROM $sqlProdutosGalpao '
+      'ORDER BY posicao, ordem, seq';
 
   /// Cópia dos endereços do barracão, no mesmo esquema da do galpão.
   static const String chaveBarracao = 'barracao';
@@ -2024,6 +2028,22 @@ class TursoService {
         UNIQUE(posicao, ordem)
       )
     ''');
+    // Rack misto: os produtos ALÉM do primeiro, quando se junta pouco de
+    // vários produtos no mesmo palete (até GalpaoConfig.produtosMaxPorRack).
+    // O primeiro continua na linha do rack, então a pilha — ordem, descida,
+    // UNIQUE(posicao, ordem) — não sabe que isto existe. O item é preso ao
+    // rack pelo rack_uuid, que não muda quando a pilha desce (a ordem muda).
+    esquema.add('''
+      CREATE TABLE IF NOT EXISTS galpao_rack_itens (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_uuid      TEXT    NOT NULL UNIQUE,
+        rack_uuid      TEXT    NOT NULL,
+        produto_codigo TEXT    NOT NULL,
+        produto_nome   TEXT    NOT NULL DEFAULT '',
+        quantidade     REAL    NOT NULL DEFAULT 0,
+        atualizado_em  TEXT    NOT NULL
+      )
+    ''');
 
 
     // Endereços do BARRACÃO: uma linha por palete no chão (ver
@@ -2088,6 +2108,16 @@ class TursoService {
     esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_galpao_racks_produto '
       'ON galpao_racks (produto_codigo)',
+    );
+    // Os itens de um rack (a tela, o espelho, a promoção ao principal) e
+    // "onde está este produto" também entre os itens dos racks mistos.
+    esquema.add(
+      'CREATE INDEX IF NOT EXISTS idx_galpao_rack_itens_rack '
+      'ON galpao_rack_itens (rack_uuid)',
+    );
+    esquema.add(
+      'CREATE INDEX IF NOT EXISTS idx_galpao_rack_itens_produto '
+      'ON galpao_rack_itens (produto_codigo)',
     );
     // Mesmo predicado, do outro prédio: "onde está este produto no barracão".
     // O índice implícito do UNIQUE(rotulo) não serve — a coluna dele é outra.

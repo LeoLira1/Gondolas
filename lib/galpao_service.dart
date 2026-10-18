@@ -6,7 +6,7 @@ import 'codigos_vinculados.dart';
 import 'fila_gravacao.dart' show executarOperacao;
 import 'galpao_config.dart';
 import 'galpao_saldo.dart';
-import 'galpao_scene.dart' show RackGalpao;
+import 'galpao_scene.dart' show ProdutoNoRack, RackGalpao;
 import 'gravacao_lote.dart';
 import 'turso_service.dart';
 import 'outbox.dart' show gerarUuidV4;
@@ -91,6 +91,8 @@ class GalpaoService {
     }
   }
 
+  /// Racks e itens dos racks mistos (ver TursoService.sqlGalpao): cada rack
+  /// vem na sua linha (item_uuid NULL) seguida das linhas dos itens dele.
   static const String _sqlPilhas = TursoService.sqlGalpao;
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
@@ -137,9 +139,10 @@ class GalpaoService {
     try {
       final lista = posicoes.toList()..sort();
       final rows = await TursoService().consultarDireto(
-        'SELECT rack_uuid, posicao, ordem, produto_codigo, produto_nome, '
-        'quantidade FROM galpao_racks WHERE posicao IN '
-        '(${List.filled(lista.length, '?').join(', ')}) ORDER BY posicao, ordem',
+        'SELECT rack_uuid, item_uuid, posicao, ordem, produto_codigo, '
+        'produto_nome, quantidade, seq FROM $sqlProdutosGalpao WHERE posicao IN '
+        '(${List.filled(lista.length, '?').join(', ')}) '
+        'ORDER BY posicao, ordem, seq',
         parametros: lista,
         tipo: 'galpao_posicoes',
       );
@@ -152,7 +155,12 @@ class GalpaoService {
             b['posicao'] as int? ?? 0,
           );
           if (porPosicao != 0) return porPosicao;
-          return (a['ordem'] as int? ?? 0).compareTo(b['ordem'] as int? ?? 0);
+          final porOrdem = (a['ordem'] as int? ?? 0).compareTo(
+            b['ordem'] as int? ?? 0,
+          );
+          if (porOrdem != 0) return porOrdem;
+          // O rack antes dos itens dele (ver _pilhasDasLinhas).
+          return (a['seq'] as int? ?? 0).compareTo(b['seq'] as int? ?? 0);
         },
       );
       return copia == null ? await recarregarPilhas() : _pilhasDasLinhas(copia);
@@ -169,6 +177,28 @@ class GalpaoService {
       // Linha órfã (posição que não existe mais na planta) é ignorada, como
       // as cenas fazem com endereço fora da grade.
       if (GalpaoConfig.porNumero(posicao) == null) continue;
+      final itemUuid = r['item_uuid'] as String?;
+      if (itemUuid != null) {
+        // Item de rack misto: vai para o rack que veio logo antes dele.
+        final pilha = pilhas[posicao];
+        final rackUuid = r['rack_uuid'] as String?;
+        if (pilha == null || pilha.last.rackUuid != rackUuid) continue;
+        final rack = pilha.removeLast();
+        pilha.add(
+          rack.copiar(
+            itens: [
+              ...rack.itens,
+              ProdutoNoRack(
+                itemUuid: itemUuid,
+                produtoCodigo: r['produto_codigo'] as String? ?? '',
+                produtoNome: r['produto_nome'] as String? ?? '',
+                quantidade: (r['quantidade'] as num?)?.toDouble() ?? 0,
+              ),
+            ],
+          ),
+        );
+        continue;
+      }
       pilhas.putIfAbsent(posicao, () => <RackGalpao>[]).add(
             RackGalpao(
               rackUuid: r['rack_uuid'] as String?,
@@ -249,7 +279,8 @@ class GalpaoService {
 
   Future<Set<String>> _codigosComRack() async => {
         for (final pilha in (await carregarPilhas()).values)
-          for (final rack in pilha) rack.produtoCodigo,
+          for (final rack in pilha)
+            for (final p in rack.produtos) p.produtoCodigo,
       };
 
   // ── Gravação ─────────────────────────────────────────────────────────────
@@ -302,12 +333,16 @@ class GalpaoService {
   /// mesmo produto, só o número muda. O rack é o de [rackUuid] (o nível pode
   /// ter mudado desde a leitura; o palete não). Quantidade não positiva é
   /// recusada: zerar é [esvaziar].
+  ///
+  /// [itemUuid] escolhe um produto DENTRO de um rack misto; null é o
+  /// principal.
   Future<bool> ajustarQuantidade({
     required int posicao,
     required int ordem,
     required double quantidade,
     String? origem,
     String? rackUuid,
+    String? itemUuid,
   }) async {
     if (quantidade <= 0 || rackUuid == null) return false;
     try {
@@ -319,6 +354,7 @@ class GalpaoService {
           criadaEm: DateTime.now(),
           local: posicao,
           rackUuid: rackUuid,
+          itemUuid: itemUuid,
           quantidade: quantidade,
           origem: origem,
         ),
@@ -347,6 +383,63 @@ class GalpaoService {
           criadaEm: DateTime.now(),
           local: posicao,
           rackUuid: rackUuid,
+          origem: origem,
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Onde [produtoCodigo] está AGORA no rack de [rackUuid], lido do banco:
+  /// item (com o item_uuid) ou principal (itemUuid null). Null quando o
+  /// produto não está mais no rack, ou a leitura falhou.
+  ///
+  /// É para quem grava em sequência a partir de uma leitura antiga (a baixa
+  /// automática): tirar o principal faz o item mais antigo subir a principal,
+  /// e o item_uuid dele deixa de existir.
+  Future<({String? itemUuid})?> localizarNoRack({
+    required String rackUuid,
+    required String produtoCodigo,
+  }) async {
+    try {
+      final rows = await TursoService().consultarDireto(
+        'SELECT item_uuid FROM galpao_rack_itens '
+        'WHERE rack_uuid = ? AND produto_codigo = ? '
+        'UNION ALL SELECT NULL FROM galpao_racks '
+        'WHERE rack_uuid = ? AND produto_codigo = ?',
+        parametros: [rackUuid, produtoCodigo, rackUuid, produtoCodigo],
+        tipo: 'galpao_produto_no_rack',
+      );
+      if (rows.isEmpty) return null;
+      return (itemUuid: rows.first['item_uuid'] as String?);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Tira UM produto do rack de [rackUuid] ([itemUuid] null é o principal).
+  /// Se era o último produto do rack, o rack sai e a pilha desce — é o
+  /// esvaziar de um rack comum. Ver pilhaAposRemoverProduto.
+  Future<bool> removerProduto({
+    required int posicao,
+    required int ordem,
+    String? origem,
+    String? rackUuid,
+    String? itemUuid,
+  }) async {
+    if (rackUuid == null) return false;
+    try {
+      await executarOperacao(
+        OperacaoPendente(
+          uuid: gerarUuidV4(),
+          tipo: TipoOperacao.galpaoRemoverProduto,
+          banco: TursoService().identidadeAtiva ?? '',
+          criadaEm: DateTime.now(),
+          local: posicao,
+          rackUuid: rackUuid,
+          itemUuid: itemUuid,
           origem: origem,
         ),
       );

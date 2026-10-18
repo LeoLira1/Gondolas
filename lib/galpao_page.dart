@@ -415,7 +415,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
     return [
       for (final pilha in _pilhas.values)
         for (final rack in pilha)
-          if (chaveDestaque(rack.produtoCodigo, rack.produtoNome) == codigo)
+          if (rack.produtos.any(
+            (p) => chaveDestaque(p.produtoCodigo, p.produtoNome) == codigo,
+          ))
             rack,
     ];
   }
@@ -456,7 +458,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
   String get _nomeDestacado {
     final racks = _racksDestacados;
     for (final rack in racks) {
-      if (rack.produtoNome.isNotEmpty) return rack.produtoNome;
+      for (final p in rack.produtos) {
+        if (chaveDestaque(p.produtoCodigo, p.produtoNome) == _destacadoCodigo &&
+            p.produtoNome.isNotEmpty) {
+          return p.produtoNome;
+        }
+      }
     }
     return _destacadoCodigo ?? '';
   }
@@ -677,6 +684,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     required int ordem,
     String? uuid,
     String? rackUuid,
+    String? itemUuid,
     String produtoCodigo = '',
     String produtoNome = '',
     double quantidade = 0,
@@ -688,6 +696,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     criadaEm: DateTime.now(),
     local: posicao,
     rackUuid: rackUuid,
+    itemUuid: itemUuid,
     produtoCodigo: produtoCodigo,
     produtoNome: produtoNome,
     quantidade: quantidade,
@@ -795,11 +804,11 @@ class _GalpaoPageState extends State<GalpaoPage> {
     }
     setState(() {
       _pilhas[posicao] = pilhaAposEsvaziar(antes, ordem);
-      if (saindo != null) {
+      for (final p in saindo?.produtos ?? const <ProdutoNoRack>[]) {
         _saldos = saldosComDelta(
           _saldos,
-          codigo: saindo.produtoCodigo,
-          delta: -saindo.quantidade,
+          codigo: p.produtoCodigo,
+          delta: -p.quantidade,
         );
       }
       _descida = DescidaPilha(
@@ -823,11 +832,158 @@ class _GalpaoPageState extends State<GalpaoPage> {
     );
   }
 
+  // ── Rack misto ──────────────────────────────────────────────────────────
+
+  /// O rack de [ordem] em [posicao], pronto para gravar — ou null (com aviso,
+  /// quando é falta de identidade).
+  RackGalpao? _rackParaGravar(int posicao, int ordem) {
+    final pilha = _pilhas[posicao] ?? const <RackGalpao>[];
+    final rack = ordem >= 1 && ordem <= pilha.length ? pilha[ordem - 1] : null;
+    if (rack == null) return null;
+    if (_persistindo && rack.rackUuid == null) {
+      _avisar('Esse rack ainda não tem identidade no banco — reabra o galpão.');
+      return null;
+    }
+    return rack;
+  }
+
+  /// Mais um produto no mesmo palete. O rack não muda de nível; o painel
+  /// fica aberto para ver a lista do rack crescer.
+  void _onAdicionarProduto(
+    int posicao,
+    int ordem,
+    Produto produto,
+    double quantidade,
+  ) {
+    final rack = _rackParaGravar(posicao, ordem);
+    if (rack == null) return;
+    final itemUuid = gerarUuidV4();
+    final nova = pilhaAposAdicionarProduto(
+      _pilhas[posicao]!,
+      ordem,
+      itemUuid: itemUuid,
+      produtoCodigo: produto.codigo,
+      produtoNome: produto.nome,
+      quantidade: quantidade,
+    );
+    if (nova == null) {
+      _avisar(
+        rack.contem(produto.codigo)
+            ? 'Esse produto já está neste rack — corrija a quantidade dele.'
+            : 'O rack já tem ${GalpaoConfig.produtosMaxPorRack} produtos.',
+      );
+      return;
+    }
+    setState(() {
+      _pilhas[posicao] = nova;
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: produto.codigo,
+        delta: quantidade,
+      );
+      _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
+      _recentes.insert(
+        0,
+        LancamentoRecente(produto: produto, quantidade: quantidade),
+      );
+      if (_recentes.length > _maxRecentes) _recentes.removeLast();
+    });
+    if (!_persistindo) return;
+    _enfileirar(
+      _operacao(
+        TipoOperacao.galpaoAdicionarProduto,
+        uuid: itemUuid,
+        posicao: posicao,
+        ordem: ordem,
+        rackUuid: rack.rackUuid,
+        produtoCodigo: produto.codigo,
+        produtoNome: produto.nome,
+        quantidade: quantidade,
+      ),
+    );
+  }
+
+  /// Corrige a quantidade de um produto de rack misto. O principal vai pelo
+  /// caminho de sempre ([_onAjustar]).
+  void _onAjustarProduto(
+    int posicao,
+    int ordem,
+    ProdutoNoRack produto,
+    double quantidade,
+  ) {
+    if (produto.principal) return _onAjustar(posicao, ordem, quantidade);
+    final rack = _rackParaGravar(posicao, ordem);
+    if (rack == null || quantidade <= 0) return;
+    final delta = quantidade - produto.quantidade;
+    if (delta == 0) return;
+    setState(() {
+      _pilhas[posicao] = pilhaAposAjustarProduto(
+        _pilhas[posicao]!,
+        ordem,
+        produto.itemUuid,
+        quantidade,
+      );
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: produto.produtoCodigo,
+        delta: delta,
+      );
+    });
+    if (!_persistindo) return;
+    _enfileirar(
+      _operacao(
+        TipoOperacao.galpaoAjustar,
+        posicao: posicao,
+        ordem: ordem,
+        rackUuid: rack.rackUuid,
+        itemUuid: produto.itemUuid,
+        produtoCodigo: produto.produtoCodigo,
+        produtoNome: produto.produtoNome,
+        quantidade: quantidade,
+        quantidadeAnterior: produto.quantidade,
+      ),
+    );
+  }
+
+  /// Tira UM produto de um rack misto; os outros ficam no palete. Rack com um
+  /// produto só não passa por aqui — zerar o único produto é [_onEsvaziar].
+  void _onRemoverProduto(int posicao, int ordem, ProdutoNoRack produto) {
+    final rack = _rackParaGravar(posicao, ordem);
+    if (rack == null) return;
+    if (!rack.misto) return _onEsvaziar(posicao, ordem);
+    setState(() {
+      _pilhas[posicao] = pilhaAposRemoverProduto(
+        _pilhas[posicao]!,
+        ordem,
+        produto.itemUuid,
+      );
+      _saldos = saldosComDelta(
+        _saldos,
+        codigo: produto.produtoCodigo,
+        delta: -produto.quantidade,
+      );
+    });
+    if (!_persistindo) return;
+    _enfileirar(
+      _operacao(
+        TipoOperacao.galpaoRemoverProduto,
+        posicao: posicao,
+        ordem: ordem,
+        rackUuid: rack.rackUuid,
+        itemUuid: produto.itemUuid,
+        produtoCodigo: produto.produtoCodigo,
+        produtoNome: produto.produtoNome,
+        quantidadeAnterior: produto.quantidade,
+      ),
+    );
+  }
+
   /// Códigos com rack no galpão — a base do resumo de saldo (um produto em
-  /// oito paletes conta uma vez).
+  /// oito paletes conta uma vez). Inclui os produtos dos racks mistos.
   Iterable<String> get _codigosComRack => [
     for (final pilha in _pilhas.values)
-      for (final rack in pilha) rack.produtoCodigo,
+      for (final rack in pilha)
+        for (final p in rack.produtos) p.produtoCodigo,
   ];
 
   /// Quantos produtos do galpão estão com falta e quantos com sobra. Vazio
@@ -1124,6 +1280,21 @@ class _GalpaoPageState extends State<GalpaoPage> {
                   onEsvaziar: () => _onEsvaziar(sel.posicao, sel.ordem),
                   onAjustarQuantidade: (quantidade) =>
                       _onAjustar(sel.posicao, sel.ordem, quantidade),
+                  onAdicionarProduto: (produto, quantidade) =>
+                      _onAdicionarProduto(
+                        sel.posicao,
+                        sel.ordem,
+                        produto,
+                        quantidade,
+                      ),
+                  onAjustarProduto: (produto, quantidade) => _onAjustarProduto(
+                    sel.posicao,
+                    sel.ordem,
+                    produto,
+                    quantidade,
+                  ),
+                  onRemoverProduto: (produto) =>
+                      _onRemoverProduto(sel.posicao, sel.ordem, produto),
                 ),
               ),
             )
@@ -1453,6 +1624,18 @@ class PainelEnderecoGalpao extends StatefulWidget {
   /// ao lado do número (testes, uso só de leitura).
   final ValueChanged<double>? onAjustarQuantidade;
 
+  /// Rack misto: mais um produto no mesmo palete. Null esconde o botão — o
+  /// barracão, onde o palete É o endereço e leva um produto só, não passa.
+  final void Function(Produto produto, double quantidade)? onAdicionarProduto;
+
+  /// Rack misto: corrige a quantidade de UM dos produtos do rack.
+  final void Function(ProdutoNoRack produto, double quantidade)?
+  onAjustarProduto;
+
+  /// Rack misto: tira UM dos produtos do rack (o 0 no teclado dele). Os
+  /// outros ficam no palete.
+  final ValueChanged<ProdutoNoRack>? onRemoverProduto;
+
   /// Códigos pendentes de conferência hoje: o rack cujo produto está aqui
   /// ganha a tarja ciana — quem tocou o cubo aceso precisa ver, no painel, que
   /// foi por isso que ele acendeu.
@@ -1498,6 +1681,9 @@ class PainelEnderecoGalpao extends StatefulWidget {
     this.onLancar,
     this.onEsvaziar,
     this.onAjustarQuantidade,
+    this.onAdicionarProduto,
+    this.onAjustarProduto,
+    this.onRemoverProduto,
     this.codigosConferencia = const {},
     this.destacadoCodigo,
     this.onAlternarDestaque,
@@ -1526,6 +1712,12 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   List<Produto> _resultados = const [];
   Produto? _produtoSel;
+
+  /// Escolhendo o produto que vai entrar num rack que já está ocupado.
+  bool _adicionando = false;
+
+  /// Produto do rack (misto) cujo saldo está na tarja. Null é o principal.
+  String? _focoCodigo;
 
   /// Saldo do produto em foco: o do rack, num endereço ocupado, ou o do
   /// produto escolhido para lançar numa vaga livre. Null enquanto não se sabe
@@ -1582,7 +1774,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
       _resultados = buscarProdutosGalpao(_buscaCtrl.text, widget.catalogo);
     }
     if (identical(old.saldos, widget.saldos)) return;
-    final codigo = _produtoSel?.codigo ?? _rackDoToque?.produtoCodigo;
+    final codigo =
+        _produtoSel?.codigo ?? _focoCodigo ?? _rackDoToque?.produtoCodigo;
     if (codigo == null) return;
     final novo = widget.saldos[codigo];
     if (novo != null) _saldo = novo;
@@ -1625,6 +1818,35 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     widget.onLancar?.call(produto, quantidade);
   }
 
+  /// Põe o produto escolhido no rack aberto e volta à lista do rack, com o
+  /// saldo do produto que acabou de entrar em foco.
+  void _adicionar() {
+    final produto = _produtoSel;
+    final quantidade = _quantidadeDigitada;
+    if (produto == null || quantidade == null) return;
+    widget.onAdicionarProduto?.call(produto, quantidade);
+    setState(() {
+      _adicionando = false;
+      _produtoSel = null;
+      _qtdCtrl.clear();
+      _focoCodigo = produto.codigo;
+    });
+  }
+
+  void _cancelarAdicao() => setState(() {
+    _adicionando = false;
+    _produtoSel = null;
+    _qtdCtrl.clear();
+    _resultados = const [];
+    _buscaCtrl.clear();
+    _focarSaldo(_focoCodigo ?? _rackDoToque?.produtoCodigo ?? '');
+  });
+
+  void _focarProduto(String codigo) => setState(() {
+    _focoCodigo = codigo;
+    _focarSaldo(codigo);
+  });
+
   /// Abre o teclado com a quantidade atual pronta para ser trocada, e devolve
   /// o número novo a quem sabe gravar.
   ///
@@ -1639,7 +1861,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
       context: context,
       builder: (_) => _DialogAjustarQuantidade(
         rotulo: _rotulo,
-        rack: rack,
+        produto: rack.produtos.first,
         saldo: _saldo,
         podeEsvaziar: widget.onEsvaziar != null,
         temAcima: t.ordem < pilha.length,
@@ -1651,6 +1873,30 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
       return;
     }
     widget.onAjustarQuantidade?.call(nova);
+  }
+
+  /// [_abrirAjuste] para um produto de rack misto: 0 tira só ESTE produto, e
+  /// o palete fica com os outros.
+  Future<void> _abrirAjusteProduto(ProdutoNoRack produto) async {
+    final saldo = widget.saldos[produto.produtoCodigo] ??
+        (produto.produtoCodigo == _focoCodigo ? _saldo : null);
+    final nova = await showDialog<double>(
+      context: context,
+      builder: (_) => _DialogAjustarQuantidade(
+        rotulo: _rotulo,
+        produto: produto,
+        saldo: saldo,
+        podeEsvaziar: widget.onRemoverProduto != null,
+        rackMisto: true,
+      ),
+    );
+    if (!mounted || nova == null || nova == produto.quantidade) return;
+    if (nova == 0) {
+      if (_focoCodigo == produto.produtoCodigo) _focoCodigo = null;
+      widget.onRemoverProduto?.call(produto);
+      return;
+    }
+    widget.onAjustarProduto?.call(produto, nova);
   }
 
   @override
@@ -1722,9 +1968,20 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   // ── Endereço ocupado ───────────────────────────────────────────────────────
 
   Widget _buildOcupado(RackGalpao rack) {
-    final pendente = widget.codigosConferencia.contains(rack.produtoCodigo);
+    if (_adicionando) return _buildAdicionando(rack);
+    final pendente = rack.produtos.any(
+      (p) => widget.codigosConferencia.contains(p.produtoCodigo),
+    );
     final blocoSaldo = _blocoSaldo();
-    final botaoDestaque = _botaoDestaque(rack);
+    final foco = rack.contem(_focoCodigo ?? '')
+        ? _focoCodigo!
+        : rack.produtoCodigo;
+    final botaoDestaque = _botaoDestaque(
+      rack.produtos.firstWhere((p) => p.produtoCodigo == foco),
+    );
+    final estocado = codigoEhEstocado(rack.produtoCodigo);
+    final cabeMais =
+        rack.produtos.length < GalpaoConfig.produtosMaxPorRack;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1761,62 +2018,64 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           ),
           const SizedBox(height: 8),
         ],
-        Text(
-          rack.produtoNome.isEmpty ? rack.produtoCodigo : rack.produtoNome,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
+        if (rack.misto) _listaMisto(rack, foco) else ...[
+          Text(
+            rack.produtoNome.isEmpty ? rack.produtoCodigo : rack.produtoNome,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // O número é o botão, e é o único caminho de escrita do rack:
-            // contar de novo e achar outro valor é a coisa mais comum que
-            // acontece com um palete já endereçado, e 0 é o palete saindo.
-            InkWell(
-              onTap: widget.onAjustarQuantidade == null
-                  ? null
-                  : () => _abrirAjuste(rack),
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      quantidadeEmUnidades(rack.quantidade),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (widget.onAjustarQuantidade != null) ...[
-                      const SizedBox(width: 7),
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 3),
-                        child: Icon(
-                          Icons.edit_outlined,
-                          size: 15,
-                          color: corCamda,
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // O número é o botão, e é o único caminho de escrita do rack:
+              // contar de novo e achar outro valor é a coisa mais comum que
+              // acontece com um palete já endereçado, e 0 é o palete saindo.
+              InkWell(
+                onTap: widget.onAjustarQuantidade == null
+                    ? null
+                    : () => _abrirAjuste(rack),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        quantidadeEmUnidades(rack.quantidade),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
+                      if (widget.onAjustarQuantidade != null) ...[
+                        const SizedBox(width: 7),
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 3),
+                          child: Icon(
+                            Icons.edit_outlined,
+                            size: 15,
+                            color: corCamda,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
-            ),
-            const Spacer(),
-            Text(
-              'cód. ${rack.produtoCodigo}',
-              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
-            ),
-          ],
-        ),
+              const Spacer(),
+              Text(
+                'cód. ${rack.produtoCodigo}',
+                style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+              ),
+            ],
+          ),
+        ],
         if (blocoSaldo != null) ...[const SizedBox(height: 8), blocoSaldo],
         if (widget.onAlternarDestaque != null && botaoDestaque != null) ...[
           const SizedBox(height: 8),
@@ -1825,8 +2084,7 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
         // Só palete de estocado: o cooperado levou a mercadoria, a vaga
         // precisa voltar a ficar livre. Os demais racks seguem com o número
         // como única ação (0 esvazia), como descrito no README.
-        if (codigoEhEstocado(rack.produtoCodigo) &&
-            widget.onEsvaziar != null) ...[
+        if (estocado && widget.onEsvaziar != null) ...[
           const SizedBox(height: 10),
           OutlinedButton.icon(
             onPressed: () => _retirarEstocado(rack),
@@ -1841,6 +2099,168 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
             ),
           ),
         ],
+        // Rack misto: sobrou pouco de um produto e ele vai junto no palete
+        // de outro, em vez de ocupar uma gaiola sozinho. Estocado é material
+        // de cooperado e não se mistura com o da loja.
+        if (widget.onAdicionarProduto != null && !estocado && cabeMais) ...[
+          const SizedBox(height: 6),
+          TextButton.icon(
+            onPressed: () => setState(() => _adicionando = true),
+            icon: const Icon(Icons.add, size: 16),
+            label: Text(
+              'Adicionar outro produto neste rack '
+              '(${rack.produtos.length}/${GalpaoConfig.produtosMaxPorRack})',
+            ),
+            style: TextButton.styleFrom(
+              foregroundColor: corCamda,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              textStyle: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Os produtos de um rack misto, um por linha: nome (toque põe o saldo
+  /// dele na tarja), quantidade (toque abre o teclado — 0 tira só ele) e
+  /// código.
+  Widget _listaMisto(RackGalpao rack, String foco) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'RACK MISTO · ${pluralizar(rack.produtos.length, 'produto', 'produtos')}',
+          style: const TextStyle(
+            color: Color(0xFF8a9aa8),
+            fontSize: 10,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 4),
+        for (final p in rack.produtos)
+          Container(
+            margin: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+            decoration: BoxDecoration(
+              color: p.produtoCodigo == foco
+                  ? corCamda.withValues(alpha: 0.10)
+                  : const Color(0xFF161c22),
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(
+                color: p.produtoCodigo == foco
+                    ? corCamda.withValues(alpha: 0.5)
+                    : const Color(0xFF232f3a),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () => _focarProduto(p.produtoCodigo),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          p.produtoNome.isEmpty
+                              ? p.produtoCodigo
+                              : p.produtoNome,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          'cód. ${p.produtoCodigo}',
+                          style: const TextStyle(
+                            color: Color(0xFF8a9aa8),
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: widget.onAjustarProduto == null
+                      ? null
+                      : () => _abrirAjusteProduto(p),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          quantidadeEmUnidades(p.quantidade),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (widget.onAjustarProduto != null) ...[
+                          const SizedBox(width: 5),
+                          const Icon(
+                            Icons.edit_outlined,
+                            size: 14,
+                            color: corCamda,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// O rack ocupado escolhendo o produto que vai entrar nele: a mesma busca
+  /// do lançamento, sem os produtos que já estão no palete.
+  Widget _buildAdicionando(RackGalpao rack) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.add_box_outlined, size: 16, color: corCamda),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Mais um produto no mesmo palete — '
+                '${rack.produtos.length} de '
+                '${GalpaoConfig.produtosMaxPorRack} no rack.',
+                style: const TextStyle(color: corCamda, fontSize: 12),
+              ),
+            ),
+            GestureDetector(
+              onTap: _cancelarAdicao,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Text(
+                  'Cancelar',
+                  style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        ..._escolhaDeProduto(
+          rotuloBotao: 'Adicionar em $_rotulo',
+          onConfirmar: _adicionar,
+          excluir: {for (final p in rack.produtos) p.produtoCodigo},
+        ),
       ],
     );
   }
@@ -2000,8 +2420,8 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// Devolve null quando o produto só está NESTE lugar: acender uma posição
   /// só, com o painel dela já aberto, não mostra nada que não esteja na tela
   /// — e o botão ficava ali em todo rack, cobrando espaço sem servir.
-  Widget? _botaoDestaque(RackGalpao rack) {
-    final chave = chaveDestaque(rack.produtoCodigo, rack.produtoNome);
+  Widget? _botaoDestaque(ProdutoNoRack produto) {
+    final chave = chaveDestaque(produto.produtoCodigo, produto.produtoNome);
     final quantas = _posicoesDoProduto(chave);
     final aceso = widget.destacadoCodigo == chave;
     if (quantas <= 1 && !aceso) return null;
@@ -2050,7 +2470,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     var total = 0;
     for (final pilha in widget.pilhas.values) {
       final tem = pilha.any(
-        (r) => chaveDestaque(r.produtoCodigo, r.produtoNome) == chave,
+        (r) => r.produtos.any(
+          (p) => chaveDestaque(p.produtoCodigo, p.produtoNome) == chave,
+        ),
       );
       if (tem) total++;
     }
@@ -2060,11 +2482,6 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   // ── Endereço vazio: lançar ─────────────────────────────────────────────────
 
   Widget _buildVazio(ToqueGalpao t) {
-    final produto = _produtoSel;
-    // Saldo do produto escolhido: quanto ainda falta endereçar é justamente o
-    // que decide a quantidade a lançar neste palete.
-    final blocoSaldo = produto == null ? null : _blocoSaldo();
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2087,132 +2504,93 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
           ],
         ),
         const SizedBox(height: 10),
-        if (produto == null) ...[
-          TextField(
-            controller: _buscaCtrl,
-            onChanged: _aoDigitarBusca,
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-            decoration: _decoracaoCampo(
-              'Buscar produto por nome ou código…',
-              Icons.search,
-            ),
+        ..._escolhaDeProduto(
+          rotuloBotao: 'Lançar em $_rotulo',
+          onConfirmar: _lancar,
+        ),
+      ],
+    );
+  }
+
+  /// Busca (ou recentes) → produto escolhido → quantidade → botão. É o miolo
+  /// do lançamento numa vaga livre e da entrada de mais um produto num rack
+  /// misto; [excluir] tira da lista o que não pode ser escolhido (os
+  /// produtos que já estão no rack).
+  List<Widget> _escolhaDeProduto({
+    required String rotuloBotao,
+    required VoidCallback onConfirmar,
+    Set<String>? excluir,
+  }) {
+    final produto = _produtoSel;
+    // Saldo do produto escolhido: quanto ainda falta endereçar é justamente o
+    // que decide a quantidade a lançar neste palete.
+    final blocoSaldo = produto == null ? null : _blocoSaldo();
+    // No rack misto, estocado (material de cooperado) também fica de fora:
+    // não se mistura com a mercadoria da loja.
+    bool pode(Produto p) =>
+        excluir == null ||
+        (!excluir.contains(p.codigo) && !codigoEhEstocado(p.codigo));
+    final resultados = [
+      for (final p in _resultados)
+        if (pode(p)) p,
+    ];
+    final recentes = [
+      for (final r in widget.recentes)
+        if (pode(r.produto)) r,
+    ];
+
+    return [
+      if (produto == null) ...[
+        TextField(
+          controller: _buscaCtrl,
+          onChanged: _aoDigitarBusca,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          decoration: _decoracaoCampo(
+            'Buscar produto por nome ou código…',
+            Icons.search,
           ),
-          if (_resultados.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Column(
-                children: [
-                  for (final p in _resultados)
-                    InkWell(
-                      onTap: () => _selecionarProduto(p),
-                      borderRadius: BorderRadius.circular(6),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 8,
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 10,
-                              height: 10,
-                              decoration: BoxDecoration(
-                                color: p.cor,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                p.nome,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              p.codigo,
-                              style: const TextStyle(
-                                color: Color(0xFF8a9aa8),
-                                fontSize: 10,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            )
-          else if (_buscaCtrl.text.trim().length >= 2)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                widget.carregandoCatalogo
-                    ? 'Carregando catálogo…'
-                    : widget.catalogo.isEmpty
-                    ? 'Catálogo não carregado — sincronize no mapa da '
-                          'loja (⚙️).'
-                    : 'Nenhum produto encontrado.',
-                style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
-              ),
-            )
-          else if (widget.recentes.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.only(top: 8, bottom: 6),
-              child: Text(
-                'ÚLTIMOS LANÇADOS',
-                style: TextStyle(
-                  color: Color(0xFF8a9aa8),
-                  fontSize: 10,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
+        ),
+        if (resultados.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Column(
               children: [
-                for (final r in widget.recentes)
+                for (final p in resultados)
                   InkWell(
-                    onTap: () =>
-                        _selecionarProduto(r.produto, quantidade: r.quantidade),
+                    onTap: () => _selecionarProduto(p),
                     borderRadius: BorderRadius.circular(6),
-                    child: Container(
+                    child: Padding(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF161c22),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: const Color(0xFF232f3a)),
+                        horizontal: 6,
+                        vertical: 8,
                       ),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Container(
-                            width: 8,
-                            height: 8,
+                            width: 10,
+                            height: 10,
                             decoration: BoxDecoration(
-                              color: r.produto.cor,
+                              color: p.cor,
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 180),
+                          const SizedBox(width: 8),
+                          Expanded(
                             child: Text(
-                              r.produto.nome,
+                              p.nome,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 11,
+                                fontSize: 12,
                               ),
+                            ),
+                          ),
+                          Text(
+                            p.codigo,
+                            style: const TextStyle(
+                              color: Color(0xFF8a9aa8),
+                              fontSize: 10,
                             ),
                           ),
                         ],
@@ -2221,84 +2599,158 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
                   ),
               ],
             ),
-          ],
-        ] else ...[
-          // Produto escolhido: chip + quantidade + Lançar.
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: const Color(0xFF162416),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF2e6b46)),
+          )
+        else if (_buscaCtrl.text.trim().length >= 2)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              widget.carregandoCatalogo
+                  ? 'Carregando catálogo…'
+                  : widget.catalogo.isEmpty
+                  ? 'Catálogo não carregado — sincronize no mapa da '
+                        'loja (⚙️).'
+                  : 'Nenhum produto encontrado.',
+              style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
             ),
-            child: Row(
-              children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: produto.cor,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    produto.nome,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF6fcf97),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+          )
+        else if (recentes.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.only(top: 8, bottom: 6),
+            child: Text(
+              'ÚLTIMOS LANÇADOS',
+              style: TextStyle(
+                color: Color(0xFF8a9aa8),
+                fontSize: 10,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final r in recentes)
+                InkWell(
+                  onTap: () =>
+                      _selecionarProduto(r.produto, quantidade: r.quantidade),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF161c22),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF232f3a)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: r.produto.cor,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
+                          child: Text(
+                            r.produto.nome,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                GestureDetector(
-                  onTap: () => setState(() {
-                    _produtoSel = null;
-                    _qtdCtrl.clear();
-                    _saldo = null;
-                    _saldoSeq++;
-                  }),
-                  child: const Icon(
-                    Icons.close,
-                    size: 14,
-                    color: Color(0xFF8a9aa8),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (blocoSaldo != null) ...[const SizedBox(height: 8), blocoSaldo],
-          const SizedBox(height: 8),
-          TextField(
-            controller: _qtdCtrl,
-            onChanged: (_) => setState(() {}),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
             ],
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-            // Digita-se o que se CONTA — e é o mesmo número que o sistema
-            // mostra. Não há mais conversão nenhuma no meio do caminho.
-            decoration: _decoracaoCampo('Unidades', null),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _quantidadeDigitada == null ? null : _lancar,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF2e6b46),
-                padding: const EdgeInsets.symmetric(vertical: 11),
-              ),
-              child: Text('Lançar em $_rotulo'),
-            ),
           ),
         ],
+      ] else ...[
+        // Produto escolhido: chip + quantidade + Lançar.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: const Color(0xFF162416),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFF2e6b46)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: produto.cor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  produto.nome,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF6fcf97),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _produtoSel = null;
+                  _qtdCtrl.clear();
+                  _saldo = null;
+                  _saldoSeq++;
+                }),
+                child: const Icon(
+                  Icons.close,
+                  size: 14,
+                  color: Color(0xFF8a9aa8),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (blocoSaldo != null) ...[const SizedBox(height: 8), blocoSaldo],
+        const SizedBox(height: 8),
+        TextField(
+          controller: _qtdCtrl,
+          onChanged: (_) => setState(() {}),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
+          ],
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          // Digita-se o que se CONTA — e é o mesmo número que o sistema
+          // mostra. Não há mais conversão nenhuma no meio do caminho.
+          decoration: _decoracaoCampo('Unidades', null),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: _quantidadeDigitada == null ? null : onConfirmar,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2e6b46),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+            ),
+            child: Text(rotuloBotao),
+          ),
+        ),
       ],
-    );
+    ];
   }
 
   InputDecoration _decoracaoCampo(String hint, IconData? icone) =>
@@ -2354,8 +2806,12 @@ class _DialogAjustarQuantidade extends StatefulWidget {
   /// [PainelEnderecoGalpao.rotuloEndereco]) — o dialog não sabe de que prédio
   /// veio o rack, só como o endereço se chama.
   final String rotulo;
-  final RackGalpao rack;
+  final ProdutoNoRack produto;
   final SaldoProduto? saldo;
+
+  /// O produto é um entre vários do mesmo palete: 0 tira só ele, e o rack
+  /// fica com os outros.
+  final bool rackMisto;
 
   /// 0 é aceito e sai daqui como pedido de esvaziar. Falso (uso só de
   /// leitura, testes) mantém o dialog em correção de número.
@@ -2367,10 +2823,11 @@ class _DialogAjustarQuantidade extends StatefulWidget {
 
   const _DialogAjustarQuantidade({
     required this.rotulo,
-    required this.rack,
+    required this.produto,
     required this.saldo,
     this.podeEsvaziar = false,
     this.temAcima = false,
+    this.rackMisto = false,
   });
 
   @override
@@ -2380,7 +2837,7 @@ class _DialogAjustarQuantidade extends StatefulWidget {
 
 class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
   late final TextEditingController _ctrl = TextEditingController(
-    text: formatarNumero(widget.rack.quantidade),
+    text: formatarNumero(widget.produto.quantidade),
   );
 
   @override
@@ -2423,7 +2880,7 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
     // doubles vindos de somas do banco produz "57.00000000000001", e o que
     // se oferece para digitar não pode ter cauda de ponto flutuante.
     final alvo =
-        ((widget.rack.quantidade - saldo.diferenca) * 1000).roundToDouble() /
+        ((widget.produto.quantidade - saldo.diferenca) * 1000).roundToDouble() /
         1000;
     return alvo > 0 ? alvo : null;
   }
@@ -2448,9 +2905,9 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            widget.rack.produtoNome.isEmpty
-                ? widget.rack.produtoCodigo
-                : widget.rack.produtoNome,
+            widget.produto.produtoNome.isEmpty
+                ? widget.produto.produtoCodigo
+                : widget.produto.produtoNome,
             style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 12),
           ),
           const SizedBox(height: 12),
@@ -2514,7 +2971,10 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
-                      widget.temAcima
+                      widget.rackMisto
+                          ? '0 tira este produto de $rotulo. Os outros '
+                                'continuam no palete.'
+                          : widget.temAcima
                           ? '0 tira o palete de $rotulo. Os racks de cima '
                                 'descem um nível e a ordem é renumerada.'
                           : '0 tira o palete de $rotulo — o endereço fica '
@@ -2571,10 +3031,10 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
           const SizedBox(height: 8),
           Text(
             widget.podeEsvaziar
-                ? 'Estava com ${quantidadeEmUnidades(widget.rack.quantidade)}. '
-                      'Digite 0 para tirar o palete inteiro.'
+                ? 'Estava com ${quantidadeEmUnidades(widget.produto.quantidade)}. '
+                      '${widget.rackMisto ? 'Digite 0 para tirar este produto do rack.' : 'Digite 0 para tirar o palete inteiro.'}'
                 : 'Estava com '
-                      '${quantidadeEmUnidades(widget.rack.quantidade)}.',
+                      '${quantidadeEmUnidades(widget.produto.quantidade)}.',
             style: const TextStyle(color: Color(0xFF6b7a88), fontSize: 11),
           ),
         ],
@@ -2589,7 +3049,7 @@ class _DialogAjustarQuantidadeState extends State<_DialogAjustarQuantidade> {
               ? null
               : () => Navigator.pop(context, digitada),
           child: Text(
-            esvaziando ? 'Esvaziar' : 'Salvar',
+            esvaziando ? (widget.rackMisto ? 'Tirar' : 'Esvaziar') : 'Salvar',
             style: TextStyle(
               color: esvaziando ? corSaindo : corCamda,
               fontWeight: FontWeight.w600,

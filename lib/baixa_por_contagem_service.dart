@@ -374,8 +374,10 @@ class BaixaPorContagemService {
   static EnderecoLocalizado _enderecoDaLinha(
     Map<String, dynamic> r, {
     String? rackUuid,
+    String? itemUuid,
   }) => EnderecoLocalizado(
     rackUuid: rackUuid,
+    itemUuid: itemUuid,
     id: r['id'] as int?,
     produtoCodigo: r['produto_codigo'] as String? ?? '',
     localTipo: r['local_tipo'] as String? ?? 'gondola',
@@ -392,11 +394,17 @@ class BaixaPorContagemService {
   Future<Map<String, List<EnderecoLocalizado>>> _lerEnderecos(
     LibsqlClient client,
   ) async {
+    // O rack do galpão é achado pelo endereço (posição + nível) e o produto
+    // dentro dele pelo código: no principal (a linha do rack) ou num item de
+    // rack misto. Endereço cujo código não está em nenhum dos dois (espelho
+    // atrasado) fica sem rack_uuid e a baixa não toca nele.
     final stmt = await client.prepare(
-      'SELECT e.*, r.rack_uuid FROM estoque_localizado e '
+      'SELECT e.*, r.rack_uuid, r.produto_codigo AS rack_codigo, i.item_uuid '
+      'FROM estoque_localizado e '
       'LEFT JOIN galpao_racks r ON e.local_tipo = \'galpao\' '
       'AND r.posicao = e.local_num AND r.ordem = e.andar_ou_nivel '
-      'AND r.produto_codigo = e.produto_codigo',
+      'LEFT JOIN galpao_rack_itens i ON i.rack_uuid = r.rack_uuid '
+      'AND i.produto_codigo = e.produto_codigo',
     );
     final rows = await stmt.query() as List<dynamic>;
     TursoService().contarLeitura('baixa_enderecos', rows.length);
@@ -406,9 +414,17 @@ class BaixaPorContagemService {
       final bruto = r['produto_codigo'] as String? ?? '';
       final codigo = normalizarCodigo(bruto);
       if (codigo == null) continue;
+      final itemUuid = r['item_uuid'] as String?;
+      final doRack = itemUuid != null || r['rack_codigo'] == bruto;
       porCodigo
           .putIfAbsent(codigo, () => <EnderecoLocalizado>[])
-          .add(_enderecoDaLinha(r, rackUuid: r['rack_uuid'] as String?));
+          .add(
+            _enderecoDaLinha(
+              r,
+              rackUuid: doRack ? r['rack_uuid'] as String? : null,
+              itemUuid: itemUuid,
+            ),
+          );
     }
     return porCodigo;
   }
@@ -505,15 +521,32 @@ class BaixaPorContagemService {
     // em teste.
     for (final a in ordenarGravacaoGalpao(plano.ajustes)) {
       if (a.endereco.rackUuid == null) return false;
+      // Item de rack misto: o plano de OUTRO produto do mesmo rack, gravado
+      // antes nesta passada, pode ter tirado o principal — e aí este item
+      // subiu a principal e o item_uuid lido no começo já não existe.
+      // Relê onde o produto está agora no rack.
+      var itemUuid = a.endereco.itemUuid;
+      if (itemUuid != null) {
+        final atual = await GalpaoService().localizarNoRack(
+          rackUuid: a.endereco.rackUuid!,
+          produtoCodigo: a.endereco.produtoCodigo,
+        );
+        if (atual == null) return false;
+        itemUuid = atual.itemUuid;
+      }
+      // Zerar tira só ESTE produto do rack: num rack misto os outros ficam
+      // no palete; sozinho no rack, é o rack saindo (e a pilha desce).
       final ok = a.esvazia
-          ? await GalpaoService().esvaziar(
+          ? await GalpaoService().removerProduto(
               rackUuid: a.endereco.rackUuid,
+              itemUuid: itemUuid,
               posicao: a.endereco.localNum,
               ordem: a.endereco.andarOuNivel,
               origem: origemLog,
             )
           : await GalpaoService().ajustarQuantidade(
               rackUuid: a.endereco.rackUuid,
+              itemUuid: itemUuid,
               posicao: a.endereco.localNum,
               ordem: a.endereco.andarOuNivel,
               quantidade: a.qtdNova,
