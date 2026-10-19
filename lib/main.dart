@@ -23,6 +23,7 @@ import 'layouts_copia.dart' show ResultadoSalvarLayout;
 import 'loja_scene.dart';
 import 'modo_conferencia_service.dart';
 import 'models.dart';
+import 'mostruario_scene.dart';
 import 'palete_registry.dart';
 import 'palete_scene.dart';
 import 'quantidade_dialog.dart';
@@ -1401,8 +1402,8 @@ class _SearchBox extends StatelessWidget {
                                             child: Text(
                                               p.tipo == localTipoBarracao
                                                   ? 'Barracão · ${p.nivelDescricao}'
-                                                  : '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : ehIlhaPaletes(p.numero) ? 'Ilha de paletes' : 'Estante'}'
-                                                    '${ehIlhaPaletes(p.numero) ? '' : ' nº ${p.numero}'} · ${p.nivelDescricao}',
+                                                  : '${p.tipo == 'gondola' ? 'Gôndola' : p.tipo == localTipoGalpao ? 'Galpão' : ehPalete(p.numero) ? 'Palete' : ehIlhaPaletes(p.numero) ? 'Ilha de paletes' : ehMostruario(p.numero) ? 'Mostruário' : 'Estante'}'
+                                                    '${ehIlhaPaletes(p.numero) || ehMostruario(p.numero) ? '' : ' nº ${p.numero}'} · ${p.nivelDescricao}',
                                               style: const TextStyle(
                                                   color: Color(0xFF9b9893), fontSize: 11),
                                             ),
@@ -1447,6 +1448,8 @@ class _LegendRow extends StatelessWidget {
         _chip(corEstanteLoja, 'Estante'),
         const SizedBox(height: 6),
         _chip(IlhaPaletesGeometry.corTapume, 'Paletes'),
+        const SizedBox(height: 6),
+        _chip(MostruarioGeometry.corMadeira, 'Mostruário'),
       ],
     );
   }
@@ -1521,6 +1524,7 @@ class _LocationCard extends StatelessWidget {
 
     final ehPaleteAqui = tipo == 'estante' && ehPalete(numero);
     final ehIlhaAqui   = tipo == 'estante' && ehIlhaPaletes(numero);
+    final ehMostruarioAqui = tipo == 'estante' && ehMostruario(numero);
     final ehParede     = tipo == 'estante' && ehEstanteParede(numero);
     final ehGalpaoAqui = tipo == localTipoGalpao;
     final ehBarracaoAqui = tipo == localTipoBarracao;
@@ -1551,6 +1555,8 @@ class _LocationCard extends StatelessWidget {
                 ? 'Palete'
                 : ehIlhaAqui
                     ? 'Ilha de paletes'
+                : ehMostruarioAqui
+                    ? 'Mostruário'
                 : ehParede
                     ? 'Estante Parede'
                     : 'Estante';
@@ -1562,6 +1568,8 @@ class _LocationCard extends StatelessWidget {
         ? 'E$estanteParedeMin–E$estanteParedeMax'
         : ehIlhaAqui
         ? 'Ilha'
+        : ehMostruarioAqui
+        ? 'Mostruário'
         : '$prefixo$numero';
     final numeroTexto =
         produto != null && produto!.tipo == tipo ? produto!.numero : numero;
@@ -2521,6 +2529,9 @@ class _GondolaPageState extends State<GondolaPage>
             ? '📦 ${produto.nome}\n'
                 'Ilha de paletes · espaço ${espacoIlhaPaletes(niv)} · '
                 'produto ${produtoIlhaPaletes(col)}'
+            : ehMostruario(naEstante.estanteNum)
+            ? '📦 ${produto.nome}\n'
+                'Mostruário · posição ${posicaoMostruario(niv)}'
             : '📦 ${produto.nome}\n'
                 'Estante ${naEstante.estanteNum} · ${colNomes[col]} · '
                 '${nivelNomes[niv]} · Slot ${naEstante.slot + 1}';
@@ -3868,6 +3879,17 @@ class _EstantePageState extends State<EstantePage>
         gap:      0.0,
       );
     }
+    // Mostruário: uma caixa por posição, slot sempre 0.
+    if (ehMostruario(_estanteAtual)) {
+      final celula = MostruarioGeometry.celulas()[
+          nivel.clamp(0, posicoesMostruario - 1)];
+      return (
+        maxSlots: 1,
+        xMin:     celula.xCenter - MostruarioGeometry.wCaixa / 2,
+        wCaixa:   MostruarioGeometry.wCaixa,
+        gap:      0.0,
+      );
+    }
     if (ehPalete(_estanteAtual)) {
       final celula = PaleteGeometry.celulas()
           .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
@@ -3970,6 +3992,9 @@ class _EstantePageState extends State<EstantePage>
     if (ehIlhaPaletes(_estanteAtual)) {
       return 'Ilha · espaço ${espacoIlhaPaletes(_nivelSelecionado!)} · '
           'produto ${produtoIlhaPaletes(_colunaSelecionada!)}';
+    }
+    if (ehMostruario(_estanteAtual)) {
+      return 'Mostruário · posição ${posicaoMostruario(_nivelSelecionado!)}';
     }
     // Na parede o chip mostra também a posição global P1–P12 (derivada),
     // ex.: 'E15 · AH · Slot 2 (P6)'.
@@ -4223,7 +4248,9 @@ class _EstantePageState extends State<EstantePage>
             ? 'Este palete'
             : ehIlhaPaletes(numero)
                 ? 'Esta ilha de paletes'
-                : 'Esta estante',
+                : ehMostruario(numero)
+                    ? 'Este mostruário'
+                    : 'Esta estante',
       );
       if (!mounted) return;
       if (escolha == EscolhaConflitoLayout.salvarPorCima &&
@@ -4370,8 +4397,11 @@ class _EstantePageState extends State<EstantePage>
     final colNome     = colNomes[encontrado.coluna.clamp(0, maxColunas - 1)];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
-        '📍 ${produto.nome} → Estante ${encontrado.estanteNum}, '
-        '$colNome, $nivelNome, Slot ${encontrado.slot + 1}',
+        ehMostruario(encontrado.estanteNum)
+            ? '📍 ${produto.nome} → Mostruário, posição '
+                '${posicaoMostruario(encontrado.nivel.clamp(0, nivProduto - 1))}'
+            : '📍 ${produto.nome} → Estante ${encontrado.estanteNum}, '
+                '$colNome, $nivelNome, Slot ${encontrado.slot + 1}',
       ),
       backgroundColor: const Color(0xFF1a3a2a),
       duration: const Duration(seconds: 3),
@@ -4671,6 +4701,19 @@ class _EstantePageState extends State<EstantePage>
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:    _destacadosCodigos,
                       )
+                : ehMostruario(_estanteAtual)
+                    ? MostruarioScene(
+                        caixas:               _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:        _corPorProduto,
+                        onTapCelula:          _onTapCelula,
+                        onTapCelulaVisualizar: _onTapCelulaVisualizar,
+                        destacadoCodigo:      _destacadoCodigo,
+                        desatualizados:       _desatualizados,
+                        divergentes:          _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
+                        destacadosCodigos:    _destacadosCodigos,
+                      )
                 : ehPalete(_estanteAtual)
                     ? PaleteScene(
                         estanteAtual:         _estanteAtual,
@@ -4939,7 +4982,9 @@ class _EstanteSelector extends StatelessWidget {
                   ? 'PALETE'
                   : ehIlhaPaletes(estanteAtual)
                       ? 'ILHA DE PALETES'
-                      : 'ESTANTE',
+                      : ehMostruario(estanteAtual)
+                          ? 'MOSTRUÁRIO'
+                          : 'ESTANTE',
               style: const TextStyle(
                 color: Color(0xFF8a9aa8),
                 fontSize: 10,
@@ -4969,7 +5014,10 @@ class _EstanteSelector extends StatelessWidget {
                               ? 'de ${ordemNavegacaoEstantes.length} · '
                                   '$espacosIlhaPaletes espaços × '
                                   '$produtosPorEspacoIlha produtos'
-                              : 'de ${ordemNavegacaoEstantes.length}',
+                              : ehMostruario(estanteAtual)
+                                  ? 'de ${ordemNavegacaoEstantes.length} · '
+                                      '$posicoesMostruario posições'
+                                  : 'de ${ordemNavegacaoEstantes.length}',
               style: const TextStyle(
                 color: Color(0xFF5a6a78),
                 fontSize: 10,

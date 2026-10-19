@@ -168,6 +168,23 @@ int espacoIlhaPaletes(int nivel) => nivel + 1;
 /// Número do produto (1–5) dentro do espaço a partir da `coluna` (0–4).
 int produtoIlhaPaletes(int coluna) => coluna + 1;
 
+// Mostruário: um palete de madeira no chão, na parede da direita da loja
+// (entre a Estante 1 e a cozinha), com uns 20 tipos de ferragem e ferramenta
+// à mostra — porcas, arruelas, barras, correntes, pá, rastelo. Peça FIXA do
+// mapa, como a ilha. 20 POSIÇÕES numeradas 1–20 numa grade de 5 × 4.
+// Reutiliza a infra de estante: local_tipo 'estante', número próprio, slot
+// sempre 0, `nivel` = posição (0–19) e `coluna` sempre 0 — a busca agrupa por
+// nível e assim já diz a posição exata. Geometria em lib/mostruario_scene.dart.
+const int mostruarioNum      = 23;
+const int posicoesMostruario = 20;
+const int colunasMostruario  = 5;   // posições na frente do palete (1,20 m)
+const int fileirasMostruario = posicoesMostruario ~/ colunasMostruario;
+
+bool ehMostruario(int estanteNum) => estanteNum == mostruarioNum;
+
+/// Número da posição (1–20) do mostruário a partir do `nivel` gravado (0–19).
+int posicaoMostruario(int nivel) => nivel + 1;
+
 /// Rótulo curto de uma estrutura, do jeito que ela é etiquetada na loja:
 /// "G7", "E5", "P101". Paletes reutilizam local_tipo 'estante' no banco, mas
 /// nunca são apresentados como estante ao usuário.
@@ -177,7 +194,9 @@ String rotuloCurtoEstrutura(String tipo, int numero) => tipo == 'gondola'
         ? 'P$numero'
         : ehIlhaPaletes(numero)
             ? 'Ilha'
-            : 'E$numero';
+            : ehMostruario(numero)
+                ? 'Mostruário'
+                : 'E$numero';
 
 /// "1 produto" / "3 produtos" — contagem já flexionada.
 ///
@@ -195,7 +214,9 @@ String nomeEstrutura(String tipo, int numero) => tipo == 'gondola'
         ? 'Palete $numero'
         : ehIlhaPaletes(numero)
             ? 'Ilha de paletes'
-            : 'Estante $numero';
+            : ehMostruario(numero)
+                ? 'Mostruário'
+                : 'Estante $numero';
 
 /// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
 /// filosofia do faceFromPos): cada seção contribui com 2 posições.
@@ -204,10 +225,10 @@ int posicaoGlobalParede(int estanteNum, int coluna) =>
 
 /// Parte FIXA da ordem de navegação do carrossel de estantes. As seções da
 /// parede (13–18) ocupam o lugar onde ficavam as estantes 3 e 4; a ilha de
-/// paletes (22) entra depois dos expositores.
+/// paletes (22) e o mostruário (23) entram depois dos expositores.
 const List<int> ordemNavegacaoBase = [
   1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20,
-  ilhaPaletesNum,
+  ilhaPaletesNum, mostruarioNum,
 ];
 
 /// Ordem completa do carrossel: a base fixa seguida dos paletes ativos
@@ -244,6 +265,7 @@ bool temNivelTopoPara(int estanteNum) =>
 int niveisProdutoPara(int estanteNum) {
   if (ehPalete(estanteNum)) return fileirasPalete;
   if (ehIlhaPaletes(estanteNum)) return espacosIlhaPaletes;
+  if (ehMostruario(estanteNum)) return posicoesMostruario;
   return ehEstanteEdr300(estanteNum)
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
@@ -264,6 +286,7 @@ int niveisProdutoPara(int estanteNum) {
 int numColunasPara(int estanteNum) {
   if (ehPalete(estanteNum)) return colunasPalete;
   if (ehIlhaPaletes(estanteNum)) return produtosPorEspacoIlha;
+  if (ehMostruario(estanteNum)) return 1;
   return estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == estanteEdr300TriplaNum
@@ -325,6 +348,8 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   if (ehIlhaPaletes(estanteNum)) {
     return '${espacoIlhaPaletes(nivel)}-${produtoIlhaPaletes(coluna)}';
   }
+  // No mostruário a posição já é o endereço inteiro: 1–20.
+  if (ehMostruario(estanteNum)) return '${posicaoMostruario(nivel)}';
   final nNiveis  = niveisProdutoPara(estanteNum);
   if (ehEstanteParede(estanteNum)) {
     final numero = (estanteNum - estanteParedeMin) * nNiveis * colunasParede +

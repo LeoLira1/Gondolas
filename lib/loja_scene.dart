@@ -13,12 +13,14 @@ import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, ProjecaoCamera, faceAngle;
 import 'ilha_paletes_scene.dart' show IlhaPaletesGeometry, ilhaPaletesLoja;
+import 'mostruario_scene.dart' show MostruarioGeometry, mostruarioLoja;
 import 'models.dart'
     show balcaoNum, colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
-         ehEstanteParede, ehIlhaPaletes, colunasEspacosIlha,
+         ehEstanteParede, ehIlhaPaletes, ehMostruario, colunasEspacosIlha,
          espacoIlhaPaletes, espacosIlhaPaletes, estanteEdr300TriplaNum,
          estanteParedeMin, expositorMagnojetNum, expositorMonitorNum,
-         expositorNelloreNum, ilhaPaletesNum, rotuloCurtoEstrutura;
+         expositorNelloreNum, ilhaPaletesNum, mostruarioNum,
+         rotuloCurtoEstrutura;
 import 'scene_gestures.dart';
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
@@ -132,6 +134,12 @@ const List<ItemLoja> itensLoja = [
   // numeração 1–12 é que importam aqui; a cena de detalhe usa a medida real.
   ItemLoja(tipo: 'estante', numero: ilhaPaletesNum,
       x: 5.0, z: 8.0, w: 1.8, d: 5.6),
+  // Mostruário: palete de madeira (1,20 × 1,00 m, medida real) no chão da
+  // parede da direita, entre a Estante 1 (z 3.2–4.8) e a cozinha. O lado de
+  // 1,20 m corre ao longo da parede; a frente dá para o corredor do cliente
+  // (x = 8.4), que passa a 0,4 m dele.
+  ItemLoja(tipo: 'estante', numero: mostruarioNum,
+      x: 9.27, z: 6.2, w: 1.0, d: 1.2),
 ];
 
 // ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
@@ -365,7 +373,9 @@ class LojaGeometry {
               ? corBalcaoCorpo
               : ehIlhaPaletes(item.numero)
                   ? IlhaPaletesGeometry.corTapume
-                  : corEstanteLoja);
+                  : ehMostruario(item.numero)
+                      ? MostruarioGeometry.corMadeira
+                      : corEstanteLoja);
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
@@ -386,6 +396,8 @@ class LojaGeometry {
         _estanteParede(faces, item, cor);
       } else if (ehIlhaPaletes(item.numero)) {
         ilhaPaletesLoja(faces, item.x, item.z, item.w, item.d, cor);
+      } else if (ehMostruario(item.numero)) {
+        mostruarioLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else {
         _estante(faces, item, cor);
       }
@@ -823,6 +835,28 @@ class LojaPainter extends CustomPainter {
       }
     }
 
+    // Nome escrito no tampo do mostruário: é uma peça baixa, sem número de
+    // estante na loja, e um estrado sem nome no mapa não diz o que é.
+    for (final item in itensLoja) {
+      if (!ehMostruario(item.numero)) continue;
+      final hit = project(
+          Vec3(item.x, MostruarioGeometry.alturaPalete + 0.01, item.z));
+      if (hit == null) continue;
+      final (screen, cz) = hit;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: 'MOSTRUÁRIO',
+          style: TextStyle(
+            color:      const Color(0xE62a1a0a),
+            fontSize:   10.0 * (9.0 / cz).clamp(0.6, 1.5),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
+    }
+
     for (final item in itensLoja) {
       // Sem badges A–E nas EDR-300 (a 8 e a tripla da 6), nos expositores
       // (MagnoJet/Nellore/Monitor) nem na Estante Parede (os rótulos deles
@@ -835,6 +869,7 @@ class LojaPainter extends CustomPainter {
           item.numero == expositorMonitorNum ||
           item.numero == balcaoNum ||
           ehIlhaPaletes(item.numero) ||
+          ehMostruario(item.numero) ||
           ehEstanteParede(item.numero)) {
         continue;
       }
