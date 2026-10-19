@@ -199,10 +199,14 @@ class MostruarioPainter extends CustomPainter {
   final Camera     camera;
   final List<Face> extraFaces;
   final bool       showLabels;
+  /// Posições (nivel) com produto: não levam número por cima, senão a
+  /// etiqueta esconde a caixa.
+  final Set<int>   ocupadas;
 
   MostruarioPainter(this.camera, {
     this.extraFaces = const <Face>[],
     this.showLabels = true,
+    this.ocupadas   = const {},
   });
 
   @override
@@ -245,12 +249,15 @@ class MostruarioPainter extends CustomPainter {
       ..style       = PaintingStyle.stroke
       ..strokeWidth = 1.4;
 
-    // Número da posição flutuando acima da caixa, do fundo para a frente,
-    // vindo da mesma função que monta o endereço em letraEstanteCelula.
+    // Número da posição deitado no tampo, só nas posições LIVRES: em cima de
+    // uma caixa a etiqueta a escondia. Na ocupada a caixa é a marca, e o
+    // endereço aparece no chip ao tocar. Vem da mesma função que monta o
+    // endereço em letraEstanteCelula.
     final etiquetas = <(Vec3, String)>[
       for (final c in MostruarioGeometry.celulas())
-        (Vec3(c.xCenter, c.yTop + MostruarioGeometry.hCaixa + 0.06, c.zCenter),
-            '${posicaoMostruario(c.nivel)}'),
+        if (!ocupadas.contains(c.nivel))
+          (Vec3(c.xCenter, c.yTop + 0.01, c.zCenter),
+              '${posicaoMostruario(c.nivel)}'),
     ]..sort((a, b) =>
         proj.profundidade(b.$1).compareTo(proj.profundidade(a.$1)));
 
@@ -258,7 +265,7 @@ class MostruarioPainter extends CustomPainter {
       final hit = proj.projetar(pos);
       if (hit == null) continue;
       final (screen, cz) = hit;
-      final fontSize = 11 * (4.0 / cz).clamp(0.6, 1.6);
+      final fontSize = 9 * (4.0 / cz).clamp(0.6, 1.6);
       final tp = TextPainter(
         text: TextSpan(
           text: texto,
@@ -283,7 +290,8 @@ class MostruarioPainter extends CustomPainter {
       old.camera.rotX  != camera.rotX  ||
       old.camera.dist  != camera.dist  ||
       old.showLabels   != showLabels   ||
-      old.extraFaces   != extraFaces;
+      old.extraFaces   != extraFaces   ||
+      old.ocupadas     != ocupadas;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -504,7 +512,8 @@ class _MostruarioSceneState extends State<MostruarioScene>
           key:     _painterKey,
           painter: MostruarioPainter(_camera,
               extraFaces: extraFaces,
-              showLabels: widget.showLabels),
+              showLabels: widget.showLabels,
+              ocupadas:   {for (final c in widget.caixas) c.nivel}),
           child:   const SizedBox.expand(),
         ),
       ),

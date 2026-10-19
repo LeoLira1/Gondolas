@@ -215,10 +215,14 @@ class IlhaPaletesPainter extends CustomPainter {
   final Camera     camera;
   final List<Face> extraFaces;
   final bool       showLabels;
+  /// Posições com produto, como 'coluna|nivel': não levam número por cima,
+  /// senão a etiqueta esconde a caixa.
+  final Set<String> ocupadas;
 
   IlhaPaletesPainter(this.camera, {
     this.extraFaces = const <Face>[],
     this.showLabels = true,
+    this.ocupadas   = const {},
   });
 
   @override
@@ -288,23 +292,26 @@ class IlhaPaletesPainter extends CustomPainter {
       tp.paint(canvas, screen - Offset(tp.width / 2, tp.height / 2));
     }
 
-    // Número do espaço (1–12) flutuando acima do meio de cada palete — acima
-    // das caixas, pra não sumir atrás delas — e o do produto (1–5) na faixa
-    // livre da frente. Os dois vêm das mesmas funções que montam o
-    // endereço em letraEstanteCelula, pra etiqueta e endereço salvo não
-    // poderem divergir.
+    // Número do espaço (1–12) deitado na faixa livre do FUNDO de cada palete
+    // e o do produto (1–5) na faixa livre da frente — as duas fora da área
+    // das caixas. Flutuando acima do palete, as etiquetas cobriam as caixas
+    // na tela do celular, e a caixa recém-colocada parecia não ter entrado.
+    // O número do produto sai quando a posição está ocupada: a caixa é a
+    // marca, e o endereço aparece no chip ao tocar. Os dois vêm das mesmas
+    // funções que montam o endereço em letraEstanteCelula, pra etiqueta e
+    // endereço salvo não poderem divergir.
     const yRotulo = IlhaPaletesGeometry.yTopo + 0.01;
     for (var e = 0; e < espacosIlhaPaletes; e++) {
       final o = IlhaPaletesGeometry.origemEspaco(e);
       etiquetas.add((
-        Vec3(o.x0 + IlhaPaletesGeometry.larguraPalete / 2,
-            IlhaPaletesGeometry.yTopo + IlhaPaletesGeometry.hCaixa + 0.18,
-            o.z0 + IlhaPaletesGeometry.profundidadePalete / 2),
-        '${espacoIlhaPaletes(e)}', 16, true));
+        Vec3(o.x0 + IlhaPaletesGeometry.larguraPalete / 2, yRotulo,
+            o.z0 + 0.09),
+        '${espacoIlhaPaletes(e)}', 11, true));
     }
     for (final c in IlhaPaletesGeometry.celulas()) {
+      if (ocupadas.contains('${c.coluna}|${c.nivel}')) continue;
       etiquetas.add((Vec3(c.xCenter, yRotulo, c.zMax - 0.08),
-          '${produtoIlhaPaletes(c.coluna)}', 9, false));
+          '${produtoIlhaPaletes(c.coluna)}', 8, false));
     }
     etiquetas.sort((a, b) =>
         proj.profundidade(b.$1).compareTo(proj.profundidade(a.$1)));
@@ -319,7 +326,8 @@ class IlhaPaletesPainter extends CustomPainter {
       old.camera.rotX  != camera.rotX  ||
       old.camera.dist  != camera.dist  ||
       old.showLabels   != showLabels   ||
-      old.extraFaces   != extraFaces;
+      old.extraFaces   != extraFaces   ||
+      old.ocupadas     != ocupadas;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -370,13 +378,14 @@ class _IlhaPaletesSceneState extends State<IlhaPaletesScene>
     IlhaPaletesGeometry.profundidade / 2,
   );
 
-  // Vista de quem chega pela entrada (+Z), de cima: a ilha é baixa e
+  // Vista de quem chega pela entrada (+Z), bem de cima: a ilha é baixa e
   // comprida, e é assim que o 11/12 fica na frente e o 1/2 no fundo, como no
-  // mapa.
+  // mapa. Perto o bastante pra caixa de um produto ser vista na tela do
+  // celular.
   Camera _camera = const Camera(
-    rotY:   0.35,
-    rotX:   0.85,
-    dist:   11.0,
+    rotY:   0.2,
+    rotX:   1.05,
+    dist:   10.0,
     target: _pivo,
   );
   final _painterKey = GlobalKey();
@@ -548,7 +557,10 @@ class _IlhaPaletesSceneState extends State<IlhaPaletesScene>
           key:     _painterKey,
           painter: IlhaPaletesPainter(_camera,
               extraFaces: extraFaces,
-              showLabels: widget.showLabels),
+              showLabels: widget.showLabels,
+              ocupadas:   {
+                for (final c in widget.caixas) '${c.coluna}|${c.nivel}'
+              }),
           child:   const SizedBox.expand(),
         ),
       ),
