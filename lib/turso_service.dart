@@ -4069,12 +4069,14 @@ class TursoService {
         // agrupa por estante + nível (sem coluna), o mais específico que dá
         // pra dizer é a faixa de posições daquela fileira: 1–5, 6–10, 11–15.
         // Na ilha de paletes o nível é o ESPAÇO (1–12), que é o que se procura
-        // no chão.
+        // no chão; no mostruário, a POSIÇÃO (1–20), já o endereço inteiro.
         final descricao = ehPalete(estanteNum)
             ? 'Posições ${n * colunasPalete + 1}–${n * colunasPalete + colunasPalete}'
             : ehIlhaPaletes(estanteNum)
                 ? 'Espaço ${espacoIlhaPaletes(n)}'
-                : 'Nível ${n + 1}';
+                : ehMostruario(estanteNum)
+                    ? 'Posição ${posicaoMostruario(n)}'
+                    : 'Nível ${n + 1}';
         return ProdutoEncontrado(
           nome: r['produto_nome'] as String? ?? '',
           tipo: 'estante',

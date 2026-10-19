@@ -12,6 +12,7 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 - Sincronização de quantidades com os apps `inventariocamda` e `camda-estoque` via `estoque_localizado`
 - **Baixa automática da venda pela contagem** — o que foi vendido sai sozinho dos racks e prateleiras
 - Ilha de paletes no corredor central da loja (12 espaços × 5 produtos)
+- Mostruário de ferragens num palete na parede da direita da loja (20 posições)
 - Mapa 3D do galpão de racks (botão na barra do mapa da loja)
 - Mapa 3D do barracão de paletes (botão ao lado do galpão, na mesma barra)
 
@@ -37,6 +38,26 @@ uma plataforma baixa só, 2 paletes de largura × 6 de comprimento. Cada palete
   PBR de 1,20 × 1,00 m, medidas reais) em `lib/ilha_paletes_scene.dart`; no
   mapa ela entra em escala de planta (1,8 × 5,6 m) para deixar corredor dos
   dois lados, e a rota do boneco funcionário passou a contorná-la.
+
+## Mostruário (loja)
+
+Palete de madeira (PBR 1,20 × 1,00 m) no chão da parede da direita, entre a
+Estante 1 e a cozinha, com uns 20 tipos de produto à mostra — porcas,
+arruelas, barras de ferro, correntes, pá, rastelo. Não é estante: não tem
+nível, só posições no tampo.
+
+- **20 posições, numeradas 1–20** numa grade de 5 × 4: a fileira 1–5 é a da
+  frente (corredor), a 16–20 a do fundo (parede), sempre da esquerda para a
+  direita. O número aparece sobre cada posição na cena de detalhe.
+- **Endereço é a posição**: o chip da cena mostra `Mostruário · posição 7`,
+  e a busca, `Posição 7`.
+- **Estrutura fixa nº 23** na infra de estante (`local_tipo = 'estante'`,
+  slot sempre 0), com `nivel` = posição (0–19) e `coluna` sempre 0 — a busca
+  agrupa por nível e assim já devolve a posição exata. Sem coluna nem tabela
+  nova: busca, saldo, Modo Conferência e baixa pela contagem já enxergam.
+- No carrossel de estantes ele vem logo depois da ilha. Geometria em
+  `lib/mostruario_scene.dart`; no mapa entra em medida real, com o lado de
+  1,20 m ao longo da parede, e o corredor do cliente passa pela frente dele.
 
 ## Galpão de racks
 
