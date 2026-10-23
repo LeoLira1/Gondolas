@@ -117,6 +117,19 @@ const int niveisExpositorMonitor  = 4;
 // uma estante futura que sim teria endereços.
 const int balcaoNum = 21;
 
+// O Expositor de Madeira é uma escada maciça de 3 degraus encostada no Balcão
+// de Atendimento, do lado do corredor. Reutiliza a infra de estantes como os
+// outros expositores: local_tipo 'estante', número próprio, slot sempre 0.
+// São 18 endereços em 3 degraus × 6 produtos, nível 0 = degrau de baixo.
+// Letras contínuas de cima pra baixo, sem caso especial: A–F no degrau de
+// cima, G–L no do meio, M–R no de baixo.
+//
+// Número 24, e não 22: o 22 e o 23 já estão no banco com a ilha de paletes e
+// o mostruário de ferragens que o Gêmeo (cópia web) desenha.
+const int expositorMadeiraNum     = 24;
+const int colunasExpositorMadeira = 6;
+const int niveisExpositorMadeira  = 3;
+
 // A Estante Parede é uma peça física única (prateleiras verdes flutuantes
 // fixadas na parede) dividida em 6 seções iguais de 2 posições, modeladas
 // como as estantes 13 a 18. Ela entrou no lugar das antigas estantes 3 e 4,
@@ -229,13 +242,14 @@ int posicaoGlobalParede(int estanteNum, int coluna) =>
 const List<int> ordemNavegacaoBase = [
   1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20,
   ilhaPaletesNum, mostruarioNum,
+  expositorMadeiraNum,
 ];
 
 /// Ordem completa do carrossel: a base fixa seguida dos paletes ativos
-/// (ordenados por número), no fim — depois dos expositores 19 e 20. É um
-/// getter, não const, porque paletes são cadastrados em runtime; a lista é
-/// remontada a cada leitura para refletir cadastros/desativações sem
-/// reiniciar o app.
+/// (ordenados por número), no fim — depois dos expositores, da ilha (22), do
+/// mostruário (23) e do Expositor de Madeira (24). É um getter, não const,
+/// porque paletes são cadastrados em runtime; a lista é remontada a cada
+/// leitura para refletir cadastros/desativações sem reiniciar o app.
 List<int> get ordemNavegacaoEstantes =>
     [...ordemNavegacaoBase, ...PaleteRegistry().ativos.map((p) => p.num)];
 
@@ -274,11 +288,13 @@ int niveisProdutoPara(int estanteNum) {
             ? niveisExpositorNellore
             : estanteNum == expositorMonitorNum
                 ? niveisExpositorMonitor
-                : ehEstanteParede(estanteNum)
-                    ? niveisProdutoParede
-                    : temNivelTopoPara(estanteNum)
-                        ? niveisProdutoEstendido
-                        : niveisProdutoPadrao;
+                : estanteNum == expositorMadeiraNum
+                    ? niveisExpositorMadeira
+                    : ehEstanteParede(estanteNum)
+                        ? niveisProdutoParede
+                        : temNivelTopoPara(estanteNum)
+                            ? niveisProdutoEstendido
+                            : niveisProdutoPadrao;
 }
 
 /// Número de colunas de uma estante — usado pra clampar/nomear a coluna
@@ -297,9 +313,11 @@ int numColunasPara(int estanteNum) {
                 ? colunasExpositorNellore
                 : estanteNum == expositorMonitorNum
                     ? colunasExpositorMonitor
-                    : ehEstanteParede(estanteNum)
-                        ? colunasParede
-                        : numColunasEstante;
+                    : estanteNum == expositorMadeiraNum
+                        ? colunasExpositorMadeira
+                        : ehEstanteParede(estanteNum)
+                            ? colunasParede
+                            : numColunasEstante;
 }
 
 /// Offset (0-based) somado ao índice local (linha × colunas + coluna) antes

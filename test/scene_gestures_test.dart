@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gondola_camda/estante_edr300_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/estante_scene.dart';
+import 'package:gondola_camda/expositor_madeira_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
 import 'package:gondola_camda/expositor_monitor_scene.dart';
 import 'package:gondola_camda/expositor_nellore_scene.dart';
@@ -56,6 +57,11 @@ final Map<String, ConstrutorCena> cenas = {
       ),
   'ExpositorMonitorScene': (aoTocar) => ExpositorMonitorScene(
         geometry: const ExpositorMonitorGeometry(),
+        autoRotate: false,
+        onTapCelulaVisualizar: (_, __) => aoTocar(),
+      ),
+  'ExpositorMadeiraScene': (aoTocar) => ExpositorMadeiraScene(
+        geometry: const ExpositorMadeiraGeometry(),
         autoRotate: false,
         onTapCelulaVisualizar: (_, __) => aoTocar(),
       ),

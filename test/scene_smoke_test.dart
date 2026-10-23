@@ -6,6 +6,7 @@ import 'package:gondola_camda/gondola_scene.dart';
 import 'package:gondola_camda/balcao_scene.dart';
 import 'package:gondola_camda/estante_edr300_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
+import 'package:gondola_camda/expositor_madeira_scene.dart';
 import 'package:gondola_camda/expositor_magnojet_scene.dart';
 import 'package:gondola_camda/expositor_monitor_scene.dart';
 import 'package:gondola_camda/expositor_nellore_scene.dart';
@@ -261,6 +262,68 @@ void main() {
     expect(letraEstanteCelula(expositorMonitorNum, 4, 1), 'O');
   });
 
+  test('expositor de Madeira: 18 endereços em 3 degraus × 6 produtos', () {
+    const geo = ExpositorMadeiraGeometry();
+    expect(geo.cells.length, 18);
+    expect(niveisProdutoPara(expositorMadeiraNum), 3);
+    expect(numColunasPara(expositorMadeiraNum), 6);
+    expect(ordemNavegacaoBase, contains(expositorMadeiraNum));
+    // Escada: cada degrau acima é mais alto e mais recuado que o de baixo, e o
+    // de cima chega à altura total do expositor.
+    expect(geo.nivelY(1), greaterThan(geo.nivelY(0)));
+    expect(geo.nivelY(2), closeTo(geo.height, 1e-9));
+    expect(geo.zFrenteNivel(0), greaterThan(geo.zFrenteNivel(1)));
+    expect(geo.zFrenteNivel(1), greaterThan(geo.zFrenteNivel(2)));
+    // As 6 caixas cabem lado a lado sem encostar umas nas outras nem passar
+    // da ponta do expositor.
+    expect(geo.colunaX(1) - geo.colunaX(0),
+        greaterThan(ExpositorMadeiraGeometry.wCaixa));
+    expect(geo.colunaX(5) + ExpositorMadeiraGeometry.wCaixa / 2,
+        lessThan(geo.width / 2));
+  });
+
+  test('expositor de Madeira: letras A–F em cima, G–L no meio, M–R embaixo',
+      () {
+    expect(letraEstanteCelula(expositorMadeiraNum, 0, 2), 'A');
+    expect(letraEstanteCelula(expositorMadeiraNum, 5, 2), 'F');
+    expect(letraEstanteCelula(expositorMadeiraNum, 0, 1), 'G');
+    expect(letraEstanteCelula(expositorMadeiraNum, 5, 1), 'L');
+    expect(letraEstanteCelula(expositorMadeiraNum, 0, 0), 'M');
+    expect(letraEstanteCelula(expositorMadeiraNum, 5, 0), 'R');
+  });
+
+  test('expositor de Madeira no mapa: colado no balcão, degraus para o corredor',
+      () {
+    final balcao = itensLoja.firstWhere((it) => it.numero == balcaoNum);
+    final expo =
+        itensLoja.firstWhere((it) => it.numero == expositorMadeiraNum);
+    // Encosta na face do balcão que dá para o corredor, sem fresta.
+    expect(expo.x - expo.w / 2, closeTo(balcao.x + balcao.w / 2, 1e-9));
+    // E fica dentro do comprimento do balcão.
+    expect(expo.z - expo.d / 2, greaterThan(balcao.z - balcao.d / 2));
+    expect(expo.z + expo.d / 2, lessThan(balcao.z + balcao.d / 2));
+
+    final faces = <Face>[];
+    expositorMadeiraLoja(faces, expo.x, expo.z, expo.w, expo.d,
+        corExpositorMadeiraLoja);
+    final verts = faces.expand((f) => f.verts).toList();
+    // Ocupa exatamente o retângulo do item.
+    expect(verts.map((v) => v.x).reduce(math.min),
+        closeTo(expo.x - expo.w / 2, 1e-9));
+    expect(verts.map((v) => v.x).reduce(math.max),
+        closeTo(expo.x + expo.w / 2, 1e-9));
+    // O ponto mais alto fica junto do balcão, não na frente.
+    final topo = verts.map((v) => v.y).reduce(math.max);
+    final xNoTopo = verts.where((v) => v.y == topo).map((v) => v.x);
+    expect(xNoTopo.reduce(math.max), lessThan(expo.x));
+    // Mais baixo que o balcão (1 m contra 1,10 m).
+    final yBalcao = <Face>[];
+    balcaoLoja(yBalcao, balcao.x, balcao.z, balcao.w, balcao.d,
+        corBalcaoCorpo, corTampo: corBalcaoTampo);
+    expect(topo,
+        lessThan(yBalcao.expand((f) => f.verts).map((v) => v.y).reduce(math.max)));
+  });
+
   test('estante parede: grade 2×6 e números contínuos entre as 6 seções', () {
     expect(EstanteParedeGeometry.celulas().length,
         colunasParede * niveisProdutoParede);
@@ -501,6 +564,26 @@ void main() {
           'M3': Colors.blue,
           'M4': Colors.red,
         },
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('ExpositorMadeiraScene renderiza sem exceções', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: ExpositorMadeiraScene(
+        geometry:   ExpositorMadeiraGeometry(showFloor: false),
+        autoRotate: false,
+        caixas: [
+          // Um produto em cada degrau, nas pontas e no meio.
+          CaixaColocadaEstante(coluna: 0, nivel: 0, slot: 0, produtoId: 'W1'),
+          CaixaColocadaEstante(coluna: 3, nivel: 1, slot: 0, produtoId: 'W2'),
+          CaixaColocadaEstante(coluna: 5, nivel: 2, slot: 0, produtoId: 'W3'),
+        ],
+        corPorProduto: {'W1': Colors.green, 'W2': Colors.amber},
+        destacadoCodigo: 'W3',
       ),
     ));
     await tester.pump();
