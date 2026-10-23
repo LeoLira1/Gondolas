@@ -6,7 +6,7 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 
 ## Funcionalidades
 
-- Cenas 3D navegáveis: gôndola hexagonal, estantes, estante de parede, expositores (MagnoJet, Nellore Isoflex)
+- Cenas 3D navegáveis: gôndola hexagonal, estantes, estante de parede, expositores (MagnoJet, Nellore Isoflex, Monitor e o Expositor de Madeira E24 — escada de 3 degraus × 6 produtos encostada no balcão)
 - Endereçamento de estoque integrado à tabela `estante_layout` no Turso
 - Modo Conferência para auditoria física do estoque
 - Sincronização de quantidades com os apps `inventariocamda` e `camda-estoque` via `estoque_localizado`
