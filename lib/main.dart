@@ -15,6 +15,7 @@ import 'fila_gravacao.dart';
 import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
 import 'expositor_nellore_scene.dart';
+import 'expositor_madeira_scene.dart';
 import 'galpao_page.dart';
 import 'galpao_scene.dart' show corCamda;
 import 'gondola_scene.dart';
@@ -3993,6 +3994,18 @@ class _EstantePageState extends State<EstantePage>
         gap:      0.0,
       );
     }
+    if (_estanteAtual == expositorMadeiraNum) {
+      const geo = ExpositorMadeiraGeometry();
+      final celula = geo.cells
+          .firstWhere((c) => c.coluna == coluna && c.nivel == nivel);
+      // Um produto por endereço: slot sempre 0.
+      return (
+        maxSlots: 1,
+        xMin:     celula.xCenter - ExpositorMadeiraGeometry.wCaixa / 2,
+        wCaixa:   ExpositorMadeiraGeometry.wCaixa,
+        gap:      0.0,
+      );
+    }
     // Palete: uma caixa por posição, slot sempre 0. Precisa de entrada própria
     // aqui (como cada uma das outras geometrias) porque o fallback lá embaixo
     // usa EstanteGeometry, que tem 3 colunas fixas e estouraria no firstWhere
@@ -4867,6 +4880,21 @@ class _EstantePageState extends State<EstantePage>
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
                       )
+                : _estanteAtual == expositorMadeiraNum
+                    ? ExpositorMadeiraScene(
+                        geometry:            const ExpositorMadeiraGeometry(showFloor: false),
+                        autoRotate:          false,
+                        caixas:              _caixasAtuais,
+                        produtoSelecionadoId: _produtoSelecionadoId,
+                        corPorProduto:       _corPorProduto,
+                        onTapCelula:           (c, n) => _onTapCelula(c, n, 0),
+                        onTapCelulaVisualizar: (c, n) => _onTapCelulaVisualizar(c, n, 0),
+                        destacadoCodigo:     _destacadoCodigo,
+                        desatualizados:      _desatualizados,
+                        divergentes:         _divergentes,
+                        divergentesPositivas: _divergentesPositivas,
+                        destacadosCodigos:   _destacadosCodigos,
+                      )
                 : ehEstanteParede(_estanteAtual)
                     ? EstanteParedeScene(
                         estanteAtual:         _estanteAtual,
@@ -5201,6 +5229,8 @@ class _EstanteSelector extends StatelessWidget {
                       'P${posicaoGlobalParede(estanteAtual, colunasParede - 1)}'
                   : estanteAtual == estanteEdr300TriplaNum
                       ? 'de ${ordemNavegacaoEstantes.length} · 3× EDR-300'
+                      : estanteAtual == expositorMadeiraNum
+                          ? 'de ${ordemNavegacaoEstantes.length} · MADEIRA'
                       : ehPalete(estanteAtual)
                           ? _subtituloPalete(estanteAtual)
                           : ehIlhaPaletes(estanteAtual)
