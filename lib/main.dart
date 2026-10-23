@@ -792,6 +792,9 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
 // Conteúdo do dialog "Limpar produto" (gôndola e estante): a lista de produtos
 // rola quando não cabe na tela, com barra de rolagem sempre visível, e a ação
 // "Limpar tudo" fica fixa embaixo, fora da área rolável.
+//
+// Com uma caixa selecionada na cena, aparece no topo "Só esta caixa": tira
+// apenas ela, sem levar as caixas do mesmo produto em outras posições.
 
 class _DialogLimparProduto extends StatefulWidget {
   final List<Produto>        produtos;
@@ -799,11 +802,20 @@ class _DialogLimparProduto extends StatefulWidget {
   final ValueChanged<String> onExcluirProduto;
   final VoidCallback         onLimparTudo;
 
+  // Caixa selecionada na cena (null = nenhuma): produto e endereço exibidos
+  // na opção "Só esta caixa".
+  final Produto?      caixaSelecionadaProduto;
+  final String?       caixaSelecionadaEndereco;
+  final VoidCallback? onExcluirCaixaSelecionada;
+
   const _DialogLimparProduto({
     required this.produtos,
     required this.qtdPorProduto,
     required this.onExcluirProduto,
     required this.onLimparTudo,
+    this.caixaSelecionadaProduto,
+    this.caixaSelecionadaEndereco,
+    this.onExcluirCaixaSelecionada,
   });
 
   @override
@@ -824,11 +836,66 @@ class _DialogLimparProdutoState extends State<_DialogLimparProduto> {
     // width: double.maxFinite evita o IntrinsicWidth do AlertDialog, que não
     // convive com ListView; Flexible deixa a lista encolher pro "Limpar tudo"
     // continuar visível mesmo com muitos produtos.
+    final caixa = widget.caixaSelecionadaProduto;
+    final temCaixa = caixa != null && widget.onExcluirCaixaSelecionada != null;
     return SizedBox(
       width: double.maxFinite,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (temCaixa) ...[
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: widget.onExcluirCaixaSelecionada,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1f1a1a),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF3a2020)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: caixa.cor,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Só esta caixa',
+                            style: TextStyle(color: Color(0xFFe57373), fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                          Text(
+                            '${caixa.nome} · ${widget.caixaSelecionadaEndereco ?? ''}',
+                            style: const TextStyle(color: Color(0xFF8a9aa8), fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.remove_circle_outline, color: Color(0xFFe57373), size: 20),
+                  ],
+                ),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 14, 4, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Produto inteiro (todas as posições)',
+                  style: TextStyle(color: Color(0xFF8a9aa8), fontSize: 11, letterSpacing: 0.3),
+                ),
+              ),
+            ),
+          ],
           Flexible(
             child: Scrollbar(
               controller: _scrollCtrl,
@@ -1974,16 +2041,21 @@ class _GondolaPageState extends State<GondolaPage> {
     return melhor;
   }
 
-  // Produto da caixa no endereço selecionado — alimenta o nome exibido no
-  // chip de endereço para o usuário saber qual produto selecionou. Prioriza
-  // a caixa exata tocada; cai no endereço (face + andar) quando ela não vale
-  // mais (layout recarregado, caixa removida).
-  Produto? get _produtoNoEnderecoSelecionado {
+  // Caixa no endereço selecionado. Prioriza a caixa exata tocada; cai no
+  // endereço (face + andar) quando ela não vale mais (layout recarregado,
+  // caixa removida). É a mesma que o chip mostra e a que "Só esta caixa" tira.
+  CaixaColocada? get _caixaNoEnderecoSelecionado {
     if (_faceSelecionada == null || _andarSelecionado == null) return null;
     final selecionada = _caixaSelecionada;
-    final caixa = (selecionada != null && _caixasAtuais.contains(selecionada))
+    return (selecionada != null && _caixasAtuais.contains(selecionada))
         ? selecionada
         : _caixaEm(_faceSelecionada!, _andarSelecionado!);
+  }
+
+  // Produto da caixa no endereço selecionado — alimenta o nome exibido no
+  // chip de endereço para o usuário saber qual produto selecionou.
+  Produto? get _produtoNoEnderecoSelecionado {
+    final caixa = _caixaNoEnderecoSelecionado;
     if (caixa == null) return null;
     final doCatalogo = _produtoPorCodigo[caixa.produtoId];
     if (doCatalogo != null) return doCatalogo;
@@ -2041,11 +2113,28 @@ class _GondolaPageState extends State<GondolaPage> {
     });
   }
 
+  // Tira só a caixa indicada (por identidade — CaixaColocada não sobrescreve
+  // ==), deixando as do mesmo produto em outras posições.
+  void _removerCaixa(CaixaColocada alvo) {
+    if (_salvando) return;
+    setState(() {
+      _editadas.add(_gondolaAtual);
+      final restantes = _caixasAtuais.where((c) => !identical(c, alvo)).toList();
+      if (restantes.isEmpty) {
+        _caixas.remove(_gondolaAtual);
+      } else {
+        _caixas[_gondolaAtual] = restantes;
+      }
+      if (identical(_caixaSelecionada, alvo)) _caixaSelecionada = null;
+    });
+  }
+
   void _mostrarDialogLimpar() {
     final produtos = produtosComCaixa(
       idsComCaixa: _caixasAtuais.map((c) => c.produtoId),
       catalogo:    _catalogoAtual,
     );
+    final caixaSelecionada = _caixaNoEnderecoSelecionado;
 
     showDialog<void>(
       context: context,
@@ -2068,6 +2157,16 @@ class _GondolaPageState extends State<GondolaPage> {
             Navigator.pop(ctx);
             _limparPorProduto(codigo);
           },
+          caixaSelecionadaProduto: _produtoNoEnderecoSelecionado,
+          caixaSelecionadaEndereco: caixaSelecionada == null
+              ? null
+              : 'G$_gondolaAtual · F$_faceSelecionada · A${_andarSelecionado! + 1}',
+          onExcluirCaixaSelecionada: caixaSelecionada == null
+              ? null
+              : () {
+                  Navigator.pop(ctx);
+                  _removerCaixa(caixaSelecionada);
+                },
           onLimparTudo: () {
             Navigator.pop(ctx);
             _confirmarLimparTudo();
@@ -3513,16 +3612,25 @@ class _EstantePageState extends State<EstantePage> {
     );
   }
 
+  // Caixa no endereço selecionado (célula + slot) — a que o chip mostra e a
+  // que "Só esta caixa" tira.
+  CaixaColocadaEstante? get _caixaNoEnderecoSelecionado {
+    if (_slotSelecionado == null) return null;
+    for (final c in _caixasAtuais) {
+      if (c.coluna == _colunaSelecionada &&
+          c.nivel  == _nivelSelecionado &&
+          c.slot   == _slotSelecionado) {
+        return c;
+      }
+    }
+    return null;
+  }
+
   // Produto da caixa no endereço selecionado (célula + slot) — alimenta o
   // nome exibido no chip de endereço para o usuário saber qual produto tocou.
   Produto? get _produtoNoEnderecoSelecionado {
-    if (_slotSelecionado == null) return null;
-    final matches = _caixasAtuais.where((c) =>
-        c.coluna == _colunaSelecionada &&
-        c.nivel  == _nivelSelecionado &&
-        c.slot   == _slotSelecionado);
-    if (matches.isEmpty) return null;
-    final caixa = matches.first;
+    final caixa = _caixaNoEnderecoSelecionado;
+    if (caixa == null) return null;
     final doCatalogo = _produtoPorCodigo[caixa.produtoId];
     if (doCatalogo != null) return doCatalogo;
     // Produto fora do catálogo carregado (ou catálogo ainda a caminho): usa o
@@ -3648,11 +3756,27 @@ class _EstantePageState extends State<EstantePage> {
     });
   }
 
+  // Tira só a caixa indicada, deixando as do mesmo produto em outras posições.
+  void _removerCaixaEstante(CaixaColocadaEstante alvo) {
+    if (_salvando) return;
+    setState(() {
+      _editadas.add(_estanteAtual);
+      final restantes = _caixasAtuais.where((c) => !identical(c, alvo)).toList();
+      if (restantes.isEmpty) {
+        _caixas.remove(_estanteAtual);
+      } else {
+        _caixas[_estanteAtual] = restantes;
+      }
+      _slotSelecionado = null;
+    });
+  }
+
   void _mostrarDialogLimparEstante() {
     final produtos = produtosComCaixa(
       idsComCaixa: _caixasAtuais.map((c) => c.produtoId),
       catalogo:    _catalogoAtual,
     );
+    final caixaSelecionada = _caixaNoEnderecoSelecionado;
 
     showDialog<void>(
       context: context,
@@ -3675,6 +3799,15 @@ class _EstantePageState extends State<EstantePage> {
             Navigator.pop(ctx);
             _limparEstantePorProduto(codigo);
           },
+          caixaSelecionadaProduto: _produtoNoEnderecoSelecionado,
+          caixaSelecionadaEndereco:
+              caixaSelecionada == null ? null : _enderecoSelecionadoTexto,
+          onExcluirCaixaSelecionada: caixaSelecionada == null
+              ? null
+              : () {
+                  Navigator.pop(ctx);
+                  _removerCaixaEstante(caixaSelecionada);
+                },
           onLimparTudo: () {
             Navigator.pop(ctx);
             _confirmarLimparTudoEstante();
