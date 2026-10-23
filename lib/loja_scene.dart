@@ -7,6 +7,7 @@ import 'balcao_scene.dart'
     show balcaoLoja, corBalcaoCorpo, corBalcaoTampo;
 import 'boneco_loja.dart'
     show BonecoLoja, BonecoRenderer, PaletaBoneco, RotaBoneco;
+import 'expositor_madeira_scene.dart' show expositorMadeiraLoja;
 import 'expositor_magnojet_scene.dart' show expositorMagnojetLoja;
 import 'expositor_monitor_scene.dart' show expositorMonitorLoja;
 import 'expositor_nellore_scene.dart' show expositorNelloreLoja;
@@ -15,7 +16,8 @@ import 'gondola_scene.dart'
 import 'models.dart'
     show balcaoNum, colunasEdr300Tripla, corConferenciaCiano, ehEstanteEdr300,
          ehEstanteParede, estanteEdr300TriplaNum, estanteParedeMin,
-         expositorMagnojetNum, expositorMonitorNum, expositorNelloreNum;
+         expositorMadeiraNum, expositorMagnojetNum, expositorMonitorNum,
+         expositorNelloreNum;
 import 'scene_gestures.dart';
 
 /// Número usado para achar a estrutura em itensLoja: as 6 seções da Estante
@@ -121,6 +123,13 @@ const List<ItemLoja> itensLoja = [
   ItemLoja(tipo: 'estante', numero: balcaoNum,
       x: 1.45, z: lojaH - LojaGeometry._paredeEsp - 7.95 / 2,
       w: 0.60, d: 7.95),
+  // Expositor de Madeira (3 degraus): encostado no balcão pelo lado do
+  // corredor, no vão entre as gôndolas 9 (z = 10) e 8 (z = 12). O x é derivado
+  // da borda do balcão (1,45 + 0,30) para os dois continuarem colados se um
+  // deles mudar; w = profundidade (0,40 m), d = comprimento (1 m). Ele come o
+  // corredor da esquerda quase inteiro: o cliente contorna (ver rotasLoja).
+  ItemLoja(tipo: 'estante', numero: expositorMadeiraNum,
+      x: 1.45 + 0.60 / 2 + 0.40 / 2, z: 11.0, w: 0.40, d: 1.0),
 ];
 
 // ── Bonecos do mapa: altura e rotas ──────────────────────────────────────────
@@ -139,7 +148,9 @@ const double alturaBoneco = LojaGeometry.alturaGondola;
 /// parede em x ≤ 1.35 e x ≥ 9.1. O corredor da esquerda é o mais apertado dos
 /// quatro: o Balcão de Atendimento ocupa x 1.15–1.75 ao longo de quase toda a
 /// parede esquerda, então a perna de volta corre em x = 2.05 — o meio da folga
-/// entre a borda do balcão (x 1.75) e a das gôndolas 8–12 (x 2.38).
+/// entre a borda do balcão (x 1.75) e a das gôndolas 8–12 (x 2.38). No
+/// Expositor de Madeira (x 1.75–2.15, z 10.5–11.5) a perna desvia para
+/// x = 2.38, pelo vão entre as gôndolas 9 e 8, e volta para x = 2.05 depois.
 final List<RotaBoneco> rotasLoja = [
   // Funcionário: sobe e desce o corredor central da loja, atravessando pela
   // faixa livre entre as fileiras z = 4 e z = 6.
@@ -154,6 +165,10 @@ final List<RotaBoneco> rotasLoja = [
     (x: 8.4,  z: 2.80),
     (x: 8.4,  z: 13.30),
     (x: 2.05, z: 13.30),
+    (x: 2.05, z: 11.90),
+    (x: 2.38, z: 11.50),
+    (x: 2.38, z: 10.50),
+    (x: 2.05, z: 10.10),
     (x: 2.05, z: 2.80),
   ]),
 ];
@@ -222,6 +237,9 @@ const List<ProdutoLoja> catalogoLojaFake = [
 
 const Color corGondolaLoja = Color(0xFF4caf50);
 const Color corEstanteLoja = Color(0xFF4a93d8);
+// Madeira crua: o Expositor de Madeira não é pintado de azul como as estantes
+// para não sumir contra a Estante Parede atrás do balcão.
+const Color corExpositorMadeiraLoja = Color(0xFFb07a45);
 const Color _corApagado    = Color(0xFF2d2e31);
 const Color _corParede     = Color(0xFF2a2b2f);
 const Color _corBg         = Color(0xFF0b0c0e);
@@ -350,7 +368,9 @@ class LojaGeometry {
           ? corGondolaLoja
           : item.numero == balcaoNum
               ? corBalcaoCorpo
-              : corEstanteLoja);
+              : item.numero == expositorMadeiraNum
+                  ? corExpositorMadeiraLoja
+                  : corEstanteLoja);
 
       if (item.tipo == 'gondola') {
         _gondola(faces, item, cor);
@@ -364,6 +384,8 @@ class LojaGeometry {
         expositorNelloreLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else if (item.numero == expositorMonitorNum) {
         expositorMonitorLoja(faces, item.x, item.z, item.w, item.d, cor);
+      } else if (item.numero == expositorMadeiraNum) {
+        expositorMadeiraLoja(faces, item.x, item.z, item.w, item.d, cor);
       } else if (item.numero == balcaoNum) {
         balcaoLoja(faces, item.x, item.z, item.w, item.d, cor,
             corTampo: aplicar(corBalcaoTampo));
@@ -781,7 +803,7 @@ class LojaPainter extends CustomPainter {
 
     for (final item in itensLoja) {
       // Sem badges A–E nas EDR-300 (a 8 e a tripla da 6), nos expositores
-      // (MagnoJet/Nellore/Monitor) nem na Estante Parede (os rótulos deles
+      // (MagnoJet/Nellore/Monitor/Madeira) nem na Estante Parede (os rótulos deles
       // são próprios e só fazem sentido na cena de detalhe). O balcão fica
       // fora por outro motivo: ele não tem nível nenhum.
       if (item.tipo != 'estante' ||
@@ -789,6 +811,7 @@ class LojaPainter extends CustomPainter {
           item.numero == expositorMagnojetNum ||
           item.numero == expositorNelloreNum ||
           item.numero == expositorMonitorNum ||
+          item.numero == expositorMadeiraNum ||
           item.numero == balcaoNum ||
           ehEstanteParede(item.numero)) {
         continue;
