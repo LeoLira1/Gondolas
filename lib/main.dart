@@ -2330,7 +2330,7 @@ class _GondolaPageState extends State<GondolaPage>
     final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
         _nomesDoLayout[produtoCodigo] ??
         produtoCodigo;
-    await mostrarQuantidadeDialog(
+    final excluidos = await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
       produtoNome:   produtoNome,
@@ -2339,9 +2339,39 @@ class _GondolaPageState extends State<GondolaPage>
       faceOuColuna:  faceOuColuna,
       andarOuNivel:  andarOuNivel,
     );
+    if (!mounted) return;
     // O dialog pode ter alterado atualizado_em de algum endereço: recarrega
     // o conjunto de desatualizados pro badge refletir o estado atual.
     _carregarDesatualizados();
+    await _removerCaixasDosEnderecos(localNum, excluidos);
+  }
+
+  // Endereço excluído na lixeira do dialog de quantidade: a caixa do produto
+  // naquela face+andar sai do layout e o layout é gravado na hora — sem isso
+  // a caixa continuava na gôndola com o endereço já apagado.
+  Future<void> _removerCaixasDosEnderecos(
+    int gondolaNum,
+    List<EnderecoLocalizado> excluidos,
+  ) async {
+    if (gondolaNum != _gondolaAtual || _salvando) return;
+    final daqui = excluidos.where((e) => e.ehGondola && e.localNum == gondolaNum);
+    if (daqui.isEmpty) return;
+    bool saiu(CaixaColocada c) => daqui.any((e) =>
+        e.produtoCodigo == c.produtoId &&
+        e.andarOuNivel  == c.andar &&
+        e.faceOuColuna  == faceFromPos(c.x, c.z));
+    if (!_caixasAtuais.any(saiu) || _semLayoutParaEditar()) return;
+    setState(() {
+      _editadas.add(_gondolaAtual);
+      final restantes = _caixasAtuais.where((c) => !saiu(c)).toList();
+      if (restantes.isEmpty) {
+        _caixas.remove(_gondolaAtual);
+      } else {
+        _caixas[_gondolaAtual] = restantes;
+      }
+      _caixaSelecionada = null;
+    });
+    await _salvarLayout();
   }
 
   void _limparGondola() {
@@ -4124,7 +4154,7 @@ class _EstantePageState extends State<EstantePage>
     final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
         _nomesDoLayout[produtoCodigo] ??
         produtoCodigo;
-    await mostrarQuantidadeDialog(
+    final excluidos = await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
       produtoNome:   produtoNome,
@@ -4133,9 +4163,39 @@ class _EstantePageState extends State<EstantePage>
       faceOuColuna:  faceOuColuna,
       andarOuNivel:  andarOuNivel,
     );
+    if (!mounted) return;
     // O dialog pode ter alterado atualizado_em de algum endereço: recarrega
     // o conjunto de desatualizados pro badge refletir o estado atual.
     _carregarDesatualizados();
+    await _removerCaixasDosEnderecos(localNum, excluidos);
+  }
+
+  // Ver o gêmeo em _GondolaPageState: a caixa do produto na célula do
+  // endereço excluído sai do layout, gravado na hora.
+  Future<void> _removerCaixasDosEnderecos(
+    int estanteNum,
+    List<EnderecoLocalizado> excluidos,
+  ) async {
+    if (estanteNum != _estanteAtual || _salvando) return;
+    final daqui =
+        excluidos.where((e) => !e.ehGondola && e.localNum == estanteNum);
+    if (daqui.isEmpty) return;
+    bool saiu(CaixaColocadaEstante c) => daqui.any((e) =>
+        e.produtoCodigo == c.produtoId &&
+        e.faceOuColuna  == c.coluna &&
+        e.andarOuNivel  == c.nivel);
+    if (!_caixasAtuais.any(saiu) || _semLayoutParaEditar()) return;
+    setState(() {
+      _editadas.add(_estanteAtual);
+      final restantes = _caixasAtuais.where((c) => !saiu(c)).toList();
+      if (restantes.isEmpty) {
+        _caixas.remove(_estanteAtual);
+      } else {
+        _caixas[_estanteAtual] = restantes;
+      }
+      _slotSelecionado = null;
+    });
+    await _salvarLayout();
   }
 
   void _onTapCelula(int coluna, int nivel, double hx) {
