@@ -126,6 +126,12 @@ class BarracaoConfig {
   /// Pé-direito.
   static const double peDireito = 600;
 
+  /// Altura com que as paredes são DESENHADAS: baixinhas, em corte, como o
+  /// modo "Paredes: em corte" do Gemeo. Com os 6 m reais elas tapavam as
+  /// pilhas de gaiolas de quase todo ângulo; a mureta ainda marca o contorno
+  /// do barracão e os vãos das aberturas, sem esconder a carga.
+  static const double alturaParede = 130;
+
   /// Espessura de qualquer parede.
   static const double espessuraParede = 20;
 
@@ -151,27 +157,30 @@ class BarracaoConfig {
         tipo: TipoAbertura.porta,  x0: 2300, x1: 2500, altura: 300),
   ];
 
-  /// Os panos cheios da parede da frente, do chão ao pé-direito: o que sobra
-  /// de [largura] depois de tirar as [aberturas]. Sai em ordem de X.
+  /// Os panos cheios da parede da frente, do chão a [alturaParede]: o que
+  /// sobra de [largura] depois de tirar as [aberturas]. Sai em ordem de X.
   static List<TrechoParede> get panosDaFrente {
     final panos = <TrechoParede>[];
     var x = 0.0;
     for (final a in aberturas) {
       if (a.x0 > x) {
-        panos.add(TrechoParede(x0: x, x1: a.x0, y0: 0, y1: peDireito));
+        panos.add(TrechoParede(x0: x, x1: a.x0, y0: 0, y1: alturaParede));
       }
       x = a.x1;
     }
     if (x < largura) {
-      panos.add(TrechoParede(x0: x, x1: largura, y0: 0, y1: peDireito));
+      panos.add(TrechoParede(x0: x, x1: largura, y0: 0, y1: alturaParede));
     }
     return panos;
   }
 
-  /// A verga de cada abertura: parede do topo do vão até o pé-direito.
+  /// A verga de cada abertura: parede do topo do vão até [alturaParede].
+  /// Com a parede em corte, mais baixa que os vãos, não sobra verga nenhuma —
+  /// as aberturas ficam como cortes na mureta.
   static List<TrechoParede> get vergas => [
         for (final a in aberturas)
-          TrechoParede(x0: a.x0, x1: a.x1, y0: a.altura, y1: peDireito),
+          if (a.altura < alturaParede)
+            TrechoParede(x0: a.x0, x1: a.x1, y0: a.altura, y1: alturaParede),
       ];
 
   // ── Palete e bag (centímetros) ─────────────────────────────────────────────
