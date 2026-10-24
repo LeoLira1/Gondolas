@@ -162,7 +162,7 @@ class BarracaoGeometry {
 
   static void _paredes(List<Face> faces) {
     const esp = BarracaoConfig.espessuraParede;
-    const h   = BarracaoConfig.peDireito;
+    const h   = BarracaoConfig.alturaParede;
     const z1  = BarracaoConfig.profundidade;
     const x1  = BarracaoConfig.largura;
 
@@ -201,7 +201,7 @@ class BarracaoGeometry {
       final xb = t.x0 + t.largura * (i + 1) / n;
       _caixa(faces,
           x0: xa, x1: xb, y0: t.y0, y1: t.y1, z0: z0, z1: z1,
-          cor: cor, corTopo: t.y1 >= BarracaoConfig.peDireito
+          cor: cor, corTopo: t.y1 >= BarracaoConfig.alturaParede
               ? _corParedeTopo
               : cor);
     }
@@ -865,11 +865,10 @@ class _BarracaoSceneState extends State<BarracaoScene>
       setState(() {
         _camera = Camera(
           rotY: c0.rotY - delta.dx * 0.006,
-          // O piso do giro é mais alto que o das outras cenas de propósito. A
-          // parede das aberturas tem 6 m e o salão só 10 m de profundidade:
-          // abaixo de ~0,55 rad ela cobre o barracão inteiro, e a pessoa fica
-          // olhando para um paredão sem entender que basta subir a câmera.
-          rotX: (c0.rotX + delta.dy * 0.006).clamp(0.55, 1.45),
+          // Com a parede em corte (BarracaoConfig.alturaParede) a câmera pode
+          // descer bem: olhar as pilhas de gaiolas quase de lado é o que mostra
+          // os níveis. O piso só impede de deitar a vista no chão.
+          rotX: (c0.rotX + delta.dy * 0.006).clamp(0.25, 1.45),
           dist: (c0.dist / d.scale)
               .clamp(BarracaoScene._distMin, BarracaoScene._distMax),
           target: c0.target,

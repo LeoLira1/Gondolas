@@ -72,24 +72,18 @@ void main() {
       final somaAberturas = BarracaoConfig.aberturas
           .fold<double>(0, (s, a) => s + a.largura);
       expect(somaPanos + somaAberturas, BarracaoConfig.largura);
-      // Todos vão do chão ao pé-direito.
+      // Todos vão do chão à altura da parede em corte.
       for (final p in panos) {
         expect(p.y0, 0);
-        expect(p.y1, BarracaoConfig.peDireito);
+        expect(p.y1, BarracaoConfig.alturaParede);
       }
     });
 
-    test('cada abertura tem verga do topo do vão até o pé-direito', () {
-      final vergas = BarracaoConfig.vergas;
-      expect(vergas.length, BarracaoConfig.aberturas.length);
-      for (var i = 0; i < vergas.length; i++) {
-        final a = BarracaoConfig.aberturas[i];
-        expect(vergas[i].x0, a.x0);
-        expect(vergas[i].x1, a.x1);
-        expect(vergas[i].y0, a.altura);
-        expect(vergas[i].y1, BarracaoConfig.peDireito);
-        expect(vergas[i].altura, BarracaoConfig.peDireito - a.altura);
-      }
+    test('parede baixinha: abaixo da primeira gaiola, sem verga nos vãos', () {
+      expect(BarracaoConfig.alturaParede,
+          lessThan(BarracaoConfig.alturaCarga));
+      // Os vãos (3 e 4,5 m) passam da mureta: não sobra verga.
+      expect(BarracaoConfig.vergas, isEmpty);
     });
   });
 
@@ -324,11 +318,15 @@ void main() {
       final faces = BarracaoGeometry.buildFaces(const []);
       for (final abertura in BarracaoConfig.aberturas) {
         // Um ponto no meio do vão, na metade da altura dele: nenhuma face de
-        // parede pode ter um vértice ali dentro.
+        // parede pode estar ali dentro. A face lateral do pano vizinho não
+        // conta: ela fica exatamente na borda (x0/x1), sem largura em X, e
+        // com a parede em corte é toda mais baixa que o meio do vão.
         final xMeio = abertura.centroX;
         final yMeio = abertura.altura / 2;
         for (final f in faces) {
-          final dentro = f.verts.every((v) =>
+          final xs = [for (final v in f.verts) v.x];
+          final lateral = xs.reduce(math.max) - xs.reduce(math.min) < 1e-6;
+          final dentro = !lateral && f.verts.every((v) =>
               v.z <= BarracaoConfig.espessuraParede + 1e-9 &&
               v.x > abertura.x0 - 1e-9 &&
               v.x < abertura.x1 + 1e-9 &&
