@@ -323,10 +323,18 @@ class TursoService {
       'ORDER BY posicao, ordem, seq';
 
   /// Cópia dos endereços do barracão, no mesmo esquema da do galpão.
+  ///
+  /// Uma linha por GAIOLA: a do chão (nível 1, a própria linha do endereço,
+  /// gaiola_uuid NULL) e as empilhadas em cima dela, em ordem de nível.
   static const String chaveBarracao = 'barracao';
   static const String sqlBarracao =
-      'SELECT id, rotulo, pos_x, pos_z, produto_codigo, produto_nome, '
-      'quantidade FROM barracao_enderecos ORDER BY rotulo';
+      'SELECT id, rotulo, pos_x, pos_z, 1 AS nivel, NULL AS gaiola_uuid, '
+      'produto_codigo, produto_nome, quantidade FROM barracao_enderecos '
+      'UNION ALL '
+      'SELECT e.id, e.rotulo, e.pos_x, e.pos_z, g.nivel, g.gaiola_uuid, '
+      'g.produto_codigo, g.produto_nome, g.quantidade FROM barracao_gaiolas g '
+      'JOIN barracao_enderecos e ON e.id = g.endereco_id '
+      'ORDER BY rotulo, nivel';
 
   /// Chave completa (com o banco) de uma consulta guardada, ou null sem banco
   /// ativo.
@@ -2069,6 +2077,24 @@ class TursoService {
         atualizado_em  TEXT    NOT NULL
       )
     ''');
+    // Gaiolas EMPILHADAS no barracão: os níveis 2 a BarracaoConfig.gaiolasMax
+    // de cada endereço. O nível 1 (a gaiola no chão) continua sendo a própria
+    // linha de barracao_enderecos — tudo que só sabe ler o palete do chão
+    // segue funcionando. `nivel` é dado, não identidade (desce quando sai uma
+    // gaiola de baixo, como a `ordem` do galpão); a identidade é gaiola_uuid.
+    esquema.add('''
+      CREATE TABLE IF NOT EXISTS barracao_gaiolas (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        gaiola_uuid    TEXT    NOT NULL UNIQUE,
+        endereco_id    INTEGER NOT NULL,
+        nivel          INTEGER NOT NULL,
+        produto_codigo TEXT    NOT NULL,
+        produto_nome   TEXT    NOT NULL DEFAULT '',
+        quantidade     REAL    NOT NULL DEFAULT 0,
+        atualizado_em  TEXT    NOT NULL,
+        UNIQUE(endereco_id, nivel)
+      )
+    ''');
 
     // Índices das buscas mais quentes (só tabelas do próprio app): evitam full
     // scan em fetchLayout / fetchLayoutEstante / buscarProdutoEstante e na
@@ -2124,6 +2150,10 @@ class TursoService {
     esquema.add(
       'CREATE INDEX IF NOT EXISTS idx_barracao_enderecos_produto '
       'ON barracao_enderecos (produto_codigo)',
+    );
+    esquema.add(
+      'CREATE INDEX IF NOT EXISTS idx_barracao_gaiolas_produto '
+      'ON barracao_gaiolas (produto_codigo)',
     );
     await client.batch(esquema.join(';\n'));
     if (migracoesEmDia) return;
@@ -3912,6 +3942,13 @@ class TursoService {
     }
   }
 
+  /// 'BAR-07' para a gaiola do chão, 'BAR-07 · N3' para uma empilhada.
+  static String _rotuloGaiola(Map<String, dynamic> r) {
+    final rotulo = r['rotulo'] as String? ?? 'Barracão';
+    final nivel = (r['nivel'] as num?)?.toInt() ?? 1;
+    return nivel > 1 ? '$rotulo · N$nivel' : rotulo;
+  }
+
   Future<List<ProdutoEncontrado>> _buscarNoBarracao(String like) async {
     try {
       // A mesma cópia da tela do barracão ('barracao'), só com os paletes
@@ -3935,7 +3972,7 @@ class TursoService {
           nome:             r['produto_nome'] as String? ?? '',
           tipo:             localTipoBarracao,
           numero:           r['id'] as int? ?? 0,
-          nivelDescricao:   r['rotulo'] as String? ?? 'Barracão',
+          nivelDescricao:   _rotuloGaiola(r),
           produtoCodigo:    r['produto_codigo'] as String? ?? '',
           quantidade:       (r['quantidade'] as num?)?.toDouble(),
         );

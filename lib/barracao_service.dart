@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:libsql_dart/libsql_dart.dart';
 // Mesmo motivo do import direto em galpao_service.dart: `client.transaction()`
 // devolve um Transaction que o pacote não reexporta, e sem este import não dá
@@ -10,12 +11,41 @@ import 'turso_service.dart';
 import 'outbox.dart';
 import 'replica_coordinator.dart';
 
+/// Uma gaiola EMPILHADA num endereço do barracão (nível 2 em diante).
+///
+/// A do chão não precisa desta classe: ela é a própria linha do endereço
+/// ([EnderecoBarracao.produtoCodigo] etc.). [gaiolaUuid] é a identidade da
+/// linha em `barracao_gaiolas` — o nível muda quando sai uma gaiola de baixo,
+/// o UUID não.
+class GaiolaBarracao {
+  final String gaiolaUuid;
+  final String produtoCodigo;
+  final String produtoNome;
+  final double quantidade;
+
+  const GaiolaBarracao({
+    required this.gaiolaUuid,
+    required this.produtoCodigo,
+    this.produtoNome = '',
+    this.quantidade = 0,
+  });
+
+  GaiolaBarracao comQuantidade(double q) => GaiolaBarracao(
+        gaiolaUuid:    gaiolaUuid,
+        produtoCodigo: produtoCodigo,
+        produtoNome:   produtoNome,
+        quantidade:    q,
+      );
+}
+
 /// Um endereço do barracão, já com o que está nele.
 ///
-/// Diferente do galpão, aqui NÃO há pilha nem nível: o palete é o endereço, e
-/// o endereço tem no máximo um produto. Por isso [produtoCodigo] vazio é a
-/// leitura de "palete livre" — não existe linha de ocupação separada para
-/// apagar.
+/// O endereço é um lugar no chão e leva uma PILHA de até
+/// [BarracaoConfig.gaiolasMax] gaiolas. A do chão (nível 1) mora nos campos
+/// do próprio endereço — [produtoCodigo] vazio é a leitura de "palete livre"
+/// —, e as de cima em [acima], em ordem de nível (a primeira é o nível 2).
+/// Como no galpão, a pilha nunca tem buraco: gaiola nova entra no topo, e
+/// tirar uma faz as de cima descerem (ver [semNivel]).
 class EnderecoBarracao {
   /// Chave da linha em `barracao_enderecos`. É o que vai para
   /// `estoque_localizado.local_num` (ver [localTipoBarracao]).
@@ -27,9 +57,13 @@ class EnderecoBarracao {
   /// Centro do palete no chão, em CENTÍMETROS (ver barracao_config.dart).
   final double x, z;
 
+  /// A gaiola do chão.
   final String produtoCodigo;
   final String produtoNome;
   final double quantidade;
+
+  /// As gaiolas empilhadas sobre a do chão, de baixo para cima.
+  final List<GaiolaBarracao> acima;
 
   const EnderecoBarracao({
     required this.id,
@@ -39,34 +73,151 @@ class EnderecoBarracao {
     this.produtoCodigo = '',
     this.produtoNome   = '',
     this.quantidade    = 0,
+    this.acima         = const [],
   });
 
-  /// True quando há produto atribuído ao palete.
+  /// True quando há produto atribuído ao palete do chão.
   bool get ocupado => produtoCodigo.trim().isNotEmpty;
 
-  EnderecoBarracao comProduto({
-    required String produtoCodigo,
-    required String produtoNome,
-    required double quantidade,
+  /// Quantas gaiolas há na pilha (0 = palete livre).
+  int get niveis => ocupado ? 1 + acima.length : 0;
+
+  /// Pilha no teto: não cabe mais gaiola.
+  bool get cheio => niveis >= BarracaoConfig.gaiolasMax;
+
+  /// UUID da gaiola do nível [nivel], ou null no chão (que não tem) e em
+  /// nível que não existe.
+  String? uuidDoNivel(int nivel) =>
+      nivel >= 2 && nivel <= niveis ? acima[nivel - 2].gaiolaUuid : null;
+
+  /// Nível da gaiola [gaiolaUuid] (2 em diante), ou null se ela não está aqui.
+  int? nivelDaGaiola(String? gaiolaUuid) {
+    if (gaiolaUuid == null) return null;
+    final i = acima.indexWhere((g) => g.gaiolaUuid == gaiolaUuid);
+    return i < 0 ? null : i + 2;
+  }
+
+  /// Produto, nome e quantidade de cada nível, de baixo para cima.
+  List<({int nivel, String codigo, String nome, double quantidade})>
+      get gaiolas => [
+            if (ocupado)
+              (
+                nivel: 1,
+                codigo: produtoCodigo,
+                nome: produtoNome,
+                quantidade: quantidade,
+              ),
+            if (ocupado)
+              for (var i = 0; i < acima.length; i++)
+                (
+                  nivel: i + 2,
+                  codigo: acima[i].produtoCodigo,
+                  nome: acima[i].produtoNome,
+                  quantidade: acima[i].quantidade,
+                ),
+          ];
+
+  /// True quando alguma gaiola da pilha leva [codigo].
+  bool contem(String codigo) =>
+      codigo.isNotEmpty && gaiolas.any((g) => g.codigo == codigo);
+
+  EnderecoBarracao _com({
+    String? produtoCodigo,
+    String? produtoNome,
+    double? quantidade,
+    List<GaiolaBarracao>? acima,
   }) =>
       EnderecoBarracao(
         id:            id,
         rotulo:        rotulo,
         x:             x,
         z:             z,
+        produtoCodigo: produtoCodigo ?? this.produtoCodigo,
+        produtoNome:   produtoNome ?? this.produtoNome,
+        quantidade:    quantidade ?? this.quantidade,
+        acima:         acima ?? this.acima,
+      );
+
+  /// A gaiola do chão com outro produto/quantidade; as de cima ficam.
+  EnderecoBarracao comProduto({
+    required String produtoCodigo,
+    required String produtoNome,
+    required double quantidade,
+  }) =>
+      _com(
         produtoCodigo: produtoCodigo,
         produtoNome:   produtoNome,
         quantidade:    quantidade,
       );
 
-  /// O palete sem produto — o que sobra depois de esvaziar.
+  /// O palete sem pilha nenhuma.
   EnderecoBarracao get vazio => EnderecoBarracao(
         id: id, rotulo: rotulo, x: x, z: z,
       );
+
+  /// Gaiola nova no TOPO da pilha — ou no chão, se o palete está livre. Null
+  /// quando a pilha já está cheia.
+  EnderecoBarracao? comGaiolaNoTopo({
+    required String gaiolaUuid,
+    required String produtoCodigo,
+    required String produtoNome,
+    required double quantidade,
+  }) {
+    if (cheio) return null;
+    if (!ocupado) {
+      return comProduto(
+        produtoCodigo: produtoCodigo,
+        produtoNome:   produtoNome,
+        quantidade:    quantidade,
+      );
+    }
+    return _com(acima: [
+      ...acima,
+      GaiolaBarracao(
+        gaiolaUuid:    gaiolaUuid,
+        produtoCodigo: produtoCodigo,
+        produtoNome:   produtoNome,
+        quantidade:    quantidade,
+      ),
+    ]);
+  }
+
+  /// A pilha com a quantidade do nível [nivel] trocada. Nível inexistente ou
+  /// quantidade não positiva devolve o endereço como está.
+  EnderecoBarracao comQuantidadeNoNivel(int nivel, double quantidade) {
+    if (quantidade <= 0 || nivel < 1 || nivel > niveis) return this;
+    if (nivel == 1) return _com(quantidade: quantidade);
+    return _com(acima: [
+      for (var i = 0; i < acima.length; i++)
+        i == nivel - 2 ? acima[i].comQuantidade(quantidade) : acima[i],
+    ]);
+  }
+
+  /// A pilha sem a gaiola do nível [nivel]: as de cima descem um nível. Tirar
+  /// a do chão faz a do nível 2 virar a do chão (perde o UUID: no banco ela
+  /// passa a ser a linha do endereço). Nível inexistente não muda nada.
+  EnderecoBarracao semNivel(int nivel) {
+    if (nivel < 1 || nivel > niveis) return this;
+    if (nivel > 1) {
+      return _com(acima: [
+        for (var i = 0; i < acima.length; i++)
+          if (i != nivel - 2) acima[i],
+      ]);
+    }
+    if (acima.isEmpty) return vazio;
+    final sobe = acima.first;
+    return _com(
+      produtoCodigo: sobe.produtoCodigo,
+      produtoNome:   sobe.produtoNome,
+      quantidade:    sobe.quantidade,
+      acima:         acima.sublist(1),
+    );
+  }
 }
 
-/// Persistência do barracão: uma tabela só, `barracao_enderecos`, em que cada
-/// linha é um palete no chão.
+/// Persistência do barracão: `barracao_enderecos`, em que cada linha é um
+/// palete no chão com a gaiola de baixo, e `barracao_gaiolas`, com as gaiolas
+/// empilhadas em cima dela (níveis 2 a [BarracaoConfig.gaiolasMax]).
 ///
 /// Por que UMA tabela, e não o par estrutura + ocupação do galpão: lá a
 /// posição existe sempre e a pilha por cima dela varia, então separar era a
@@ -188,7 +339,7 @@ class BarracaoService {
         chaveCache,
         _sqlTodos,
       );
-      return [for (final row in rows) _daLinha(row)];
+      return enderecosDasLinhas(rows);
     } catch (_) {
       return const [];
     }
@@ -206,22 +357,78 @@ class BarracaoService {
         forceRefresh: true,
       );
       await _guardarCache(rows);
-      return [for (final row in rows) _daLinha(row)];
+      return enderecosDasLinhas(rows);
     } catch (_) {
       return null;
     }
   }
 
-  static EnderecoBarracao _daLinha(Map<String, dynamic> row) =>
-      EnderecoBarracao(
-        id:            row['id']     as int?    ?? 0,
-        rotulo:        row['rotulo'] as String? ?? '',
-        x:             (row['pos_x'] as num?)?.toDouble() ?? 0,
-        z:             (row['pos_z'] as num?)?.toDouble() ?? 0,
-        produtoCodigo: row['produto_codigo'] as String? ?? '',
-        produtoNome:   row['produto_nome']   as String? ?? '',
-        quantidade:    (row['quantidade'] as num?)?.toDouble() ?? 0,
+  /// Uma linha por gaiola (ver TursoService.sqlBarracao) → um endereço por
+  /// palete, com a pilha montada. A linha do chão vem antes das de cima (o
+  /// ORDER BY é por rótulo e nível); cópia antiga, sem a coluna `nivel`, é
+  /// toda de chão — era o que existia.
+  @visibleForTesting
+  static List<EnderecoBarracao> enderecosDasLinhas(
+      List<Map<String, dynamic>> rows) {
+    final porId = <int, EnderecoBarracao>{};
+    final acima = <int, List<GaiolaBarracao>>{};
+    for (final row in rows) {
+      final id = row['id'] as int? ?? 0;
+      final nivel = (row['nivel'] as num?)?.toInt() ?? 1;
+      final codigo = row['produto_codigo'] as String? ?? '';
+      final nome = row['produto_nome'] as String? ?? '';
+      final qtd = (row['quantidade'] as num?)?.toDouble() ?? 0;
+      if (nivel <= 1) {
+        porId[id] = EnderecoBarracao(
+          id:            id,
+          rotulo:        row['rotulo'] as String? ?? '',
+          x:             (row['pos_x'] as num?)?.toDouble() ?? 0,
+          z:             (row['pos_z'] as num?)?.toDouble() ?? 0,
+          produtoCodigo: codigo,
+          produtoNome:   nome,
+          quantidade:    qtd,
+        );
+      } else {
+        acima.putIfAbsent(id, () => []).add(GaiolaBarracao(
+              gaiolaUuid:    row['gaiola_uuid'] as String? ?? '',
+              produtoCodigo: codigo,
+              produtoNome:   nome,
+              quantidade:    qtd,
+            ));
+      }
+    }
+    return [
+      for (final e in porId.values)
+        if (acima[e.id] case final pilha? when pilha.isNotEmpty)
+          _comPilha(e, pilha)
+        else
+          e,
+    ];
+  }
+
+  /// Junta a pilha ao endereço. Chão vazio com gaiola em cima não existe no
+  /// galpão físico (a gaiola apoia na de baixo); se o banco disser isso, a de
+  /// baixo das que sobraram é mostrada no chão, que é onde ela de fato está.
+  static EnderecoBarracao _comPilha(
+      EnderecoBarracao e, List<GaiolaBarracao> pilha) {
+    if (e.ocupado) {
+      return EnderecoBarracao(
+        id: e.id, rotulo: e.rotulo, x: e.x, z: e.z,
+        produtoCodigo: e.produtoCodigo,
+        produtoNome:   e.produtoNome,
+        quantidade:    e.quantidade,
+        acima:         List.unmodifiable(pilha),
       );
+    }
+    final chao = pilha.first;
+    return EnderecoBarracao(
+      id: e.id, rotulo: e.rotulo, x: e.x, z: e.z,
+      produtoCodigo: chao.produtoCodigo,
+      produtoNome:   chao.produtoNome,
+      quantidade:    chao.quantidade,
+      acima:         List.unmodifiable(pilha.sublist(1)),
+    );
+  }
 
   /// Chave da cópia de leitura. É a mesma que a busca do mapa lê (ver
   /// `TursoService.chaveBarracao`).
@@ -246,33 +453,53 @@ class BarracaoService {
 }
 
 /// O barracão como a pessoa o vê: o banco com as gravações ainda na fila por
-/// cima, na ordem em que foram feitas (ver `aplicarPendentesGalpao`). As duas
-/// operações do barracão são absolutas — o palete fica com ESTE produto e
-/// ESTE número, ou vazio —, então reaplicar uma que o banco já tem não muda
-/// nada.
+/// cima, na ordem em que foram feitas (ver `aplicarPendentesGalpao`).
+///
+/// As operações da gaiola do chão são absolutas — o palete fica com ESTE
+/// produto e ESTE número —, e as das gaiolas empilhadas acham a gaiola pelo
+/// UUID, nunca pelo nível: reaplicar uma que o banco já tem não muda nada.
 List<EnderecoBarracao> aplicarPendentesBarracao(
   List<EnderecoBarracao> enderecos,
   Iterable<OperacaoPendente> pendentes,
 ) {
   var lista = enderecos;
   for (final op in pendentes) {
-    if (op.tipo != TipoOperacao.barracaoAtribuir &&
-        op.tipo != TipoOperacao.barracaoEsvaziar) {
-      continue;
-    }
+    if (!op.tipo.doBarracao) continue;
     lista = [
       for (final e in lista)
-        if (e.id != op.local)
-          e
-        else if (op.tipo == TipoOperacao.barracaoEsvaziar)
-          e.vazio
-        else
-          e.comProduto(
-            produtoCodigo: op.produtoCodigo,
-            produtoNome: op.produtoNome,
-            quantidade: op.quantidade,
-          ),
+        if (e.id != op.local) e else _aplicarNoEndereco(e, op),
     ];
   }
   return lista;
+}
+
+EnderecoBarracao _aplicarNoEndereco(EnderecoBarracao e, OperacaoPendente op) {
+  switch (op.tipo) {
+    case TipoOperacao.barracaoAtribuir:
+      return e.comProduto(
+        produtoCodigo: op.produtoCodigo,
+        produtoNome:   op.produtoNome,
+        quantidade:    op.quantidade,
+      );
+    case TipoOperacao.barracaoEsvaziar:
+      return e.semNivel(1);
+    case TipoOperacao.barracaoEmpilhar:
+      // Já veio do banco (é o UUID da gaiola nova): não empilha de novo.
+      if (e.nivelDaGaiola(op.uuid) != null) return e;
+      return e.comGaiolaNoTopo(
+            gaiolaUuid:    op.uuid,
+            produtoCodigo: op.produtoCodigo,
+            produtoNome:   op.produtoNome,
+            quantidade:    op.quantidade,
+          ) ??
+          e;
+    case TipoOperacao.barracaoAjustarGaiola:
+      final nivel = e.nivelDaGaiola(op.rackUuid);
+      return nivel == null ? e : e.comQuantidadeNoNivel(nivel, op.quantidade);
+    case TipoOperacao.barracaoEsvaziarGaiola:
+      final nivel = e.nivelDaGaiola(op.rackUuid);
+      return nivel == null ? e : e.semNivel(nivel);
+    default:
+      return e;
+  }
 }

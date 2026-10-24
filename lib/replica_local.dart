@@ -222,6 +222,8 @@ const List<TabelaDoCarimbo> tabelasDoCarimbo = [
       "COALESCE(GROUP_CONCAT(numero || ':' || rua || ':' || eixo || ':' || pos_x || ':' || pos_z, '|'),'')"),
   TabelaDoCarimbo('barracao_enderecos',
       "COALESCE(GROUP_CONCAT(id || ':' || rotulo || ':' || pos_x || ':' || pos_z || ':' || produto_codigo || ':' || produto_nome || ':' || quantidade || ':' || atualizado_em, '|'),'')"),
+  TabelaDoCarimbo('barracao_gaiolas',
+      "COALESCE(GROUP_CONCAT(gaiola_uuid || ':' || endereco_id || ':' || nivel || ':' || produto_codigo || ':' || quantidade || ':' || atualizado_em, '|'),'')"),
   TabelaDoCarimbo('inventario_cicli',
       "COALESCE(GROUP_CONCAT(data_contagem || ':' || produto_id || ':' || COALESCE(qtd_contada,'') || ':' || COALESCE(divergencia,'') || ':' || COALESCE(contado_em,''), '|'),'')"),
   TabelaDoCarimbo('estoque_mestre',

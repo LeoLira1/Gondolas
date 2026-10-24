@@ -42,7 +42,12 @@ Future<Map<String, List<String>>> carregarEnderecosDosEstocados() async {
       ],
       barracao: [
         for (final e in barracao)
-          (rotulo: e.rotulo, codigo: e.produtoCodigo, nome: e.produtoNome),
+          for (final g in e.gaiolas)
+            (
+              rotulo: g.nivel > 1 ? '${e.rotulo} · N${g.nivel}' : e.rotulo,
+              codigo: g.codigo,
+              nome: g.nome,
+            ),
       ],
     );
   } catch (_) {

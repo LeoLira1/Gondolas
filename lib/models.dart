@@ -451,8 +451,8 @@ const String localTipoGalpao = 'galpao';
 ///
 /// `local_num` é o **id** da linha em `barracao_enderecos`, não o número do
 /// rótulo: o rótulo é texto ('BAR-07') e a coluna é inteira. face_ou_coluna e
-/// andar_ou_nivel ficam em 0 — o palete do barracão não tem face, coluna nem
-/// nível, ele É o endereço. Como no galpão, os ids se sobrepõem aos números de
+/// andar_ou_nivel ficam em 0 — o endereço é o lugar no chão, e as gaiolas
+/// empilhadas nele entram somadas por produto numa linha só. Como no galpão, os ids se sobrepõem aos números de
 /// estante e de posição do galpão: qualquer agrupamento de estoque_localizado
 /// tem de levar o local_tipo na chave, nunca só o local_num.
 const String localTipoBarracao = 'barracao';
