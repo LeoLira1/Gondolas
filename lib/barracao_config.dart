@@ -3,11 +3,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // O barracão é um galpão de alvenaria simples: um retângulo de 35 m × 10 m com
-// pé-direito de 6 m, sem racks e sem pilha. A unidade de armazenagem é o
-// PALETE de madeira apoiado no chão, com um bag de 1000 kg em cima — e cada
-// palete é UM endereço, com UM produto. Não há nível, não há ordem na pilha:
-// o endereço é o próprio palete, e por isso ele nunca renumera (a lição que
-// moldou o galpão, ver galpao_config.dart, aqui simplesmente não se aplica).
+// pé-direito de 6 m, sem racks fixos. A unidade de armazenagem é a GAIOLA:
+// palete de madeira com a carga em cima. Cada endereço é um lugar no chão e
+// leva uma pilha de até [BarracaoConfig.gaiolasMax] gaiolas, uma em cima da
+// outra, com a mesma regra do galpão: a nova entra no topo, e tirar uma de
+// baixo faz as de cima descerem. O RÓTULO (BAR-07) é o endereço e nunca
+// renumera; o nível na pilha é dado, como a ordem do galpão.
 //
 // ATENÇÃO À UNIDADE. O barracão inteiro — a planta desta tabela, as colunas
 // pos_x/pos_z no Turso e as coordenadas do mundo 3D da cena — trabalha em
@@ -185,8 +186,18 @@ class BarracaoConfig {
   static const double bagZ = 85;
   static const double bagAltura = 130;
 
-  /// Altura do conjunto palete + bag — o teto do volume que recebe o toque.
+  /// Altura do conjunto palete + bag — uma GAIOLA, e o passo da pilha.
   static const double alturaCarga = paleteAltura + bagAltura;
+
+  // ── Pilha de gaiolas ───────────────────────────────────────────────────────
+
+  /// Quantas gaiolas cabem empilhadas num endereço, a do chão incluída — a
+  /// mesma regra do galpão (GalpaoConfig.niveisMax). 4 × [alturaCarga] =
+  /// 580 cm, abaixo dos 600 do pé-direito.
+  static const int gaiolasMax = 4;
+
+  /// Y da base da gaiola do nível [nivel] (1 = a do chão).
+  static double yDoNivel(int nivel) => (nivel - 1) * alturaCarga;
 
   // ── Layout padrão dos paletes ──────────────────────────────────────────────
 

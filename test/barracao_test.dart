@@ -9,6 +9,8 @@ import 'package:gondola_camda/barracao_scene.dart';
 import 'package:gondola_camda/barracao_service.dart';
 import 'package:gondola_camda/estocados_busca.dart' show chaveDestaque;
 import 'package:gondola_camda/gondola_scene.dart' show Camera, Vec3;
+import 'package:gondola_camda/gravacao_lote.dart'
+    show OperacaoPendente, TipoOperacao;
 import 'package:gondola_camda/models.dart' show Produto;
 
 /// Os endereços do layout padrão como a página os receberia do banco: id
@@ -530,6 +532,211 @@ void main() {
     });
   });
 
+  group('pilha de gaiolas', () {
+    const chao = EnderecoBarracao(
+        id: 1, rotulo: 'BAR-01', x: 500, z: 900,
+        produtoCodigo: 'A', produtoNome: 'ADUBO', quantidade: 40);
+
+    EnderecoBarracao empilhar(EnderecoBarracao e, String uuid, String codigo,
+            [double qtd = 1]) =>
+        e.comGaiolaNoTopo(
+            gaiolaUuid: uuid, produtoCodigo: codigo, produtoNome: codigo,
+            quantidade: qtd)!;
+
+    test('até 4 gaiolas, como no galpão, e cabem abaixo do pé-direito', () {
+      expect(BarracaoConfig.gaiolasMax, 4);
+      expect(BarracaoConfig.yDoNivel(BarracaoConfig.gaiolasMax + 1),
+          lessThanOrEqualTo(BarracaoConfig.peDireito));
+    });
+
+    test('gaiola nova entra no topo; com 4, a pilha recusa', () {
+      var e = empilhar(chao, 'g2', 'B');
+      e = empilhar(e, 'g3', 'C');
+      e = empilhar(e, 'g4', 'D');
+      expect(e.niveis, 4);
+      expect(e.cheio, isTrue);
+      expect([for (final g in e.gaiolas) g.codigo], ['A', 'B', 'C', 'D']);
+      expect(e.uuidDoNivel(3), 'g3');
+      expect(e.nivelDaGaiola('g4'), 4);
+      expect(
+          e.comGaiolaNoTopo(gaiolaUuid: 'g5', produtoCodigo: 'E',
+              produtoNome: 'E', quantidade: 1),
+          isNull);
+    });
+
+    test('palete livre: a primeira gaiola vai para o chão', () {
+      const livre = EnderecoBarracao(id: 1, rotulo: 'BAR-01', x: 0, z: 0);
+      final e = empilhar(livre, 'g1', 'A', 5);
+      expect(e.produtoCodigo, 'A');
+      expect(e.acima, isEmpty);
+      expect(e.niveis, 1);
+    });
+
+    test('tirar uma do meio: as de cima descem', () {
+      var e = empilhar(empilhar(empilhar(chao, 'g2', 'B'), 'g3', 'C'), 'g4', 'D');
+      e = e.semNivel(2);
+      expect([for (final g in e.gaiolas) g.codigo], ['A', 'C', 'D']);
+      expect(e.nivelDaGaiola('g3'), 2);
+      expect(e.cheio, isFalse);
+    });
+
+    test('tirar a do chão: a de cima vira a do chão', () {
+      var e = empilhar(empilhar(chao, 'g2', 'B', 7), 'g3', 'C');
+      e = e.semNivel(1);
+      expect(e.produtoCodigo, 'B');
+      expect(e.quantidade, 7);
+      expect([for (final g in e.gaiolas) g.codigo], ['B', 'C']);
+      expect(e.semNivel(1).semNivel(1).ocupado, isFalse);
+    });
+
+    test('corrigir a quantidade de um nível não mexe nos outros', () {
+      final e = empilhar(chao, 'g2', 'B', 7).comQuantidadeNoNivel(2, 9);
+      expect([for (final g in e.gaiolas) g.quantidade], [40, 9]);
+      expect(e.comQuantidadeNoNivel(2, 0), same(e));
+    });
+
+    test('linhas do banco (uma por gaiola) viram uma pilha por endereço', () {
+      final r = BarracaoService.enderecosDasLinhas([
+        {'id': 1, 'rotulo': 'BAR-01', 'pos_x': 1.0, 'pos_z': 2.0, 'nivel': 1,
+          'gaiola_uuid': null, 'produto_codigo': 'A', 'produto_nome': 'ADUBO',
+          'quantidade': 40},
+        {'id': 1, 'rotulo': 'BAR-01', 'pos_x': 1.0, 'pos_z': 2.0, 'nivel': 2,
+          'gaiola_uuid': 'g2', 'produto_codigo': 'B', 'produto_nome': 'B',
+          'quantidade': 3},
+        // Cópia antiga, sem a coluna nivel: é a gaiola do chão.
+        {'id': 2, 'rotulo': 'BAR-02', 'pos_x': 0.0, 'pos_z': 0.0,
+          'produto_codigo': '', 'produto_nome': '', 'quantidade': 0},
+      ]);
+      expect(r, hasLength(2));
+      expect(r[0].niveis, 2);
+      expect(r[0].uuidDoNivel(2), 'g2');
+      expect(r[1].ocupado, isFalse);
+    });
+
+    test('pendentes da fila entram pela gaiola (UUID), não pelo nível', () {
+      OperacaoPendente op(TipoOperacao t, String uuid,
+              {String? gaiola, String codigo = '', double qtd = 0}) =>
+          OperacaoPendente(
+            uuid: uuid, tipo: t, banco: 'b', criadaEm: DateTime(2026),
+            local: 1, rackUuid: gaiola, produtoCodigo: codigo,
+            produtoNome: codigo, quantidade: qtd);
+      final banco = [empilhar(chao, 'g2', 'B', 3)];
+      final r = aplicarPendentesBarracao(banco, [
+        op(TipoOperacao.barracaoEmpilhar, 'g3', codigo: 'C', qtd: 5),
+        op(TipoOperacao.barracaoEmpilhar, 'g2', codigo: 'B', qtd: 3), // já está
+        op(TipoOperacao.barracaoAjustarGaiola, 'a', gaiola: 'g3', qtd: 6),
+        op(TipoOperacao.barracaoEsvaziarGaiola, 'x', gaiola: 'g2'),
+      ]).single;
+      expect([for (final g in r.gaiolas) (g.codigo, g.quantidade)],
+          [('A', 40.0), ('C', 6.0)]);
+      expect(r.nivelDaGaiola('g3'), 2);
+    });
+
+    test('a busca acha a gaiola de cima e diz o nível', () {
+      final e = empilhar(chao, 'g2', 'H1', 3);
+      final r = buscarPaletesBarracao('h1', [e]);
+      expect(r.single.rotulo, 'BAR-01 · N2');
+      expect(r.single.nivel, 2);
+    });
+
+    test('cada gaiola desenha estrado + carga, uma em cima da outra', () {
+      BarracaoGeometry.limparCache();
+      final soParedes = BarracaoGeometry.buildFaces(const []).length;
+      BarracaoGeometry.limparCache();
+      var e = empilhar(empilhar(empilhar(chao, 'g2', 'B'), 'g3', 'C'), 'g4', 'D');
+      final faces = BarracaoGeometry.buildFaces([e]);
+      expect(faces.length - soParedes, 4 * 10);
+      for (final f in faces) {
+        for (final v in f.verts) {
+          expect(v.y, lessThanOrEqualTo(BarracaoConfig.peDireito + 1e-9));
+        }
+      }
+      BarracaoGeometry.limparCache();
+    });
+
+    testWidgets('empilhar pela pastilha, ver o nível e tirar a de baixo',
+        (tester) async {
+      const catalogo = [
+        Produto(codigo: 'H1', nome: 'HERBICIDA BORAL 500 SC 20L',
+            categoria: 'HERBICIDA', corHex: '#4caf50'),
+      ];
+      final enderecos = _enderecosPadrao();
+      enderecos[0] = enderecos[0].comProduto(
+          produtoCodigo: 'F1', produtoNome: 'FUNGICIDA AZOX 200 1L',
+          quantidade: 7);
+      await tester.pumpWidget(MaterialApp(
+        home: BarracaoPage(
+          enderecosIniciais: enderecos,
+          catalogoInicial:   catalogo,
+        ),
+      ));
+      await tester.pump();
+      await _tocarNoPalete(tester, 'BAR-01');
+      expect(find.textContaining('1 de 4 na pilha'), findsOneWidget);
+
+      // A pastilha Empilhar abre a vaga de cima.
+      await tester.tap(find.text('Empilhar'));
+      await tester.pump();
+      expect(find.text('BAR-01 · N2'), findsOneWidget);
+      expect(find.textContaining('Vaga no topo da pilha'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).first, 'boral');
+      await tester.pump();
+      await tester.tap(find.text('HERBICIDA BORAL 500 SC 20L'));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField).first, '45');
+      await tester.pump();
+      await tester.tap(find.text('Lançar em BAR-01 · N2'));
+      await tester.pump();
+
+      // Continua um palete ocupado só: a gaiola foi para cima dele.
+      expect(find.textContaining('99 paletes livres'), findsOneWidget);
+      await _tocarNoPalete(tester, 'BAR-01', nivel: 2);
+      expect(find.text('BAR-01 · N2'), findsOneWidget);
+      expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
+      expect(find.textContaining('2 de 4 na pilha'), findsOneWidget);
+
+      // Tira a do chão: a de cima desce.
+      await tester.tap(find.text('N1'));
+      await tester.pump();
+      expect(find.text('FUNGICIDA AZOX 200 1L'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.edit_outlined));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '0');
+      await tester.pump();
+      await tester.tap(find.text('Esvaziar'));
+      await tester.pumpAndSettle();
+
+      await _tocarNoPalete(tester, 'BAR-01');
+      expect(find.text('BAR-01'), findsWidgets);
+      expect(find.text('HERBICIDA BORAL 500 SC 20L'), findsOneWidget);
+      expect(find.textContaining('1 de 4 na pilha'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('pilha cheia não oferece Empilhar', (tester) async {
+      final enderecos = _enderecosPadrao();
+      var e = enderecos[0].comProduto(
+          produtoCodigo: 'A', produtoNome: 'ADUBO', quantidade: 1);
+      for (final u in ['g2', 'g3', 'g4']) {
+        e = empilhar(e, u, 'A$u');
+      }
+      enderecos[0] = e;
+      await tester.pumpWidget(MaterialApp(
+        home: BarracaoPage(
+          enderecosIniciais: enderecos,
+          catalogoInicial:   const [],
+        ),
+      ));
+      await tester.pump();
+      await _tocarNoPalete(tester, 'BAR-01', nivel: 4);
+      expect(find.text('BAR-01 · N4'), findsOneWidget);
+      expect(find.text('N4'), findsOneWidget);
+      expect(find.text('Empilhar'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
   group('busca de paletes', () {
     final enderecos = [
       const EnderecoBarracao(
@@ -604,7 +811,8 @@ Offset? _projetar(Camera camera, Size size, Vec3 v) {
 /// Toca o palete de [rotulo] na cena montada, mirando no centro do volume da
 /// carga — o hit-test da cena é por raio, então o toque tem de sair de um
 /// ponto de tela que realmente cruza a caixa do palete.
-Future<void> _tocarNoPalete(WidgetTester tester, String rotulo) async {
+Future<void> _tocarNoPalete(WidgetTester tester, String rotulo,
+    {int nivel = 1}) async {
   final cena = find.byType(BarracaoScene);
   final caixa = tester.getRect(cena);
   final camera = BarracaoScene.enquadrar(caixa.size);
@@ -614,7 +822,9 @@ Future<void> _tocarNoPalete(WidgetTester tester, String rotulo) async {
   final alvo = _projetar(
     camera,
     caixa.size,
-    Vec3(posicao.x, BarracaoConfig.alturaCarga / 2, posicao.z),
+    Vec3(posicao.x,
+        BarracaoConfig.yDoNivel(nivel) + BarracaoConfig.alturaCarga / 2,
+        posicao.z),
   );
   expect(alvo, isNotNull, reason: '$rotulo não está na tela');
 

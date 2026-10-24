@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -6,7 +7,8 @@ import 'barracao_busca.dart';
 import 'estocados_busca.dart';
 import 'estocados_sheet.dart';
 import 'barracao_config.dart';
-import 'barracao_scene.dart' show BarracaoScene, corCamdaBarracao;
+import 'barracao_scene.dart'
+    show BarracaoScene, ToqueBarracao, corCamdaBarracao;
 import 'barracao_service.dart';
 import 'fila_gravacao.dart';
 import 'fila_gravacao_ui.dart';
@@ -24,12 +26,14 @@ import 'turso_service.dart';
 /// O fluxo de uso é o MESMO do galpão — tocar um endereço, buscar o produto
 /// pelo nome/código, atribuir e corrigir a quantidade —, e por isso o painel
 /// inferior é literalmente o do galpão ([PainelEnderecoGalpao]), com os
-/// rótulos do barracão. O que muda é só a forma do endereço: aqui o palete É o
-/// endereço e leva um produto só, então não há pilha, nível nem renumeração.
+/// rótulos do barracão. E como no galpão, cada endereço leva uma PILHA de até
+/// [BarracaoConfig.gaiolasMax] gaiolas: a nova entra no topo, e tirar uma de
+/// qualquer nível faz as de cima descerem.
 ///
 /// A ponte entre os dois é a dupla [ToqueGalpao]/[RackGalpao]: cada endereço
-/// do barracão vira uma "posição" de um nível só (`ordem: 1`), o que deixa o
-/// painel funcionar sem saber de qual prédio o endereço veio. É a costura mais
+/// do barracão vira uma "posição" e cada gaiola um "rack" com `ordem` igual ao
+/// nível, o que deixa o painel funcionar sem saber de qual prédio o endereço
+/// veio. É a costura mais
 /// barata que existia: a alternativa era um painel paralelo — a mesma tela
 /// mantida em dois lugares, que é exatamente o que não se quer.
 class BarracaoPage extends StatefulWidget {
@@ -74,13 +78,17 @@ class _BarracaoPageState extends State<BarracaoPage> {
   /// Busca de paletes (onde está o produto X). Os resultados saem da lista de
   /// endereços em memória; ver barracao_busca.dart.
   final _buscaCtrl = TextEditingController();
-  List<EnderecoBarracao> _resultadosBusca = const [];
+  List<ResultadoBuscaBarracao> _resultadosBusca = const [];
 
   final List<LancamentoRecente> _recentes = [];
   static const int _maxRecentes = 4;
 
   /// Endereço aberto no painel (id da linha), ou null sem seleção.
   int? _selecionadoId;
+
+  /// Nível aberto na pilha do endereço selecionado (1 = a gaiola do chão).
+  /// Pode ser o próximo nível livre: é a vaga em que se vai empilhar.
+  int _selecionadoNivel = 1;
 
   /// Produto aceso no barracão inteiro (busca ou o botão do painel).
   String? _destacadoCodigo;
@@ -108,7 +116,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
       _enderecos = List.unmodifiable(sementeEnderecos);
       if (widget.enderecoInicialId != null &&
           _porId(widget.enderecoInicialId!) != null) {
-        _selecionadoId = widget.enderecoInicialId;
+        _abrir(widget.enderecoInicialId!);
       }
     } else {
       // Antes da leitura: o que ficou na fila entra por cima do banco.
@@ -204,7 +212,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
       }
       final inicial = widget.enderecoInicialId;
       if (_selecionadoId == null && inicial != null && _porId(inicial) != null) {
-        _selecionadoId = inicial;
+        _abrir(inicial);
       }
     });
   }
@@ -243,6 +251,25 @@ class _BarracaoPageState extends State<BarracaoPage> {
     }
   }
 
+  /// Abre o endereço [id] no painel, no nível do produto destacado (quem
+  /// chegou pela busca quer ver a gaiola dele) ou no topo da pilha.
+  void _abrir(int id) {
+    final e = _porId(id);
+    if (e == null) return;
+    final chave = _destacadoCodigo;
+    var nivel = math.max(e.niveis, 1);
+    if (chave != null) {
+      for (final g in e.gaiolas) {
+        if (chaveDestaque(g.codigo, g.nome) == chave) {
+          nivel = g.nivel;
+          break;
+        }
+      }
+    }
+    _selecionadoId = id;
+    _selecionadoNivel = nivel;
+  }
+
   EnderecoBarracao? _porId(int id) {
     for (final e in _enderecos) {
       if (e.id == id) return e;
@@ -273,9 +300,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
   /// antes disso é descartada.
   int _versaoEnderecos = 0;
 
-  static bool _doBarracao(OperacaoPendente op) =>
-      op.tipo == TipoOperacao.barracaoAtribuir ||
-      op.tipo == TipoOperacao.barracaoEsvaziar;
+  static bool _doBarracao(OperacaoPendente op) => op.tipo.doBarracao;
 
   bool get _temPendentesBarracao => _fila.pendentes.any(_doBarracao);
 
@@ -308,93 +333,124 @@ class _BarracaoPageState extends State<BarracaoPage> {
     _aplicarEnderecosDoBanco(enderecos);
   }
 
-  /// Grava um produto e uma quantidade no palete: na tela agora, no banco
-  /// pela fila.
-  void _gravar(
-    int id, {
-    required String codigo,
-    required String nome,
-    required double quantidade,
+  /// Põe a gravação na fila (na tela ela já foi aplicada por quem chama).
+  void _enfileirar(
+    EnderecoBarracao antes,
+    TipoOperacao tipo, {
+    String? uuid,
+    String? gaiolaUuid,
+    String codigo = '',
+    String nome = '',
+    double quantidade = 0,
+    double? quantidadeAnterior,
+    int nivel = 1,
   }) {
-    final antes = _porId(id);
-    if (antes == null) return;
-
-    setState(() => _substituir(antes.comProduto(
-          produtoCodigo: codigo,
-          produtoNome:   nome,
-          quantidade:    quantidade,
-        )));
     if (!_persistindo) return;
     unawaited(_fila.enfileirar(OperacaoPendente(
-      uuid:          gerarUuidV4(),
-      tipo:          TipoOperacao.barracaoAtribuir,
+      uuid:          uuid ?? gerarUuidV4(),
+      tipo:          tipo,
       banco:         TursoService().identidadeAtiva ?? '',
       criadaEm:      DateTime.now(),
-      local:         id,
+      local:         antes.id,
+      rackUuid:      gaiolaUuid,
       produtoCodigo: codigo,
       produtoNome:   nome,
       quantidade:    quantidade,
-      quantidadeAnterior:
-          antes.produtoCodigo == codigo ? antes.quantidade : null,
-      rotulo:        antes.rotulo,
+      quantidadeAnterior: quantidadeAnterior,
+      rotulo:        nivel > 1 ? '${antes.rotulo} · N$nivel' : antes.rotulo,
     )));
   }
 
-  /// Lança um produto num palete livre.
+  /// Lança um produto na vaga aberta: no chão de um palete livre, ou numa
+  /// gaiola nova no TOPO da pilha.
   ///
   /// O painel fecha: no fluxo de carga o próximo gesto é tocar o próximo
   /// palete, e o produto recém-lançado fica nos últimos lançados — o atalho
   /// de quando chega carga e o mesmo produto vai para vários endereços
   /// seguidos.
   void _lancar(int id, Produto produto, double quantidade) {
+    final antes = _porId(id);
+    if (antes == null) return;
+    // O UUID nasce aqui: é ele que o lote grava em gaiola_uuid, e é com ele
+    // que um ajuste feito logo depois, ainda offline, acha a gaiola certa.
+    final uuid = gerarUuidV4();
+    final depois = antes.comGaiolaNoTopo(
+      gaiolaUuid:    uuid,
+      produtoCodigo: produto.codigo,
+      produtoNome:   produto.nome,
+      quantidade:    quantidade,
+    );
+    if (depois == null) return; // pilha cheia — a tela não oferece vaga
     setState(() {
       _recentes.removeWhere((r) => r.produto.codigo == produto.codigo);
       _recentes.insert(
           0, LancamentoRecente(produto: produto, quantidade: quantidade));
       if (_recentes.length > _maxRecentes) _recentes.removeLast();
       _selecionadoId = null;
+      _substituir(depois);
     });
-    _gravar(id,
-        codigo: produto.codigo, nome: produto.nome, quantidade: quantidade);
+    _enfileirar(
+      antes,
+      antes.ocupado
+          ? TipoOperacao.barracaoEmpilhar
+          : TipoOperacao.barracaoAtribuir,
+      uuid:       uuid,
+      codigo:     produto.codigo,
+      nome:       produto.nome,
+      quantidade: quantidade,
+      nivel:      depois.niveis,
+    );
   }
 
-  /// Corrige a quantidade de um palete que já tem produto — mesmo palete,
-  /// mesmo produto, número novo. É a mesma gravação do lançamento (no
-  /// barracão não existe empilhar por cima: o palete tem um produto e um
-  /// número, e mudar qualquer um dos dois é reescrever a linha).
+  /// Corrige a quantidade de uma gaiola que já está lá — mesma gaiola, mesmo
+  /// produto, número novo. Na do chão é a mesma gravação do lançamento (a
+  /// linha do endereço é reescrita); numa empilhada, a gaiola é achada pelo
+  /// UUID.
   ///
   /// Ao contrário de [_lancar], NÃO mexe nos últimos lançados nem fecha o
   /// painel: corrigir uma contagem não é distribuir carga, e quem acabou de
   /// corrigir quer ver o número novo no lugar.
-  void _ajustar(int id, double quantidade) {
+  void _ajustar(int id, int nivel, double quantidade) {
     final atual = _porId(id);
-    if (atual == null || !atual.ocupado || quantidade <= 0) return;
-    if (quantidade == atual.quantidade) return;
-    _gravar(id,
-        codigo:     atual.produtoCodigo,
-        nome:       atual.produtoNome,
-        quantidade: quantidade);
+    if (atual == null || nivel > atual.niveis || quantidade <= 0) return;
+    final g = atual.gaiolas[nivel - 1];
+    if (quantidade == g.quantidade) return;
+    setState(() => _substituir(atual.comQuantidadeNoNivel(nivel, quantidade)));
+    _enfileirar(
+      atual,
+      nivel == 1
+          ? TipoOperacao.barracaoAtribuir
+          : TipoOperacao.barracaoAjustarGaiola,
+      gaiolaUuid:         atual.uuidDoNivel(nivel),
+      codigo:             g.codigo,
+      nome:               g.nome,
+      quantidade:         quantidade,
+      quantidadeAnterior: g.quantidade,
+      nivel:              nivel,
+    );
   }
 
-  void _esvaziar(int id) {
+  /// Tira a gaiola do nível [nivel] e a pilha DESCE: as de cima descem um
+  /// nível cada (a do nível 2 vira a do chão quando sai a de baixo).
+  void _esvaziar(int id, int nivel) {
     final antes = _porId(id);
-    if (antes == null) return;
+    if (antes == null || nivel > antes.niveis) return;
+    final g = antes.gaiolas[nivel - 1];
     setState(() {
-      _substituir(antes.vazio);
+      _substituir(antes.semNivel(nivel));
       _selecionadoId = null;
     });
-    if (!_persistindo) return;
-    unawaited(_fila.enfileirar(OperacaoPendente(
-      uuid:               gerarUuidV4(),
-      tipo:               TipoOperacao.barracaoEsvaziar,
-      banco:              TursoService().identidadeAtiva ?? '',
-      criadaEm:           DateTime.now(),
-      local:              id,
-      produtoCodigo:      antes.produtoCodigo,
-      produtoNome:        antes.produtoNome,
-      quantidadeAnterior: antes.quantidade,
-      rotulo:             antes.rotulo,
-    )));
+    _enfileirar(
+      antes,
+      nivel == 1
+          ? TipoOperacao.barracaoEsvaziar
+          : TipoOperacao.barracaoEsvaziarGaiola,
+      gaiolaUuid:         antes.uuidDoNivel(nivel),
+      codigo:             g.codigo,
+      nome:               g.nome,
+      quantidadeAnterior: g.quantidade,
+      nivel:              nivel,
+    );
   }
 
   // ── Busca de paletes ───────────────────────────────────────────────────────
@@ -405,11 +461,12 @@ class _BarracaoPageState extends State<BarracaoPage> {
 
   /// Escolher um resultado acende o produto em TODOS os paletes dele e abre o
   /// palete escolhido — o mesmo que a busca da loja faz ao chegar aqui.
-  void _escolherResultado(EnderecoBarracao e) {
+  void _escolherResultado(ResultadoBuscaBarracao r) {
     FocusScope.of(context).unfocus();
     setState(() {
-      _destacadoCodigo = chaveDestaque(e.produtoCodigo, e.produtoNome);
-      _selecionadoId   = e.id;
+      _destacadoCodigo  = chaveDestaque(r.produtoCodigo, r.produtoNome);
+      _selecionadoId    = r.id;
+      _selecionadoNivel = r.nivel;
       _buscaCtrl.clear();
       _resultadosBusca = const [];
     });
@@ -475,18 +532,28 @@ class _BarracaoPageState extends State<BarracaoPage> {
 
   // ── Costura com o painel do galpão ─────────────────────────────────────────
 
-  /// O endereço aberto, traduzido para o vocabulário do painel: uma posição de
-  /// um nível só. Ver a nota na doc da classe.
+  /// Nível aberto no endereço [e], já conferido contra a pilha de agora: a
+  /// pilha pode ter descido (gravação de outro aparelho, gaiola tirada) ou
+  /// enchido depois do toque. Fica entre 1 e a vaga de cima — ou o topo, se
+  /// a pilha está cheia.
+  int _nivelAberto(EnderecoBarracao e) {
+    final teto = e.cheio ? e.niveis : e.niveis + 1;
+    return _selecionadoNivel.clamp(1, math.max(teto, 1));
+  }
+
+  /// O endereço aberto, traduzido para o vocabulário do painel: a posição e a
+  /// ordem na pilha. Ver a nota na doc da classe.
   ToqueGalpao? get _toque {
     final id = _selecionadoId;
     if (id == null) return null;
     final e = _porId(id);
     if (e == null) return null;
-    return ToqueGalpao(posicao: e.id, ordem: 1, ocupado: e.ocupado);
+    final nivel = _nivelAberto(e);
+    return ToqueGalpao(posicao: e.id, ordem: nivel, ocupado: nivel <= e.niveis);
   }
 
-  /// Os endereços ocupados como "pilhas" de um rack — é o que o painel lê para
-  /// achar o produto do endereço aberto E para contar em quantos paletes o
+  /// As pilhas de gaiolas no vocabulário do painel — é o que ele lê para
+  /// achar o produto do nível aberto E para contar em quantos paletes o
   /// produto está (o botão de destaque).
   ///
   /// Recalculado a cada build de propósito: são ~100 entradas, e um mapa
@@ -495,13 +562,15 @@ class _BarracaoPageState extends State<BarracaoPage> {
         for (final e in _enderecos)
           if (e.ocupado)
             e.id: [
-              RackGalpao(
-                posicao:       e.id,
-                ordem:         1,
-                produtoCodigo: e.produtoCodigo,
-                produtoNome:   e.produtoNome,
-                quantidade:    e.quantidade,
-              ),
+              for (final g in e.gaiolas)
+                RackGalpao(
+                  rackUuid:      e.uuidDoNivel(g.nivel),
+                  posicao:       e.id,
+                  ordem:         g.nivel,
+                  produtoCodigo: g.codigo,
+                  produtoNome:   g.nome,
+                  quantidade:    g.quantidade,
+                ),
             ],
       };
 
@@ -521,12 +590,15 @@ class _BarracaoPageState extends State<BarracaoPage> {
             enderecos:       _enderecos,
             corPorProduto:   _corPorProduto,
             selecionadoId:   _selecionadoId,
+            selecionadoNivel: aberto == null ? 1 : _nivelAberto(aberto),
             destacadoCodigo: _modoConferencia ? null : _destacadoCodigo,
             modoConferencia: _modoConferencia,
             codigosConferencia: _codigosConferencia,
             contagemConferencia: _contagemConferencia,
-            onTapEndereco: (e) =>
-                setState(() => _selecionadoId = e?.id),
+            onTapEndereco: (ToqueBarracao? t) => setState(() {
+              _selecionadoId    = t?.endereco.id;
+              _selecionadoNivel = t?.nivel ?? 1;
+            }),
           ),
 
           Positioned(
@@ -640,31 +712,56 @@ class _BarracaoPageState extends State<BarracaoPage> {
               left: 16, right: 16, bottom: 16,
               child: SafeArea(
                 top: false,
-                child: PainelEnderecoGalpao(
-                  // A key troca o estado interno (busca, quantidade) ao mudar
-                  // de endereço — resto de digitação de um endereço não pode
-                  // vazar para o outro.
-                  key: ValueKey('bar-${aberto.id}-${aberto.ocupado}'),
-                  toque:              toque,
-                  pilhas:             _pilhas,
-                  catalogo:           _catalogo,
-                  recentes:           _recentes,
-                  carregandoCatalogo: _carregandoCatalogo,
-                  codigosConferencia: _codigosConferencia,
-                  destacadoCodigo:    _destacadoCodigo,
-                  onAlternarDestaque:
-                      _modoConferencia ? null : _alternarDestaque,
-                  rotuloEndereco:     aberto.rotulo,
-                  subtitulo:          _subtituloDoEndereco(aberto),
-                  textoVagaLivre:
-                      'Palete livre — o produto lançado aqui fica neste '
-                      'endereço, sozinho.',
-                  onFechar: () => setState(() => _selecionadoId = null),
-                  onLancar: (produto, quantidade) =>
-                      _lancar(aberto.id, produto, quantidade),
-                  onEsvaziar:          () => _esvaziar(aberto.id),
-                  onAjustarQuantidade: (quantidade) =>
-                      _ajustar(aberto.id, quantidade),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Os níveis da pilha à mão: de cima, a vaga sobre a pilha
+                    // fica quase toda atrás da gaiola de baixo, e tocar nela
+                    // seria mira de precisão. Palete livre só tem o chão.
+                    if (aberto.ocupado) ...[
+                      _SeletorNiveis(
+                        endereco:   aberto,
+                        nivel:      toque.ordem,
+                        onEscolher: (n) =>
+                            setState(() => _selecionadoNivel = n),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    PainelEnderecoGalpao(
+                      // A key troca o estado interno (busca, quantidade) ao
+                      // mudar de endereço ou de nível — resto de digitação de
+                      // uma gaiola não pode vazar para a outra.
+                      key: ValueKey(
+                          'bar-${aberto.id}-${toque.ordem}-${toque.ocupado}'),
+                      toque:              toque,
+                      pilhas:             _pilhas,
+                      catalogo:           _catalogo,
+                      recentes:           _recentes,
+                      carregandoCatalogo: _carregandoCatalogo,
+                      codigosConferencia: _codigosConferencia,
+                      destacadoCodigo:    _destacadoCodigo,
+                      onAlternarDestaque:
+                          _modoConferencia ? null : _alternarDestaque,
+                      rotuloEndereco: toque.ordem > 1
+                          ? '${aberto.rotulo} · N${toque.ordem}'
+                          : aberto.rotulo,
+                      subtitulo:      _subtituloDoEndereco(aberto),
+                      textoVagaLivre: toque.ordem == 1
+                          ? 'Palete livre — a gaiola lançada aqui fica no '
+                            'chão, e as próximas empilham em cima dela (até '
+                            '${BarracaoConfig.gaiolasMax}).'
+                          : 'Vaga no topo da pilha — a gaiola lançada aqui '
+                            'entra no nível ${toque.ordem} de '
+                            '${BarracaoConfig.gaiolasMax}.',
+                      onFechar: () => setState(() => _selecionadoId = null),
+                      onLancar: (produto, quantidade) =>
+                          _lancar(aberto.id, produto, quantidade),
+                      onEsvaziar: () => _esvaziar(aberto.id, toque.ordem),
+                      onAjustarQuantidade: (quantidade) =>
+                          _ajustar(aberto.id, toque.ordem, quantidade),
+                    ),
+                  ],
                 ),
               ),
             )
@@ -708,7 +805,8 @@ class _BarracaoPageState extends State<BarracaoPage> {
       if (d < menor) { menor = d; fileira = i; }
     }
     return 'Fileira ${fileira + 1} · a ${(e.z / 100).toStringAsFixed(1)} m '
-        'da parede das aberturas';
+        'da parede das aberturas · ${e.niveis} de '
+        '${BarracaoConfig.gaiolasMax} na pilha';
   }
 
   /// Nome do produto destacado, lido dos próprios endereços (o catálogo pode
@@ -718,9 +816,10 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final codigo = _destacadoCodigo;
     if (codigo == null) return '';
     for (final e in _enderecos) {
-      if (chaveDestaque(e.produtoCodigo, e.produtoNome) == codigo &&
-          e.produtoNome.isNotEmpty) {
-        return e.produtoNome;
+      for (final g in e.gaiolas) {
+        if (chaveDestaque(g.codigo, g.nome) == codigo && g.nome.isNotEmpty) {
+          return g.nome;
+        }
       }
     }
     return codigo;
@@ -730,8 +829,77 @@ class _BarracaoPageState extends State<BarracaoPage> {
     final codigo = _destacadoCodigo;
     if (codigo == null) return 0;
     return _enderecos
-        .where((e) => chaveDestaque(e.produtoCodigo, e.produtoNome) == codigo)
+        .where((e) =>
+            e.gaiolas.any((g) => chaveDestaque(g.codigo, g.nome) == codigo))
         .length;
+  }
+}
+
+// ── Níveis da pilha ──────────────────────────────────────────────────────────
+
+/// Uma pastilha por gaiola da pilha (N1 = a do chão) e, com vaga, a de
+/// empilhar no topo. A aberta fica em laranja.
+class _SeletorNiveis extends StatelessWidget {
+  final EnderecoBarracao  endereco;
+  final int               nivel;
+  final ValueChanged<int> onEscolher;
+
+  const _SeletorNiveis({
+    required this.endereco,
+    required this.nivel,
+    required this.onEscolher,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final vaga = endereco.cheio ? null : endereco.niveis + 1;
+    return Wrap(
+      spacing:    6,
+      runSpacing: 6,
+      children: [
+        for (var n = 1; n <= endereco.niveis; n++)
+          _pastilha('N$n', n, Icons.inventory_2_outlined),
+        if (vaga != null) _pastilha('Empilhar', vaga, Icons.add),
+      ],
+    );
+  }
+
+  Widget _pastilha(String texto, int n, IconData icone) {
+    final ativo = n == nivel;
+    return GestureDetector(
+      onTap: () => onEscolher(n),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: ativo
+              ? corCamdaBarracao.withValues(alpha: 0.22)
+              : const Color(0xEE141518),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: ativo
+                ? corCamdaBarracao
+                : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icone,
+                size: 14,
+                color: ativo ? corCamdaBarracao : const Color(0xFF8a9aa8)),
+            const SizedBox(width: 5),
+            Text(
+              texto,
+              style: TextStyle(
+                color:      ativo ? Colors.white : const Color(0xFFb8c2cc),
+                fontSize:   12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -741,9 +909,9 @@ class _BarracaoPageState extends State<BarracaoPage> {
 /// quantidade), porque o mesmo produto costuma estar em vários.
 class _BuscaPaletesBarracao extends StatelessWidget {
   final TextEditingController          controller;
-  final List<EnderecoBarracao>         resultados;
-  final ValueChanged<String>           onChanged;
-  final ValueChanged<EnderecoBarracao> onEscolher;
+  final List<ResultadoBuscaBarracao>         resultados;
+  final ValueChanged<String>                 onChanged;
+  final ValueChanged<ResultadoBuscaBarracao> onEscolher;
 
   const _BuscaPaletesBarracao({
     required this.controller,

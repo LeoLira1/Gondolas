@@ -555,7 +555,11 @@ class ModoConferenciaService {
       final lote = codigos.sublist(i, fim);
       final placeholders = List.filled(lote.length, '?').join(', ');
       final stmt = await client.prepare(
-        'SELECT DISTINCT produto_codigo, id FROM barracao_enderecos '
+        // As gaiolas empilhadas também: produto no nível 3 é produto naquele
+        // palete, e o palete tem de acender.
+        'SELECT DISTINCT produto_codigo, id FROM ('
+        'SELECT produto_codigo, id FROM barracao_enderecos UNION ALL '
+        'SELECT produto_codigo, endereco_id AS id FROM barracao_gaiolas) '
         'WHERE produto_codigo IN ($placeholders)',
       );
       final rows = await stmt.query(positional: lote);
