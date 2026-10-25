@@ -53,7 +53,7 @@ import 'textura_piso.dart';
 /// numa posição com vaga o toque no contorno devolve a PRÓXIMA ordem livre,
 /// que é onde uma carga nova entraria (produto novo sempre entra no topo).
 class ToqueGalpao {
-  final int posicao; // 1–129
+  final int posicao; // 1–138
   final int ordem; // 1–GalpaoConfig.niveisMax
   final bool ocupado;
 
@@ -250,9 +250,10 @@ List<PosicaoGalpao> ordemDeDesenho(RuaGalpao rua, double coordOlho) {
 
 /// As ruas de uma PARTE, da mais longe para a mais perto do olho.
 ///
-/// São 8 na parte 1 e 4 na parte 2: ordenar é mais barato e mais claro que
-/// qualquer esquema esperto, e o resultado não depende de as ruas serem
-/// paralelas (as Ruas 2 e 8 são perpendiculares às outras).
+/// São 8 na parte 1 e 7 na parte 2 (4 fileiras + 3 trincas de gaiolas):
+/// ordenar é mais barato e mais claro que qualquer esquema esperto, e o
+/// resultado não depende de as ruas serem paralelas (as Ruas 2, 8 e 13–15 são
+/// perpendiculares às outras).
 ///
 /// A parte filtra antes de [visiveis]: o mapa desenha um bloco de cada vez, e
 /// uma rua da outra parte não entra na cena nem que o filtro a peça.
@@ -280,7 +281,7 @@ List<RuaGalpao> ruasPorProfundidade(
 class GalpaoPainter extends CustomPainter {
   final Camera camera;
 
-  /// Pilhas por posição (1–129), cada uma ordenada por [RackGalpao.ordem].
+  /// Pilhas por posição (1–138), cada uma ordenada por [RackGalpao.ordem].
   /// Posição ausente ou lista vazia = vaga livre no chão.
   final Map<int, List<RackGalpao>> pilhas;
 
@@ -327,7 +328,7 @@ class GalpaoPainter extends CustomPainter {
   /// preso a (posição, ordem) acenderia o rack errado depois disso.
   final Set<String> codigosConferencia;
 
-  /// Posição (1–129) → nº de produtos pendentes ali, para o badge contador.
+  /// Posição (1–138) → nº de produtos pendentes ali, para o badge contador.
   final Map<int, int> contagemConferencia;
 
   /// Leitura de saldo ligada: rack de produto com carga por endereçar fica
@@ -807,9 +808,16 @@ class GalpaoPainter extends CustomPainter {
       // pares costas com costas (4/5 e 6/7) os eixos ficam a 1,05 m um do
       // outro, e dois "RUA n" nessa distância se sobrepõem na tela. Como o
       // lado do corredor é oposto em cada rua do par, o desvio os separa.
+      //
+      // As gaiolas do fim dos corredores (rack atravessado) não têm ponta
+      // livre — as fileiras encostam dos dois lados —, então o rótulo vai no
+      // meio da trinca, no corredor, depois da linha dos números.
       const recuo = GalpaoConfig.passoPosicao;
       const desvio = 0.9;
-      final alvo = rua.eixo == EixoRua.z
+      final alvo = rua.rackAtravessado
+          ? Vec3(rua.centro, 0.02,
+              ponta.z + rua.ladoCorredor * (ponta.tamanhoZ / 2 + 1.1))
+          : rua.eixo == EixoRua.z
           ? Vec3(ponta.x + rua.ladoCorredor * desvio, 0.02, ponta.z - recuo)
           : Vec3(ponta.x - recuo, 0.02, ponta.z + rua.ladoCorredor * desvio);
       final hit = proj.projetar(alvo);

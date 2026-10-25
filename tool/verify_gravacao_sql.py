@@ -481,7 +481,7 @@ class Abertura(unittest.TestCase):
         # A planta do galpão num upsert só, duas vezes.
         for _ in range(2):
             db.executescript(GERADO['__seed_galpao'])
-        self.assertEqual(db.execute('SELECT COUNT(*) FROM galpao_posicoes').fetchone()[0], 129)
+        self.assertEqual(db.execute('SELECT COUNT(*) FROM galpao_posicoes').fetchone()[0], 138)
         db.close()
 
 

@@ -261,7 +261,7 @@ class OperacaoPendente {
   /// avisar o servidor depois.
   final DateTime criadaEm;
 
-  /// Posição do galpão (1–129) ou id do endereço do barracão.
+  /// Posição do galpão (1–138) ou id do endereço do barracão.
   final int local;
 
   /// Rack alvo de ajuste/esvaziamento no galpão — e, no barracão, a gaiola

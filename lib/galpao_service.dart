@@ -11,7 +11,7 @@ import 'gravacao_lote.dart';
 import 'turso_service.dart';
 import 'outbox.dart' show gerarUuidV4;
 
-/// Persistência do galpão: as 129 posições das duas partes (estrutura) e os
+/// Persistência do galpão: as 138 posições das duas partes (estrutura) e os
 /// racks empilhados (ocupação).
 ///
 /// Duas tabelas próprias — galpao_posicoes e galpao_racks — porque a pilha
@@ -97,7 +97,7 @@ class GalpaoService {
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
   ///
-  /// Uma consulta só (são no máximo 516 linhas) — percorrer posição a posição
+  /// Uma consulta só (são no máximo 552 linhas) — percorrer posição a posição
   /// custaria 129 idas ao banco para pintar um frame.
   Future<Map<int, List<RackGalpao>>> carregarPilhas() async {
     try {
@@ -129,7 +129,7 @@ class GalpaoService {
   /// Relê do servidor só as [posicoes] (pelo UNIQUE(posicao, ordem)) e as
   /// troca na cópia de leitura, mantendo a ordem (posicao, ordem). É a
   /// conferência depois que a fila do galpão esvazia: antes ela relia o galpão
-  /// inteiro (até 516 racks) a cada palete lançado. Rack que outro aparelho
+  /// inteiro (até 552 racks) a cada palete lançado. Rack que outro aparelho
   /// mexeu em outra posição aparece pela janela da cópia (30 s), como antes
   /// aparecia pela recarga. Sem cópia nenhuma, relê tudo.
   Future<Map<int, List<RackGalpao>>?> recarregarPosicoes(

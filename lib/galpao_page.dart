@@ -188,7 +188,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// "Ir para o número": abre a parte do número, isola a rua da posição e
   /// marca o endereço — o rack do topo se houver pilha, senão a vaga do chão.
   ///
-  /// O número é global (1–129), então digitar 100 leva à parte 2 sem precisar
+  /// O número é global (1–138), então digitar 100 leva à parte 2 sem precisar
   /// trocar de bloco antes: quem tem o endereço na mão não pensa em parte.
   void _irParaPosicao(String texto) {
     final numero = int.tryParse(texto.trim());
@@ -422,7 +422,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     ];
   }
 
-  /// Posições (1–129) que guardam o produto destacado.
+  /// Posições (1–138) que guardam o produto destacado.
   Set<int> get _posicoesComDestaque => {
     for (final rack in _racksDestacados) rack.posicao,
   };
@@ -664,7 +664,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
   Future<void> _recarregarDoBanco() async {
     final versao = _versaoPilhas;
     final posicoes = {..._posicoesGravadas};
-    // Só as posições gravadas (pelo índice): antes eram até 516 racks por
+    // Só as posições gravadas (pelo índice): antes eram até 552 racks por
     // palete lançado. Sem nenhuma anotada, relê o galpão inteiro.
     final pilhas = await GalpaoService().recarregarPosicoes(posicoes);
     if (!mounted || pilhas == null || versao != _versaoPilhas) return;

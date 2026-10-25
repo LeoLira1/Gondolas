@@ -68,6 +68,6 @@ void main() {
     expect(find.byType(BotaoEstocados), findsOneWidget);
     expect(tester.takeException(), isNull);
     // Cabeçalho novo: só livres quando não há racks.
-    expect(find.text('516 livres'), findsOneWidget);
+    expect(find.text('552 livres'), findsOneWidget);
   });
 }
