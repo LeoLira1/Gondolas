@@ -149,6 +149,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
     if (_persistindo) _fila.removeListener(_aoMudarFila);
     unawaited(_eventosFila?.cancel());
     _recargaAposFila?.cancel();
+    _recargaPorAviso?.cancel();
     _irParaCtrl.dispose();
     super.dispose();
   }
@@ -285,8 +286,22 @@ class _GalpaoPageState extends State<GalpaoPage> {
     TursoService().dataRevision.addListener(_aoAtualizarDados);
   }
 
+  // Os avisos de dados novos chegam em rajada: uma volta ao app relê várias
+  // consultas, e cada uma que mudou avisa por conta própria. Sem o respiro,
+  // cada aviso recarregava o galpão e o saldo de novo.
+  Timer? _recargaPorAviso;
+
   void _aoAtualizarDados() {
     if (!mounted || !_persistindo) return;
+    _recargaPorAviso?.cancel();
+    _recargaPorAviso = Timer(
+      const Duration(milliseconds: 800),
+      _recarregarPorAviso,
+    );
+  }
+
+  void _recarregarPorAviso() {
+    if (!mounted) return;
     _carregarPilhas();
     unawaited(_carregarCatalogo());
     // Uma sincronização também traz as confirmações feitas no app de contagem:
@@ -338,7 +353,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
     // o delta que a tela já aplicou. A recarga do fim da fila lê o saldo.
     if (_temPendentesGalpao) return;
     final mudancas = _mudancasLocais;
-    final saldos = await GalpaoService().carregarSaldos();
+    final saldos = await GalpaoService().carregarSaldos(
+      codigosComRack: _codigosComRack.toSet(),
+    );
     if (!mounted || mudancas != _mudancasLocais || _temPendentesGalpao) return;
     setState(() => _saldos = saldos);
   }
@@ -347,11 +364,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
   /// nenhum no galpão — é o número que interessa na hora de lançar ("o
   /// sistema tem 145, já endereçei 100").
   ///
-  /// O mapa em memória responde primeiro; só um produto de fora dele (nunca
-  /// endereçado, ou catálogo recém-aberto) custa a consulta. Ela é a MESMA de
+  /// O mapa em memória responde primeiro; um produto de fora dele (nunca
+  /// endereçado, ou catálogo recém-aberto) é calculado pela MESMA conta de
   /// [GalpaoService.carregarSaldos] — inclusive na soma dos códigos irmãos do
   /// produto —, para o painel nunca mostrar um número diferente do da tarja
-  /// que já estava na tela.
+  /// que já estava na tela. A conta sai das cópias de leitura: escolher um
+  /// produto não vai mais ao banco.
   Future<SaldoProduto?> _saldoDoProduto(String codigo) async {
     final emMemoria = _saldos[codigo];
     if (emMemoria != null) return emMemoria;
@@ -397,7 +415,10 @@ class _GalpaoPageState extends State<GalpaoPage> {
     return [
       for (final pilha in _pilhas.values)
         for (final rack in pilha)
-          if (rack.contem(codigo)) rack,
+          if (rack.produtos.any(
+            (p) => chaveDestaque(p.produtoCodigo, p.produtoNome) == codigo,
+          ))
+            rack,
     ];
   }
 
@@ -438,7 +459,8 @@ class _GalpaoPageState extends State<GalpaoPage> {
     final racks = _racksDestacados;
     for (final rack in racks) {
       for (final p in rack.produtos) {
-        if (p.produtoCodigo == _destacadoCodigo && p.produtoNome.isNotEmpty) {
+        if (chaveDestaque(p.produtoCodigo, p.produtoNome) == _destacadoCodigo &&
+            p.produtoNome.isNotEmpty) {
           return p.produtoNome;
         }
       }
@@ -507,12 +529,17 @@ class _GalpaoPageState extends State<GalpaoPage> {
       return;
     }
     setState(() => _modoConferencia = true);
-    if (_consultandoConferencia) await _carregarConferencia();
+    if (_consultandoConferencia) await _carregarConferencia(forcar: true);
   }
 
-  Future<void> _carregarConferencia() async {
+  /// [forcar]: ligar o modo e o botão de atualizar leem o banco na hora; os
+  /// outros pedidos (aviso de dados novos, abertura pelo banner) aceitam a
+  /// conferência de menos de um minuto que o serviço guarda.
+  Future<void> _carregarConferencia({bool forcar = false}) async {
     setState(() => _carregandoConferencia = true);
-    final resultado = await ModoConferenciaService().buscarConferenciaDoDia();
+    final resultado = await ModoConferenciaService().buscarConferenciaDoDia(
+      forcar: forcar,
+    );
     if (!mounted) return;
     setState(() {
       _conferencia = resultado;
@@ -619,9 +646,14 @@ class _GalpaoPageState extends State<GalpaoPage> {
     setState(() {});
   }
 
+  /// Posições cujas gravações saíram da fila (confirmadas ou recusadas) e
+  /// ainda não foram relidas: é só delas que a recarga precisa.
+  final Set<int> _posicoesGravadas = {};
+
   void _aoEventoFila(EventoFila evento) {
     if (!mounted || !evento.operacao.tipo.doGalpao) return;
     _versaoPilhas++;
+    _posicoesGravadas.add(evento.operacao.local);
     if (evento.gravada) return;
     _avisar(mensagemFalhaFila(evento));
     // A tela tinha aplicado a operação; agora ela saiu da fila, e o banco
@@ -631,8 +663,12 @@ class _GalpaoPageState extends State<GalpaoPage> {
 
   Future<void> _recarregarDoBanco() async {
     final versao = _versaoPilhas;
-    final pilhas = await GalpaoService().recarregarPilhas();
+    final posicoes = {..._posicoesGravadas};
+    // Só as posições gravadas (pelo índice): antes eram até 552 racks por
+    // palete lançado. Sem nenhuma anotada, relê o galpão inteiro.
+    final pilhas = await GalpaoService().recarregarPosicoes(posicoes);
     if (!mounted || pilhas == null || versao != _versaoPilhas) return;
+    _posicoesGravadas.removeAll(posicoes);
     _aplicarPilhasDoBanco(pilhas);
     unawaited(_carregarSaldos());
   }
@@ -1204,7 +1240,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
                           onRefresh:
                               _carregandoConferencia || !_consultandoConferencia
                               ? null
-                              : _carregarConferencia,
+                              : () => _carregarConferencia(forcar: true),
                         ),
                       ),
                   ],
@@ -1940,7 +1976,9 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
     final foco = rack.contem(_focoCodigo ?? '')
         ? _focoCodigo!
         : rack.produtoCodigo;
-    final botaoDestaque = _botaoDestaque(foco);
+    final botaoDestaque = _botaoDestaque(
+      rack.produtos.firstWhere((p) => p.produtoCodigo == foco),
+    );
     final estocado = codigoEhEstocado(rack.produtoCodigo);
     final cabeMais =
         rack.produtos.length < GalpaoConfig.produtosMaxPorRack;
@@ -2382,13 +2420,14 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
   /// Devolve null quando o produto só está NESTE lugar: acender uma posição
   /// só, com o painel dela já aberto, não mostra nada que não esteja na tela
   /// — e o botão ficava ali em todo rack, cobrando espaço sem servir.
-  Widget? _botaoDestaque(String codigo) {
-    final quantas = _posicoesDoProduto(codigo);
-    final aceso = widget.destacadoCodigo == codigo;
+  Widget? _botaoDestaque(ProdutoNoRack produto) {
+    final chave = chaveDestaque(produto.produtoCodigo, produto.produtoNome);
+    final quantas = _posicoesDoProduto(chave);
+    final aceso = widget.destacadoCodigo == chave;
     if (quantas <= 1 && !aceso) return null;
 
     return GestureDetector(
-      onTap: () => widget.onAlternarDestaque?.call(codigo),
+      onTap: () => widget.onAlternarDestaque?.call(chave),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
         decoration: BoxDecoration(
@@ -2427,10 +2466,15 @@ class _PainelEnderecoGalpaoState extends State<PainelEnderecoGalpao> {
 
   /// Em quantas posições do galpão este produto está — racks empilhados na
   /// mesma posição contam uma vez só, que é como quem vai buscar conta.
-  int _posicoesDoProduto(String codigo) {
+  int _posicoesDoProduto(String chave) {
     var total = 0;
     for (final pilha in widget.pilhas.values) {
-      if (pilha.any((r) => r.contem(codigo))) total++;
+      final tem = pilha.any(
+        (r) => r.produtos.any(
+          (p) => chaveDestaque(p.produtoCodigo, p.produtoNome) == chave,
+        ),
+      );
+      if (tem) total++;
     }
     return total;
   }

@@ -14,9 +14,34 @@ import 'barracao_service.dart';
 // ordem ('boral 20' acha 'HERBICIDA BORAL 500 SC 20L'). O rótulo também vale,
 // para quem digita 'BAR-07' e quer ver o que há lá.
 
-/// Paletes ocupados que casam com [query], em ordem de nome e depois de rótulo,
-/// no máximo [max]. Consulta com menos de 2 caracteres úteis devolve vazio.
-List<EnderecoBarracao> buscarPaletesBarracao(
+/// Uma gaiola achada pela busca: o endereço e o nível dela na pilha.
+class ResultadoBuscaBarracao {
+  final EnderecoBarracao endereco;
+  final int nivel;
+  final String produtoCodigo;
+  final String produtoNome;
+  final double quantidade;
+
+  const ResultadoBuscaBarracao({
+    required this.endereco,
+    required this.nivel,
+    required this.produtoCodigo,
+    required this.produtoNome,
+    required this.quantidade,
+  });
+
+  int get id => endereco.id;
+
+  /// 'BAR-07' para a gaiola do chão, 'BAR-07 · N3' para uma empilhada.
+  String get rotulo =>
+      nivel > 1 ? '${endereco.rotulo} · N$nivel' : endereco.rotulo;
+}
+
+/// Gaiolas que casam com [query] — uma linha por GAIOLA, porque a mesma pilha
+/// pode levar o produto em mais de um nível —, em ordem de nome, rótulo e
+/// nível, no máximo [max]. Consulta com menos de 2 caracteres úteis devolve
+/// vazio.
+List<ResultadoBuscaBarracao> buscarPaletesBarracao(
   String query,
   List<EnderecoBarracao> enderecos, {
   int max = 8,
@@ -27,18 +52,27 @@ List<EnderecoBarracao> buscarPaletesBarracao(
 
   final achados = [
     for (final e in enderecos)
-      if (e.ocupado && _casa(e, termos)) e,
+      for (final g in e.gaiolas)
+        if (_casa(e.rotulo, g.codigo, g.nome, termos))
+          ResultadoBuscaBarracao(
+            endereco:      e,
+            nivel:         g.nivel,
+            produtoCodigo: g.codigo,
+            produtoNome:   g.nome,
+            quantidade:    g.quantidade,
+          ),
   ]..sort((a, b) {
       final n = a.produtoNome.compareTo(b.produtoNome);
-      return n != 0 ? n : a.rotulo.compareTo(b.rotulo);
+      if (n != 0) return n;
+      final r = a.endereco.rotulo.compareTo(b.endereco.rotulo);
+      return r != 0 ? r : a.nivel.compareTo(b.nivel);
     });
   return achados.length > max ? achados.sublist(0, max) : achados;
 }
 
-bool _casa(EnderecoBarracao e, List<String> termos) {
-  final nome   = e.produtoNome.toLowerCase();
-  final codigo = e.produtoCodigo.toLowerCase();
-  final rotulo = e.rotulo.toLowerCase();
-  return termos.every(
-      (t) => nome.contains(t) || codigo.contains(t) || rotulo.contains(t));
+bool _casa(String rotulo, String codigo, String nome, List<String> termos) {
+  final n = nome.toLowerCase();
+  final c = codigo.toLowerCase();
+  final r = rotulo.toLowerCase();
+  return termos.every((t) => n.contains(t) || c.contains(t) || r.contains(t));
 }

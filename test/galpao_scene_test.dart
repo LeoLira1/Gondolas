@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gondola_camda/estocados_busca.dart' show chaveDestaque;
 import 'package:gondola_camda/galpao_config.dart';
 import 'package:gondola_camda/galpao_scene.dart';
 import 'package:gondola_camda/gondola_scene.dart'
@@ -152,6 +153,26 @@ void main() {
             produtoCodigo:   'ADUBO',
             corPorProduto:   corPor,
             destacadoCodigo: 'BORAL'),
+        isNot(corCamda),
+      );
+    });
+
+    test('estocado acende só o palete do cooperado buscado', () {
+      // Dois cooperados com o mesmo produto gravam o mesmo código EST:; a
+      // chave do destaque leva o nome do palete, que traz o cooperado.
+      final chave = chaveDestaque('EST:49000', 'ZAPP QI 620 20L · JOAO');
+      expect(
+        corRackGalpao(
+            produtoCodigo:   'EST:49000',
+            produtoNome:     'ZAPP QI 620 20L · JOAO',
+            destacadoCodigo: chave),
+        corCamda,
+      );
+      expect(
+        corRackGalpao(
+            produtoCodigo:   'EST:49000',
+            produtoNome:     'ZAPP QI 620 20L · MARIA',
+            destacadoCodigo: chave),
         isNot(corCamda),
       );
     });

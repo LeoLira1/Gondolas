@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'barracao_config.dart';
 import 'galpao_config.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,7 +218,10 @@ enum TipoOperacao {
   galpaoAdicionarProduto('galpao.adicionarProduto'),
   galpaoRemoverProduto('galpao.removerProduto'),
   barracaoAtribuir('barracao.atribuir'),
-  barracaoEsvaziar('barracao.esvaziar');
+  barracaoEsvaziar('barracao.esvaziar'),
+  barracaoEmpilhar('barracao.empilhar'),
+  barracaoAjustarGaiola('barracao.ajustarGaiola'),
+  barracaoEsvaziarGaiola('barracao.esvaziarGaiola');
 
   /// Nome gravado em `app_mutacoes_aplicadas.operacao` — o mesmo que a
   /// gravação antiga usava, para o histórico continuar legível.
@@ -230,6 +234,8 @@ enum TipoOperacao {
       this == galpaoEsvaziar ||
       this == galpaoAdicionarProduto ||
       this == galpaoRemoverProduto;
+
+  bool get doBarracao => !doGalpao;
 }
 
 /// Uma gravação que a pessoa já fez na tela e que ainda não foi confirmada
@@ -258,7 +264,8 @@ class OperacaoPendente {
   /// Posição do galpão (1–138) ou id do endereço do barracão.
   final int local;
 
-  /// Rack alvo de ajuste/esvaziamento no galpão.
+  /// Rack alvo de ajuste/esvaziamento no galpão — e, no barracão, a gaiola
+  /// empilhada alvo (gaiola_uuid).
   final String? rackUuid;
 
   /// Produto alvo DENTRO de um rack misto (ajuste e remoção). Null é o
@@ -361,11 +368,13 @@ class OperacaoPendente {
   /// Delta que a gravação causa no endereçado do produto.
   double get deltaEnderecado => switch (tipo) {
         TipoOperacao.galpaoLancar ||
-        TipoOperacao.galpaoAdicionarProduto =>
+        TipoOperacao.galpaoAdicionarProduto ||
+        TipoOperacao.barracaoEmpilhar =>
           quantidade,
         TipoOperacao.galpaoEsvaziar ||
         TipoOperacao.galpaoRemoverProduto ||
-        TipoOperacao.barracaoEsvaziar =>
+        TipoOperacao.barracaoEsvaziar ||
+        TipoOperacao.barracaoEsvaziarGaiola =>
           -(quantidadeAnterior ?? 0),
         _ => quantidade - (quantidadeAnterior ?? 0),
       };
@@ -376,14 +385,18 @@ class OperacaoPendente {
     final qtd = _qtd(quantidade);
     return switch (tipo) {
       TipoOperacao.galpaoLancar ||
-      TipoOperacao.barracaoAtribuir =>
+      TipoOperacao.barracaoAtribuir ||
+      TipoOperacao.barracaoEmpilhar =>
         '$nome · $qtd em $rotulo',
-      TipoOperacao.galpaoAjustar => '$nome · $rotulo → $qtd',
+      TipoOperacao.galpaoAjustar ||
+      TipoOperacao.barracaoAjustarGaiola =>
+        '$nome · $rotulo → $qtd',
       TipoOperacao.galpaoAdicionarProduto => '+ $nome · $qtd em $rotulo',
       TipoOperacao.galpaoRemoverProduto =>
         'Tirar ${nome.isEmpty ? 'produto' : nome} de $rotulo',
       TipoOperacao.galpaoEsvaziar ||
-      TipoOperacao.barracaoEsvaziar =>
+      TipoOperacao.barracaoEsvaziar ||
+      TipoOperacao.barracaoEsvaziarGaiola =>
         'Esvaziar $rotulo${nome.isEmpty ? '' : ' ($nome)'}',
     };
   }
@@ -436,6 +449,18 @@ class OperacaoPendente {
         ],
       TipoOperacao.barracaoEsvaziar => [
           ..._esvaziarBarracao(agora, naoAplicada),
+          carimbo,
+        ],
+      TipoOperacao.barracaoEmpilhar => [
+          ..._empilharBarracao(agora, u, naoAplicada),
+          carimbo,
+        ],
+      TipoOperacao.barracaoAjustarGaiola => [
+          ..._ajustarGaiolaBarracao(agora, naoAplicada),
+          carimbo,
+        ],
+      TipoOperacao.barracaoEsvaziarGaiola => [
+          ..._esvaziarGaiolaBarracao(agora, naoAplicada),
           carimbo,
         ],
     };
@@ -727,29 +752,173 @@ class OperacaoPendente {
     ];
   }
 
-  List<String> _esvaziarBarracao(String agora, String naoAplicada) => [
+  /// Tira a gaiola do CHÃO e a pilha desce: a do nível 2 vira a linha do
+  /// endereço (deixa de ser gaiola empilhada) e as outras descem um nível.
+  /// Sem nada em cima, o palete fica livre — o esvaziar de sempre.
+  List<String> _esvaziarBarracao(String agora, String naoAplicada) {
+    final segunda = 'SELECT %s FROM barracao_gaiolas WHERE endereco_id = $_id '
+        'AND nivel = 2';
+    return [
+      _guardaEndereco(naoAplicada),
+      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+          'qtd_nova, origem, registrado_em) '
+          "SELECT produto_codigo, 'BARRACAO·' || rotulo, quantidade, 0, "
+          '${sqlTexto(origem ?? 'gondolas_app_barracao_exclusao')}, $agora '
+          'FROM barracao_enderecos WHERE id = $_id AND $naoAplicada',
+      // COALESCE: sem gaiola no nível 2, o chão fica vazio.
+      'UPDATE barracao_enderecos SET '
+          "produto_codigo = COALESCE((${segunda.replaceFirst('%s', 'produto_codigo')}), ''), "
+          "produto_nome = COALESCE((${segunda.replaceFirst('%s', 'produto_nome')}), ''), "
+          'quantidade = COALESCE((${segunda.replaceFirst('%s', 'quantidade')}), 0), '
+          'atualizado_em = $agora WHERE id = $_id AND $naoAplicada',
+      'DELETE FROM barracao_gaiolas WHERE endereco_id = $_id AND nivel = 2 '
+          'AND $naoAplicada',
+      ..._descerGaiolas(agora, naoAplicada, acimaDe: '1'),
+      ..._espelhoBarracao(agora, naoAplicada),
+    ];
+  }
+
+  /// As gaiolas acima do nível [acimaDe] (expressão SQL) descem um. Em dois
+  /// passos pelos negativos, como a pilha do galpão: um `nivel = nivel - 1`
+  /// direto esbarraria no UNIQUE(endereco_id, nivel) no meio do UPDATE.
+  List<String> _descerGaiolas(
+    String agora,
+    String naoAplicada, {
+    required String acimaDe,
+  }) => [
+        'UPDATE barracao_gaiolas SET nivel = -(nivel - 1) '
+            'WHERE endereco_id = $_id AND nivel > $acimaDe AND $naoAplicada',
+        'UPDATE barracao_gaiolas SET nivel = -nivel, atualizado_em = $agora '
+            'WHERE endereco_id = $_id AND nivel < 0 AND $naoAplicada',
+      ];
+
+  // ── Barracão: gaiolas empilhadas ────────────────────────────────────────
+
+  String get _gaiolaAlvo =>
+      'gaiola_uuid = ${sqlTexto(rackUuid)} AND endereco_id = $_id';
+
+  String _guardaGaiola(String naoAplicada) => guardaConflito(
+        '$naoAplicada AND NOT EXISTS (SELECT 1 FROM barracao_gaiolas '
+            'WHERE $_gaiolaAlvo)',
+        'gaiola_ausente',
+      );
+
+  /// Quantas gaiolas há na pilha do endereço, a do chão incluída.
+  String get _gaiolasNaPilha =>
+      "(SELECT CASE WHEN trim(produto_codigo) <> '' THEN 1 ELSE 0 END "
+      'FROM barracao_enderecos WHERE id = $_id) + '
+      '(SELECT COUNT(*) FROM barracao_gaiolas WHERE endereco_id = $_id)';
+
+  String get _chaoLivre =>
+      'EXISTS (SELECT 1 FROM barracao_enderecos WHERE id = $_id '
+      "AND trim(produto_codigo) = '')";
+
+  /// Gaiola nova no TOPO da pilha. O nível é calculado no servidor (MAX + 1),
+  /// nunca recebido da tela — como o lançamento do galpão. Se outro aparelho
+  /// esvaziou o palete enquanto este estava offline, a gaiola vai para o
+  /// chão em vez de flutuar no nível 2.
+  List<String> _empilharBarracao(String agora, String u, String naoAplicada) {
+    final codigo = sqlTexto(produtoCodigo);
+    final nome = sqlTexto(produtoNome);
+    final qtd = sqlNumero(quantidade);
+    return [
+      _guardaEndereco(naoAplicada),
+      guardaConflito(
+        '$naoAplicada AND $_gaiolasNaPilha >= ${BarracaoConfig.gaiolasMax}',
+        'pilha_cheia',
+      ),
+      // Chão ocupado: gaiola nova no topo. Vem ANTES do caso do chão livre
+      // de propósito — depois dele o chão já estaria ocupado por esta mesma
+      // gravação, e a gaiola entraria duas vezes.
+      'INSERT INTO barracao_gaiolas (gaiola_uuid, endereco_id, nivel, '
+          'produto_codigo, produto_nome, quantidade, atualizado_em) '
+          'SELECT $u, $_id, (SELECT COALESCE(MAX(nivel), 1) + 1 FROM '
+          'barracao_gaiolas WHERE endereco_id = $_id), $codigo, $nome, $qtd, '
+          '$agora WHERE NOT $_chaoLivre AND $naoAplicada',
+      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+          'qtd_nova, origem, registrado_em) '
+          "SELECT g.produto_codigo, 'BARRACAO·' || e.rotulo || '·N' || "
+          'g.nivel, NULL, g.quantidade, '
+          '${sqlTexto(origem ?? 'gondolas_app_barracao')}, $agora '
+          'FROM barracao_gaiolas g JOIN barracao_enderecos e '
+          'ON e.id = g.endereco_id WHERE g.gaiola_uuid = $u AND $naoAplicada',
+      'UPDATE barracao_enderecos SET atualizado_em = $agora '
+          'WHERE id = $_id AND NOT $_chaoLivre AND $naoAplicada',
+      // Chão livre (outro aparelho esvaziou o palete): é a gaiola do chão.
+      'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+          'qtd_nova, origem, registrado_em) '
+          "SELECT $codigo, 'BARRACAO·' || rotulo, NULL, $qtd, "
+          '${sqlTexto(origem ?? 'gondolas_app_barracao')}, $agora '
+          'FROM barracao_enderecos WHERE id = $_id AND $_chaoLivre '
+          'AND $naoAplicada',
+      'UPDATE barracao_enderecos SET produto_codigo = $codigo, '
+          'produto_nome = $nome, quantidade = $qtd, atualizado_em = $agora '
+          'WHERE id = $_id AND $_chaoLivre AND $naoAplicada',
+      ..._espelhoBarracao(agora, naoAplicada),
+    ];
+  }
+
+  List<String> _ajustarGaiolaBarracao(String agora, String naoAplicada) => [
         _guardaEndereco(naoAplicada),
+        _guardaGaiola(naoAplicada),
         'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
             'qtd_nova, origem, registrado_em) '
-            "SELECT produto_codigo, 'BARRACAO·' || rotulo, quantidade, 0, "
+            "SELECT g.produto_codigo, 'BARRACAO·' || e.rotulo || '·N' || "
+            'g.nivel, g.quantidade, ${sqlNumero(quantidade)}, '
+            '${sqlTexto(origem ?? 'gondolas_app_barracao')}, $agora '
+            'FROM barracao_gaiolas g JOIN barracao_enderecos e '
+            'ON e.id = g.endereco_id WHERE g.$_gaiolaAlvo AND $naoAplicada',
+        'UPDATE barracao_gaiolas SET quantidade = ${sqlNumero(quantidade)}, '
+            'atualizado_em = $agora WHERE $_gaiolaAlvo AND $naoAplicada',
+        ..._espelhoBarracao(agora, naoAplicada),
+      ];
+
+  /// Tira UMA gaiola empilhada e as de cima descem. O nível de partida é
+  /// lido da própria gaiola antes de ela sair — por isso o primeiro passo da
+  /// descida vem antes do DELETE (mesmo motivo do galpão).
+  List<String> _esvaziarGaiolaBarracao(String agora, String naoAplicada) => [
+        _guardaEndereco(naoAplicada),
+        _guardaGaiola(naoAplicada),
+        'INSERT INTO contagens_log (produto_codigo, endereco, qtd_anterior, '
+            'qtd_nova, origem, registrado_em) '
+            "SELECT g.produto_codigo, 'BARRACAO·' || e.rotulo || '·N' || "
+            'g.nivel, g.quantidade, 0, '
             '${sqlTexto(origem ?? 'gondolas_app_barracao_exclusao')}, $agora '
-            'FROM barracao_enderecos WHERE id = $_id AND $naoAplicada',
-        "UPDATE barracao_enderecos SET produto_codigo = '', produto_nome = '', "
-            'quantidade = 0, atualizado_em = $agora '
+            'FROM barracao_gaiolas g JOIN barracao_enderecos e '
+            'ON e.id = g.endereco_id WHERE g.$_gaiolaAlvo AND $naoAplicada',
+        'UPDATE barracao_gaiolas SET nivel = -(nivel - 1) '
+            'WHERE endereco_id = $_id AND nivel > (SELECT nivel FROM '
+            'barracao_gaiolas WHERE $_gaiolaAlvo) AND $naoAplicada',
+        'DELETE FROM barracao_gaiolas WHERE $_gaiolaAlvo AND $naoAplicada',
+        'UPDATE barracao_gaiolas SET nivel = -nivel, atualizado_em = $agora '
+            'WHERE endereco_id = $_id AND nivel < 0 AND $naoAplicada',
+        // O endereço muda junto: é o atualizado_em dele que a cópia e o
+        // carimbo da réplica olham.
+        'UPDATE barracao_enderecos SET atualizado_em = $agora '
             'WHERE id = $_id AND $naoAplicada',
         ..._espelhoBarracao(agora, naoAplicada),
       ];
 
+  /// Reescreve o espelho do ENDEREÇO inteiro a partir da pilha que ficou no
+  /// banco: um produto por linha, com a soma das gaiolas dele — o espelho do
+  /// barracão sempre teve andar_ou_nivel 0 (ver localTipoBarracao), e o
+  /// UNIQUE de estoque_localizado não deixaria o mesmo produto em duas
+  /// gaiolas do mesmo palete virar duas linhas.
   List<String> _espelhoBarracao(String agora, String naoAplicada) => [
         'DELETE FROM estoque_localizado WHERE local_tipo = '
             "'$localTipoBarracaoSql' AND local_num = $_id AND $naoAplicada",
         'INSERT INTO estoque_localizado (produto_codigo, local_tipo, local_num, '
             'face_ou_coluna, andar_ou_nivel, quantidade, atualizado_em) '
-            "SELECT produto_codigo, '$localTipoBarracaoSql', id, 0, 0, "
-            'quantidade, $agora FROM barracao_enderecos WHERE id = $_id '
-            "AND trim(produto_codigo) <> '' AND quantidade > 0 "
+            "SELECT produto_codigo, '$localTipoBarracaoSql', $_id, 0, 0, "
+            'SUM(quantidade), $agora FROM ('
+            'SELECT produto_codigo, quantidade FROM barracao_enderecos '
+            'WHERE id = $_id UNION ALL '
+            'SELECT produto_codigo, quantidade FROM barracao_gaiolas '
+            'WHERE endereco_id = $_id) '
+            "WHERE trim(produto_codigo) <> '' AND quantidade > 0 "
             "AND substr(produto_codigo, 1, ${prefixoEstocadoSql.length}) <> "
-            "'$prefixoEstocadoSql' AND $naoAplicada",
+            "'$prefixoEstocadoSql' AND $naoAplicada "
+            'GROUP BY produto_codigo',
       ];
 }
 

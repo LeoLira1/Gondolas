@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'barracao_config.dart';
 import 'fila_gravacao.dart';
 import 'galpao_config.dart';
 import 'gravacao_lote.dart';
@@ -14,9 +15,16 @@ String mensagemFalhaFila(EventoFila evento) {
   if (falha == null) return '';
   if (falha.tipo == TipoFalhaGravacao.conflito) {
     return switch (falha.motivo) {
+      'pilha_cheia' when op.tipo.doBarracao =>
+        'Não gravou ${op.descricao}: a pilha de ${op.rotulo} já estava com '
+            '${BarracaoConfig.gaiolasMax} gaiolas no banco (outro aparelho '
+            'empilhou antes).',
       'pilha_cheia' =>
         'Não gravou ${op.descricao}: a pilha da posição ${op.local} já '
             'estava cheia no banco (outro aparelho lançou antes).',
+      'gaiola_ausente' =>
+        'Não gravou ${op.descricao}: essa gaiola já não está no banco '
+            '(alguém mexeu nela antes).',
       'rack_ausente' =>
         'Não gravou ${op.descricao}: esse rack já não está no banco '
             '(alguém mexeu nele antes).',
