@@ -18,9 +18,10 @@
 //
 // O galpão se divide em DUAS PARTES, e elas são blocos separados no chão: a
 // parte 1, com 8 ruas e 85 posições, e a parte 2, com 4 ruas de 11 posições
-// cada (44). O mapa desenha UMA parte de cada vez — enquadrar os dois blocos
+// cada (44) e mais 3 gaiolas no fim de cada corredor (9, nas Ruas 13 a 15). O
+// mapa desenha UMA parte de cada vez — enquadrar os dois blocos
 // juntos deixaria cada rack do tamanho de um pixel —, mas a NUMERAÇÃO é uma
-// só, global e contínua de 1 a 129, sem reiniciar por rua nem por parte: o
+// só, global e contínua de 1 a 138, sem reiniciar por rua nem por parte: o
 // número é o endereço, e o mesmo número em duas partes seriam duas vagas
 // diferentes com o mesmo nome. A parte 2 começa no 86, nas Ruas 9 a 12.
 //
@@ -36,9 +37,10 @@
 
 /// Eixo ao longo do qual as posições de uma rua se sucedem.
 ///
-/// Dez das doze ruas correm em Z (o comprimento do galpão); as duas que
+/// Dez das quinze ruas correm em Z (o comprimento do galpão); as duas que
 /// atravessam as pontas do croqui da parte 1 — a Rua 2 no topo e a Rua 8 no
-/// fundo — correm em X. As quatro ruas da parte 2 são todas de eixo Z.
+/// fundo — correm em X. As quatro fileiras da parte 2 são de eixo Z, e as
+/// três trincas de gaiolas no fim dos corredores dela (Ruas 13–15) correm em X.
 enum EixoRua { x, z }
 
 /// Uma rua do galpão: uma fileira de posições no chão.
@@ -96,7 +98,21 @@ class RuaGalpao {
     required this.primeiroNumero,
     required this.primeiroNoFim,
     required this.ladoCorredor,
+    this.rackAtravessado = false,
+    this.passo = GalpaoConfig.passoPosicao,
   });
+
+  /// `true` quando o lado de 1,20 m do rack fica ATRAVESSADO à rua, e não ao
+  /// longo dela. É o caso das gaiolas do fim dos corredores da parte 2: elas
+  /// ficam lado a lado de uma fileira à outra (a rua corre em X), mas cada uma
+  /// apontada como as fileiras vizinhas (1,20 m em Z) — de comprido, três não
+  /// caberiam no corredor de 3,45 m.
+  final bool rackAtravessado;
+
+  /// Distância entre os centros de duas posições vizinhas da rua. Nas fileiras
+  /// é [GalpaoConfig.passoPosicao]; nas gaiolas atravessadas é o lado de
+  /// 1,00 m mais a folga ([GalpaoConfig.passoGaiola]).
+  final double passo;
 
   /// Número global da última posição da rua.
   int get ultimoNumero => primeiroNumero + quantidade - 1;
@@ -105,13 +121,13 @@ class RuaGalpao {
       numeroPosicao >= primeiroNumero && numeroPosicao <= ultimoNumero;
 }
 
-/// Uma das 129 posições de chão do galpão: a vaga onde uma pilha de até
+/// Uma das 138 posições de chão do galpão: a vaga onde uma pilha de até
 /// [GalpaoConfig.niveisMax] racks se apoia.
 ///
 /// Não guarda nível nenhum de propósito — o nível é a ordem do rack na pilha,
 /// e essa ordem é dado de ocupação, não de estrutura.
 class PosicaoGalpao {
-  /// Número global 1–129, único no galpão inteiro (as duas partes dividem a
+  /// Número global 1–138, único no galpão inteiro (as duas partes dividem a
   /// mesma contagem). É o endereço.
   final int numero;
 
@@ -132,15 +148,20 @@ class PosicaoGalpao {
   /// Parte do galpão em que a posição está (1 ou 2) — a da sua rua.
   int get parte => rua.parte;
 
+  /// `true` quando o lado de 1,20 m do rack corre em Z: nas ruas de eixo Z e
+  /// nas de eixo X com o rack atravessado (as gaiolas do fim dos corredores).
+  bool get _compridoEmZ =>
+      (rua.eixo == EixoRua.z) != rua.rackAtravessado;
+
   /// Tamanho da posição no eixo X. O lado de 1,20 m do rack corre ao longo da
   /// rua; nas ruas de eixo Z isso deixa 1,00 m em X, e nas de eixo X (Ruas 2 e
-  /// 8) é o contrário.
-  double get tamanhoX => rua.eixo == EixoRua.z
+  /// 8) é o contrário. As gaiolas atravessadas (Ruas 13–15) invertem a regra.
+  double get tamanhoX => _compridoEmZ
       ? GalpaoConfig.larguraRack
       : GalpaoConfig.comprimentoRack;
 
   /// Tamanho da posição no eixo Z (ver [tamanhoX]).
-  double get tamanhoZ => rua.eixo == EixoRua.z
+  double get tamanhoZ => _compridoEmZ
       ? GalpaoConfig.comprimentoRack
       : GalpaoConfig.larguraRack;
 
@@ -151,7 +172,7 @@ class PosicaoGalpao {
       : (x, z + rua.ladoCorredor * (tamanhoZ / 2 + GalpaoConfig.recuoEtiqueta));
 }
 
-/// Estrutura fixa do galpão: medidas do rack, tabela das ruas e as 129
+/// Estrutura fixa do galpão: medidas do rack, tabela das ruas e as 138
 /// posições derivadas dela.
 class GalpaoConfig {
   // ── Medidas do rack (metros) ───────────────────────────────────────────────
@@ -167,6 +188,11 @@ class GalpaoConfig {
 
   /// Passo entre posições vizinhas ao longo da rua: rack (1,20) + folga.
   static const double passoPosicao = 1.34;
+
+  /// Passo entre as gaiolas lado a lado no fim de um corredor da parte 2:
+  /// rack atravessado (1,00) + folga. Três delas ocupam 3,10 m dos 3,45 m do
+  /// corredor, sobrando 0,175 m de cada lado até as fileiras.
+  static const double passoGaiola = 1.05;
 
   /// Passo vertical entre níveis empilhados: altura (1,10) + encaixe.
   static const double passoNivel = 1.16;
@@ -192,7 +218,7 @@ class GalpaoConfig {
 
   // ── Tabela das ruas ────────────────────────────────────────────────────────
   //
-  // 12 ruas, 129 posições, 516 endereços (129 × 4 níveis), em duas partes.
+  // 15 ruas, 138 posições, 552 endereços (138 × 4 níveis), em duas partes.
   //
   // PARTE 1 — 8 ruas, 85 posições (1–85):
   //   Rua 1 │  1–14 │ 14 │ fileira simples (lado direito / perímetro)
@@ -205,12 +231,16 @@ class GalpaoConfig {
   //   Rua 8 │ 79–85 │  7 │ fileira simples, na horizontal, fechando o FUNDO
   //
   // PARTE 2 — 4 ruas de 11 posições (86–129), todas fileiras simples com
-  // corredor dos dois lados:
+  // corredor dos dois lados, mais 3 gaiolas no fim de cada um dos 3
+  // corredores (130–138):
   //
   //   Rua  9 │  86–96  │ 11 │ a da DIREITA no croqui (é o '1–11' do desenho)
   //   Rua 10 │  97–107 │ 11 │ numerada de baixo para cima ('12–22')
   //   Rua 11 │ 108–118 │ 11 │ de cima para baixo ('23–33')
   //   Rua 12 │ 119–129 │ 11 │ a da ESQUERDA, de baixo para cima ('34–44')
+  //   Rua 13 │ 130–132 │  3 │ gaiolas no fim do corredor entre a 12 e a 11
+  //   Rua 14 │ 133–135 │  3 │ gaiolas no fim do corredor entre a 11 e a 10
+  //   Rua 15 │ 136–138 │  3 │ gaiolas no fim do corredor entre a 10 e a 9
   //
   // A numeração da parte 2 é uma serpentina: desce a primeira rua, sobe a
   // seguinte, desce a outra, sobe a última — o mesmo princípio do perímetro
@@ -314,6 +344,37 @@ class GalpaoConfig {
       quantidade: 11, primeiroNumero: 119,
       primeiroNoFim: true, ladoCorredor: -1,
     ),
+
+    // ── Gaiolas no fim dos corredores da parte 2 ─────────────────────────────
+    //
+    // No fundo de cada um dos três corredores (o lado do 86, em Z negativo)
+    // ficam 3 gaiolas lado a lado, de uma fileira à outra, fechando o
+    // corredor. São racks como os outros — empilham até 4, aceitam rack misto
+    // — e por isso entram na mesma numeração global, depois do 129: o 129
+    // fica no topo da Rua 12, e a contagem segue da esquerda para a direita
+    // pelas três trincas (130–132, 133–135, 136–138).
+    //
+    // O z de -6,70 alinha as gaiolas com a primeira posição das fileiras (a
+    // ponta do fundo); o x é o meio do corredor. Estimativa como o resto: a
+    // medição troca estes números e nada mais.
+    RuaGalpao(
+      numero: 13, parte: 2, eixo: EixoRua.x, coordFixa: -6.70, centro: 18.225,
+      quantidade: 3, primeiroNumero: 130,
+      primeiroNoFim: false, ladoCorredor: 1,
+      rackAtravessado: true, passo: passoGaiola,
+    ),
+    RuaGalpao(
+      numero: 14, parte: 2, eixo: EixoRua.x, coordFixa: -6.70, centro: 22.675,
+      quantidade: 3, primeiroNumero: 133,
+      primeiroNoFim: false, ladoCorredor: 1,
+      rackAtravessado: true, passo: passoGaiola,
+    ),
+    RuaGalpao(
+      numero: 15, parte: 2, eixo: EixoRua.x, coordFixa: -6.70, centro: 27.125,
+      quantidade: 3, primeiroNumero: 136,
+      primeiroNoFim: false, ladoCorredor: 1,
+      rackAtravessado: true, passo: passoGaiola,
+    ),
   ];
 
   /// Passo entre os eixos de duas ruas simples vizinhas da parte 2: rack
@@ -327,7 +388,7 @@ class GalpaoConfig {
   /// mapa desenha um de cada vez.
   static const List<int> partes = [1, 2];
 
-  /// Total de posições de chão do galpão, as duas partes somadas (129).
+  /// Total de posições de chão do galpão, as duas partes somadas (138).
   static int get totalPosicoes =>
       ruas.fold(0, (soma, r) => soma + r.quantidade);
 
@@ -338,12 +399,12 @@ class GalpaoConfig {
   /// Total de endereços possíveis: posições × níveis.
   static int get totalEnderecos => totalPosicoes * niveisMax;
 
-  // ── Seed das 129 posições ──────────────────────────────────────────────────
+  // ── Seed das 138 posições ──────────────────────────────────────────────────
 
   static List<PosicaoGalpao>? _cachePosicoes;
   static Map<int, PosicaoGalpao>? _cachePorNumero;
 
-  /// As 129 posições, em ordem de número global (1 → 129), as duas partes na
+  /// As 138 posições, em ordem de número global (1 → 138), as duas partes na
   /// mesma lista.
   ///
   /// Memoizada e imutável: a cena, o hit-test e os rótulos pedem esta lista o
@@ -352,7 +413,7 @@ class GalpaoConfig {
   static List<PosicaoGalpao> get posicoes =>
       _cachePosicoes ??= List.unmodifiable(_montarPosicoes());
 
-  /// Posição pelo número global, ou null se fora de 1–129.
+  /// Posição pelo número global, ou null se fora de 1–138.
   static PosicaoGalpao? porNumero(int numero) {
     final index = _cachePorNumero ??= {
       for (final p in posicoes) p.numero: p,
@@ -399,10 +460,10 @@ class GalpaoConfig {
     return index[parte] ?? const <PosicaoGalpao>[];
   }
 
-  /// Parte em que está um número de posição, ou null se fora de 1–129.
+  /// Parte em que está um número de posição, ou null se fora de 1–138.
   static int? parteDe(int numeroPosicao) => ruaDe(numeroPosicao)?.parte;
 
-  /// Rua a que um número de posição pertence, ou null se fora de 1–129.
+  /// Rua a que um número de posição pertence, ou null se fora de 1–138.
   static RuaGalpao? ruaDe(int numeroPosicao) {
     for (final r in ruas) {
       if (r.contem(numeroPosicao)) return r;
@@ -416,7 +477,7 @@ class GalpaoConfig {
       for (var i = 0; i < rua.quantidade; i++) {
         // Deslocamento do índice i em relação ao centro da rua. i = 0 é sempre
         // a ponta de MENOR coordenada do eixo (Z negativo ou X negativo).
-        final desloc = (i - (rua.quantidade - 1) / 2) * passoPosicao;
+        final desloc = (i - (rua.quantidade - 1) / 2) * rua.passo;
         // Sentido da numeração: ver RuaGalpao.primeiroNoFim.
         final ordinal = rua.primeiroNoFim ? rua.quantidade - 1 - i : i;
         lista.add(PosicaoGalpao(

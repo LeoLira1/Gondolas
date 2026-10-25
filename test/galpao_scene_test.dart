@@ -109,7 +109,7 @@ void main() {
       expect(parte1.map((r) => r.numero).toSet(), {1, 2, 3, 4, 5, 6, 7, 8});
 
       final parte2 = ruasPorProfundidade(const Vec3(60, 20, 1), parte: 2);
-      expect(parte2.map((r) => r.numero).toSet(), {9, 10, 11, 12});
+      expect(parte2.map((r) => r.numero).toSet(), {9, 10, 11, 12, 13, 14, 15});
 
       // O filtro de rua NÃO atravessa a parte: pedir a Rua 2 desenhando a
       // parte 2 não traz a rua do outro bloco de volta para a tela.

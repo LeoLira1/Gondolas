@@ -1648,7 +1648,7 @@ class TursoService {
         criado_em  TEXT    NOT NULL
       )
     ''');
-    // Estrutura fixa do galpão de racks: as 129 posições de chão das duas
+    // Estrutura fixa do galpão de racks: as 138 posições de chão das duas
     // partes, sem nível.
     // É espelho de GalpaoConfig (a autoridade das coordenadas continua sendo
     // o código, ver galpao_config.dart) para que os apps irmãos consigam ler
@@ -2982,7 +2982,7 @@ class TursoService {
       // galpão: 'x|codigo|posicao|ordem'.
       //
       // O prefixo por TIPO não é enfeite: os números de posição do galpão
-      // (1–129) se sobrepõem aos de estante (1–21), então uma chave montada só
+      // (1–138) se sobrepõem aos de estante (1–21), então uma chave montada só
       // com o número faria a quantidade do galpão ser somada dentro da
       // estante de mesmo número.
       final somas = <String, double>{};

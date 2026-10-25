@@ -19,13 +19,14 @@ de produtos por `(estante, coluna, nível, slot)` sincronizado via Turso/libSQL.
 Prédio separado da loja, com racks metálicos empilháveis — o rack é a própria
 unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
 
-- **Duas partes, 129 posições de chão em 12 ruas**, numeradas de 1 a 129 de
+- **Duas partes, 138 posições de chão em 15 ruas**, numeradas de 1 a 138 de
   forma global e contínua (não reinicia por rua nem por parte). O endereço
   exibido é `<número> · N<nível>`.
   - **Parte 1** — 85 posições em 8 ruas. As Ruas 2 (15–25) e 8 (79–85)
     atravessam as pontas do galpão na horizontal; as outras seis correm no
     comprimento.
-  - **Parte 2** — 44 posições em 4 ruas de 11 (86–129), quatro fileiras
+  - **Parte 2** — 53 posições: 44 em 4 ruas de 11 (86–129) e 9 gaiolas no
+    fim dos corredores (130–138, ver abaixo). As quatro fileiras são
     simples com corredor entre todas. A numeração é uma serpentina: desce a
     Rua 9 (86–96), sobe a 10 (97–107), desce a 11 (108–118), sobe a 12
     (119–129) — o mesmo princípio do perímetro contínuo da parte 1, para quem
@@ -33,11 +34,19 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
     está etiquetada de 1 a 44; no app o endereço é o número global, e é ele
     que vai para a etiqueta nova do rack: dois `44` no mesmo galpão não são
     endereço, são ambiguidade.
+  - **Gaiolas no fim dos corredores (Parte 2)** — no fundo de cada um dos 3
+    corredores (o lado do 86) ficam 3 gaiolas lado a lado, de uma fileira à
+    outra: Rua 13 (130–132) entre a R12 e a R11, Rua 14 (133–135) entre a R11
+    e a R10, Rua 15 (136–138) entre a R10 e a R9, numeradas da esquerda para a
+    direita, continuando do 129. São racks como os outros (empilham até 4,
+    aceitam rack misto), com o lado de 1,20 m em Z como as fileiras vizinhas
+    (`rackAtravessado`) e passo de 1,05 m — de comprido, três não caberiam no
+    corredor de 3,45 m. Posição estimada em `galpao_config.dart`.
 - **O mapa desenha uma parte de cada vez**, trocada pelo seletor `Parte 1` /
   `Parte 2` acima dos chips de rua — os dois blocos ficam longe um do outro no
   chão, e enquadrar os dois juntos deixaria cada rack do tamanho de um pixel.
   A câmera reenquadra ao trocar, os chips passam a ser os da parte aberta
-  (`R1`–`R8` ou `R9`–`R12`) e o filtro volta para `Todas`. O que não está
+  (`R1`–`R8` ou `R9`–`R15`) e o filtro volta para `Todas`. O que não está
   desenhado também não recebe toque: a lista de alvos do hit-test é a da parte
   aberta. Os pontos dos chips de parte (ciano de conferência, laranja de
   busca) são o que impede o outro bloco de sumir do mundo — é a marca que diz

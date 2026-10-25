@@ -36,7 +36,7 @@ class ProdutoNoRack {
 /// galpao_config.dart.
 class RackGalpao {
   final String? rackUuid;
-  final int posicao; // 1–129
+  final int posicao; // 1–138
   final int ordem; // 1–GalpaoConfig.niveisMax
   final String produtoCodigo;
   final String produtoNome;

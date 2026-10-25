@@ -3,34 +3,34 @@ import 'package:gondola_camda/galpao_config.dart';
 
 void main() {
   group('estrutura do galpão', () {
-    test('são 129 posições em 12 ruas, e 516 endereços', () {
-      expect(GalpaoConfig.ruas.length, 12);
-      expect(GalpaoConfig.posicoes.length, 129);
-      expect(GalpaoConfig.totalPosicoes, 129);
-      expect(GalpaoConfig.totalEnderecos, 516);
+    test('são 138 posições em 15 ruas, e 552 endereços', () {
+      expect(GalpaoConfig.ruas.length, 15);
+      expect(GalpaoConfig.posicoes.length, 138);
+      expect(GalpaoConfig.totalPosicoes, 138);
+      expect(GalpaoConfig.totalEnderecos, 552);
     });
 
-    test('as duas partes: 85 posições em 8 ruas e 44 em 4', () {
+    test('as duas partes: 85 posições em 8 ruas e 53 em 7 (44 + 9 gaiolas)', () {
       expect(GalpaoConfig.partes, [1, 2]);
       expect(GalpaoConfig.ruasDaParte(1).length, 8);
-      expect(GalpaoConfig.ruasDaParte(2).length, 4);
+      expect(GalpaoConfig.ruasDaParte(2).length, 7);
       expect(GalpaoConfig.posicoesDaParte(1).length, 85);
-      expect(GalpaoConfig.posicoesDaParte(2).length, 44);
+      expect(GalpaoConfig.posicoesDaParte(2).length, 53);
       // Juntas dão o galpão inteiro, sem posição em duas partes nem de fora.
       expect(
         [...GalpaoConfig.posicoesDaParte(1), ...GalpaoConfig.posicoesDaParte(2)]
             .map((p) => p.numero)
             .toList(),
-        List.generate(129, (i) => i + 1),
+        List.generate(138, (i) => i + 1),
       );
       expect(GalpaoConfig.ruasDaParte(3), isEmpty);
       expect(GalpaoConfig.posicoesDaParte(3), isEmpty);
     });
 
-    test('a numeração é global, contínua de 1 a 129 e sem repetição', () {
+    test('a numeração é global, contínua de 1 a 138 e sem repetição', () {
       final numeros = GalpaoConfig.posicoes.map((p) => p.numero).toList();
-      expect(numeros.toSet().length, 129, reason: 'há número repetido');
-      expect(numeros, List.generate(129, (i) => i + 1));
+      expect(numeros.toSet().length, 138, reason: 'há número repetido');
+      expect(numeros, List.generate(138, (i) => i + 1));
     });
 
     test('cada rua tem a quantidade e a faixa de números contadas no galpão', () {
@@ -47,6 +47,9 @@ void main() {
         10: (11, 97, 107),
         11: (11, 108, 118),
         12: (11, 119, 129),
+        13: (3, 130, 132),
+        14: (3, 133, 135),
+        15: (3, 136, 138),
       };
       for (final rua in GalpaoConfig.ruas) {
         final (quantidade, primeiro, ultimo) = esperado[rua.numero]!;
@@ -65,7 +68,7 @@ void main() {
     });
 
     test('toda posição pertence a exatamente uma rua', () {
-      for (var n = 1; n <= 129; n++) {
+      for (var n = 1; n <= 138; n++) {
         final rua = GalpaoConfig.ruaDe(n);
         expect(rua, isNotNull, reason: 'posição $n sem rua');
         expect(GalpaoConfig.porNumero(n)!.rua.numero, rua!.numero);
@@ -73,8 +76,8 @@ void main() {
             reason: 'posição $n em mais de uma rua');
       }
       expect(GalpaoConfig.ruaDe(0), isNull);
-      expect(GalpaoConfig.ruaDe(130), isNull);
-      expect(GalpaoConfig.porNumero(130), isNull);
+      expect(GalpaoConfig.ruaDe(139), isNull);
+      expect(GalpaoConfig.porNumero(139), isNull);
     });
 
     test('a parte sai do número da posição', () {
@@ -82,7 +85,8 @@ void main() {
       expect(GalpaoConfig.parteDe(85), 1);
       expect(GalpaoConfig.parteDe(86), 2);
       expect(GalpaoConfig.parteDe(129), 2);
-      expect(GalpaoConfig.parteDe(130), isNull);
+      expect(GalpaoConfig.parteDe(138), 2);
+      expect(GalpaoConfig.parteDe(139), isNull);
       for (final p in GalpaoConfig.posicoes) {
         expect(p.parte, p.rua.parte, reason: 'posição ${p.numero}');
         expect(GalpaoConfig.parteDe(p.numero), p.parte,
@@ -105,7 +109,7 @@ void main() {
       }
     });
 
-    test('posições vizinhas ficam a um passo de 1,34 m', () {
+    test('posições vizinhas ficam a um passo de 1,34 m (gaiolas: 1,05 m)', () {
       for (final rua in GalpaoConfig.ruas) {
         final daRua = GalpaoConfig.posicoes
             .where((p) => p.rua.numero == rua.numero)
@@ -115,7 +119,7 @@ void main() {
           final passo = rua.eixo == EixoRua.z
               ? (atual.z - anterior.z).abs()
               : (atual.x - anterior.x).abs();
-          expect(passo, closeTo(GalpaoConfig.passoPosicao, 1e-9),
+          expect(passo, closeTo(rua.passo, 1e-9),
               reason: 'entre ${anterior.numero} e ${atual.numero}');
         }
       }
@@ -189,7 +193,9 @@ void main() {
     });
 
     test('a parte 2 são 4 fileiras simples, com corredor entre todas', () {
-      final daParte = GalpaoConfig.ruasDaParte(2);
+      final daParte = GalpaoConfig.ruasDaParte(2)
+          .where((r) => !r.rackAtravessado)
+          .toList();
       expect(daParte.map((r) => r.numero), [9, 10, 11, 12]);
       for (final rua in daParte) {
         expect(rua.eixo, EixoRua.z, reason: 'Rua ${rua.numero}');
@@ -254,6 +260,47 @@ void main() {
       final naRua2 = GalpaoConfig.porNumero(15)!;  // eixo X
       expect(naRua2.tamanhoX, GalpaoConfig.comprimentoRack);
       expect(naRua2.tamanhoZ, GalpaoConfig.larguraRack);
+    });
+
+    test('3 gaiolas no fim de cada corredor da parte 2', () {
+      final fileiras = {
+        for (final r in GalpaoConfig.ruasDaParte(2))
+          if (!r.rackAtravessado) r.numero: r,
+      };
+      // Corredor de cada trinca: as duas fileiras entre as quais ela fica.
+      const corredores = {13: (12, 11), 14: (11, 10), 15: (10, 9)};
+      for (final MapEntry(key: n, value: (esq, dir)) in corredores.entries) {
+        final rua = GalpaoConfig.ruas.firstWhere((r) => r.numero == n);
+        expect(rua.parte, 2);
+        expect(rua.eixo, EixoRua.x);
+        expect(rua.rackAtravessado, isTrue);
+        expect(rua.quantidade, 3);
+        final gaiolas = GalpaoConfig.posicoesDaRua(n);
+        // Dentro do corredor, sem encostar nas fileiras dos lados.
+        final bordaEsq =
+            fileiras[esq]!.coordFixa + GalpaoConfig.larguraRack / 2;
+        final bordaDir =
+            fileiras[dir]!.coordFixa - GalpaoConfig.larguraRack / 2;
+        for (final g in gaiolas) {
+          expect(g.tamanhoX, GalpaoConfig.larguraRack, reason: 'gaiola ${g.numero}');
+          expect(g.tamanhoZ, GalpaoConfig.comprimentoRack, reason: 'gaiola ${g.numero}');
+          expect(g.x - g.tamanhoX / 2, greaterThan(bordaEsq), reason: 'gaiola ${g.numero}');
+          expect(g.x + g.tamanhoX / 2, lessThan(bordaDir), reason: 'gaiola ${g.numero}');
+        }
+        // No fundo do corredor: alinhadas com a primeira posição das fileiras.
+        final fundo = GalpaoConfig.posicoesDaRua(esq).first.z;
+        for (final g in gaiolas) {
+          expect(g.z, closeTo(fundo, 1e-9), reason: 'gaiola ${g.numero}');
+        }
+        // Numeradas da esquerda para a direita.
+        expect(gaiolas.map((g) => g.numero),
+            [rua.primeiroNumero, rua.primeiroNumero + 1, rua.primeiroNumero + 2]);
+      }
+      // A contagem continua do 129 (topo da Rua 12) para o corredor ao lado.
+      expect(GalpaoConfig.porNumero(130)!.x,
+          lessThan(GalpaoConfig.porNumero(133)!.x));
+      expect(GalpaoConfig.porNumero(133)!.x,
+          lessThan(GalpaoConfig.porNumero(136)!.x));
     });
 
     test('nenhum par de posições se sobrepõe no chão', () {
