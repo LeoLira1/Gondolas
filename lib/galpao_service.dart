@@ -12,7 +12,7 @@ import 'gravacao_lote.dart';
 import 'turso_service.dart';
 import 'outbox.dart' show gerarUuidV4;
 
-/// Persistência do galpão: as 129 posições das duas partes (estrutura) e os
+/// Persistência do galpão: as 138 posições das duas partes (estrutura) e os
 /// racks empilhados (ocupação).
 ///
 /// Duas tabelas próprias — galpao_posicoes e galpao_racks — porque a pilha
@@ -107,7 +107,7 @@ class GalpaoService {
 
   /// Ocupação do galpão inteiro: posição → pilha ordenada por ordem.
   ///
-  /// Uma consulta só (são no máximo 516 linhas) — percorrer posição a posição
+  /// Uma consulta só (são no máximo 552 linhas) — percorrer posição a posição
   /// custaria 129 idas ao banco para pintar um frame.
   Future<Map<int, List<RackGalpao>>> carregarPilhas() async {
     try {
@@ -189,7 +189,7 @@ class GalpaoService {
   /// que o app do scanner faz, e a falta disso era o "sistema 388" de um
   /// produto que na mão dá 559 (171 + 388). Ver codigos_vinculados.dart.
   ///
-  /// Quatro consultas, todas agregadas ou pequenas, contra as 129 posições:
+  /// Quatro consultas, todas agregadas ou pequenas, contra as 138 posições:
   /// os códigos com rack, o estoque_mestre (mesmo teto de 5000 linhas do
   /// catálogo), o vínculo de códigos do mapa e a soma por código de
   /// estoque_localizado. O endereçado soma TODOS os locais do produto, não só

@@ -901,11 +901,11 @@ void main() {
           lessThan(20));
     });
 
-    testWidgets('número fora de 1–129 avisa e não muda nada', (tester) async {
+    testWidgets('número fora de 1–138 avisa e não muda nada', (tester) async {
       await tester.pumpWidget(const MaterialApp(
           home: GalpaoPage(catalogoInicial: [])));
 
-      await tester.enterText(find.widgetWithText(TextField, 'nº'), '130');
+      await tester.enterText(find.widgetWithText(TextField, 'nº'), '139');
       await tester.testTextInput.receiveAction(TextInputAction.go);
       await tester.pump();
 
