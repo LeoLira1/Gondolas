@@ -110,6 +110,7 @@
   .expBody{display:none;padding:0 12px 10px}
   .expander.open .expBody{display:block}
 
+  .search:disabled{opacity:.55}
   .search{width:100%;background:var(--input);border:1px solid var(--line2);border-radius:9px;
     color:var(--text);padding:10px 12px;font-size:14px}
   .sug{margin-top:6px;border:1px solid var(--line);border-radius:9px;overflow:hidden;max-height:170px;overflow-y:auto}
@@ -285,7 +286,7 @@
         <div class="sug" id="sug1" hidden></div>
         <button class="btnGav" id="btnNovoGav">
           <span class="gavIcon"><i></i><i class="f"></i><i></i><i class="a"></i></span>
-          <span>Novo gaveteiro<small>Caixa de miudezas: ocupa 1 slot e guarda vários produtos</small></span>
+          <span>Novo gaveteiro<small>Caixa de miudezas: ocupa 1 slot e guarda até 5 produtos</small></span>
         </button>
       </div>
     </div>
@@ -415,6 +416,8 @@
   // ================= ENDEREÇOS (mesma régua do models.dart) =================
   // Parede: seção 0..5 = estantes 13..18; 2 colunas × 6 níveis (0 = base).
   const EST_MIN = 13, NIVEIS = 6, COLS = 2, NSEC = 6, MAX_SLOTS = 6;
+  // Igual ao rack misto do galpão (GalpaoConfig.produtosMaxPorRack).
+  const MAX_ITENS_GAV = 5;
   const estDe = p => EST_MIN + Math.floor(p / COLS);
   const colDe = p => p % COLS;
   const numeroCelula = (p, s) => Math.floor(p / COLS) * NIVEIS * COLS + colDe(p) * NIVEIS + (NIVEIS - 1 - s) + 1;
@@ -428,11 +431,12 @@
   let caixas = [
     nova({s:2,p:0,slot:0,codigo:'80105',qtd:6}),
     nova({s:2,p:0,slot:1,tipo:'gav',nome:'Peças Hoppner',itens:[
-      {codigo:'90101',qtd:24},{codigo:'90102',qtd:18},{codigo:'90103',qtd:30},{codigo:'90104',qtd:40},
       {codigo:'90105',qtd:6},{codigo:'90106',qtd:12},{codigo:'90107',qtd:25},{codigo:'90108',qtd:20},
-      {codigo:'90109',qtd:8},{codigo:'90110',qtd:4},{codigo:'90111',qtd:5}]}),
+      {codigo:'90109',qtd:8}]}),
     nova({s:2,p:0,slot:2,codigo:'80106',qtd:4}),
     nova({s:2,p:0,slot:3,codigo:'80201',qtd:10}),
+    nova({s:2,p:0,slot:4,tipo:'gav',nome:'Bicos e registros',itens:[
+      {codigo:'90101',qtd:24},{codigo:'90102',qtd:18},{codigo:'90103',qtd:30},{codigo:'90104',qtd:40}]}),
     nova({s:4,p:0,slot:0,codigo:'80204',qtd:12}),
     nova({s:4,p:0,slot:1,codigo:'80205',qtd:12}),
     nova({s:4,p:0,slot:2,codigo:'80206',qtd:8}),
@@ -665,7 +669,7 @@
     const c = selecionada();
     $('addrTxt').textContent = endereco(sel.p,sel.s) + (sel.slot!=null?' · slot '+(sel.slot+1):'');
     $('addrProd').textContent = !c ? '' : c.tipo==='gav'
-      ? '🗄 '+(c.nome||'Gaveteiro')+' (+'+c.itens.length+')' : nomeDe(c.codigo);
+      ? '🗄 '+(c.nome||'Gaveteiro')+' ('+c.itens.length+'/'+MAX_ITENS_GAV+')' : nomeDe(c.codigo);
     chip.hidden=false;
   }
 
@@ -960,7 +964,12 @@
     const total=g.itens.reduce((a,i)=>a+i.qtd,0);
     $('gavSelo').textContent='+'+g.itens.length;
     $('gavIcone').innerHTML = (g.itens.length?g.itens:[{}]).map(it=>{ const st=it.codigo?saldoDe(it.codigo).st:'ok'; return `<i class="${st==='falta'?'f':st==='sobra'?'a':''}"></i>`; }).join('');
-    $('gavAddr').innerHTML='<b>'+endereco(g.p,g.s)+'</b> · slot '+(g.slot+1)+' · '+g.itens.length+' produto'+(g.itens.length===1?'':'s')+' · '+total+' un';
+    $('gavAddr').innerHTML='<b>'+endereco(g.p,g.s)+'</b> · slot '+(g.slot+1)+' · '+g.itens.length+'/'+MAX_ITENS_GAV+' produtos · '+total+' un';
+    const cheio = g.itens.length >= MAX_ITENS_GAV;
+    $('gavBusca').disabled = cheio;
+    $('gavBusca').placeholder = cheio
+      ? 'Gaveteiro cheio ('+MAX_ITENS_GAV+'/'+MAX_ITENS_GAV+') — tire um produto para pôr outro'
+      : '➕ Adicionar produto ao gaveteiro ('+g.itens.length+'/'+MAX_ITENS_GAV+')...';
     $('gavLista').innerHTML = g.itens.length ? g.itens.map((it,i)=>{
       const p=prodById(it.codigo), sd=saldoDe(it.codigo);
       const st = sd.sis==null ? 'sem saldo no sistema'
@@ -1004,7 +1013,8 @@
   gavBusca.addEventListener('input',()=>renderSug(gavSug,filtrar(gavBusca.value),p=>{
     gavBusca.value=''; gavSug.hidden=true;
     const ja=gavAberto.itens.find(i=>i.codigo===p.codigo);
-    if (ja){ toast('Já está no gaveteiro — ajuste a quantidade'); desenharGaveteiro(p.codigo); return; }
+    if (ja){ toast('Esse produto já está no gaveteiro — corrija a quantidade dele.'); desenharGaveteiro(p.codigo); return; }
+    if (gavAberto.itens.length >= MAX_ITENS_GAV){ toast('O gaveteiro já tem '+MAX_ITENS_GAV+' produtos.'); return; }
     const it={codigo:p.codigo,qtd:1};
     gavAberto.itens.push(it);
     desenharGaveteiro(p.codigo);
