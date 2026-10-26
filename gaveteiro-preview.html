@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>Gaveteiro da Estante Parede</title>
+<title>Caixa Mista da Estante Parede</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&display=swap">
 <style>
-  /* Layout: tela única do app — cabeçalho da estante, palco 3D, painel inferior; o gaveteiro abre numa folha por baixo. */
+  /* Layout: tela única do app — cabeçalho da estante, palco 3D, painel inferior; a caixa mista abre numa folha por baixo. */
   :root{
     --bg:#0b0d10; --panel:#14171c; --panel2:#1a1e24; --line:#262c34; --line2:#2a2f37;
     --orange:#e87722; --orange2:#f0a35e; --text:#e6e8ec; --muted:#8b919c;
@@ -124,6 +124,8 @@
   .sugItem .cat{color:var(--muted);font-size:10px;font-family:var(--mono)}
   .sugItem .em{color:var(--green2);font-size:10px;font-family:var(--mono)}
 
+  .dica{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.4}
+  .dica b{color:var(--orange2);font-weight:600}
   .btnGav{display:flex;width:100%;align-items:center;gap:10px;margin-top:8px;padding:10px 12px;
     border:1px dashed rgba(232,119,34,.55);border-radius:9px;color:var(--orange2);font-size:13px;font-weight:600;text-align:left}
   .btnGav small{display:block;color:var(--muted);font-weight:400;font-size:11px}
@@ -231,6 +233,7 @@
   .mbtn.g{color:var(--muted);border:1px solid var(--line2)}
   .mbtn.r{color:var(--red);border:1px solid var(--redline)}
   .mbtn.p{background:var(--greenbtn);color:#fff}
+  .mbtn.o{color:var(--orange2);border:1px dashed rgba(232,119,34,.55);font-size:13px}
   .modalBox textarea{width:100%;height:240px;background:var(--bg);color:#c9d0da;border:1px solid var(--line2);
     border-radius:10px;padding:10px;font-family:var(--mono);font-size:11px;resize:none}
 </style>
@@ -241,7 +244,7 @@
     <div class="brand">CAMDA</div>
     <div class="dot"></div>
     <div class="spacer"></div>
-    <div class="tag">PRÉVIA · GAVETEIRO</div>
+    <div class="tag">PRÉVIA · CAIXA MISTA</div>
   </header>
 
   <div class="secnav">
@@ -284,10 +287,10 @@
       <div class="expBody">
         <input class="search" id="inp1" type="text" placeholder="Buscar produto..." autocomplete="off">
         <div class="sug" id="sug1" hidden></div>
-        <button class="btnGav" id="btnNovoGav">
+        <div class="dica">
           <span class="gavIcon"><i></i><i class="f"></i><i></i><i class="a"></i></span>
-          <span>Novo gaveteiro<small>Caixa de miudezas: ocupa 1 slot e guarda até 5 produtos</small></span>
-        </button>
+          <span>Como no galpão: toque numa caixa e use <b>Outro produto nesta caixa</b> para guardar até 5 produtos nela.</span>
+        </div>
       </div>
     </div>
 
@@ -314,18 +317,18 @@
 
 <!-- folha do gaveteiro -->
 <div class="sheetWrap" id="gavSheet">
-  <div class="sheet" role="dialog" aria-label="Gaveteiro">
+  <div class="sheet" role="dialog" aria-label="Caixa">
     <div class="grab"></div>
     <div class="gHead">
       <span class="gavIcon" id="gavIcone"></span>
       <div class="nomeBox">
-        <input id="gavNome" type="text" maxlength="40" placeholder="Nome do gaveteiro (ex.: Peças Hoppner)" autocomplete="off">
+        <input id="gavNome" type="text" maxlength="40" placeholder="Nome da caixa (opcional, ex.: Peças Hoppner)" autocomplete="off">
         <div class="gAddr" id="gavAddr"></div>
       </div>
       <div class="gSel" id="gavSelo">+0</div>
     </div>
     <div class="gSearch">
-      <input class="search" id="gavBusca" type="text" placeholder="&#10133; Adicionar produto ao gaveteiro..." autocomplete="off">
+      <input class="search" id="gavBusca" type="text" placeholder="&#10133; Outro produto nesta caixa..." autocomplete="off">
       <div class="sug" id="gavSug" hidden></div>
     </div>
     <div class="legenda"><span><i style="background:var(--stFalta)"></i>falta endereçar</span><span><i style="background:var(--stSobra)"></i>acima do saldo</span><span><i style="background:var(--stOk)"></i>ok</span><span>· fatia de cima = 1º da lista</span></div>
@@ -336,7 +339,7 @@
       <div class="gravNota">Uma linha por produto no endereço da posição (sem slot). É isso que faz o produto sair da lista Sem Posição e aparecer no Onde está.</div>
     </details>
     <div class="gFoot">
-      <button class="btnGhost" id="gavRemover">&#128465; Remover gaveteiro</button>
+      <button class="btnGhost" id="gavRemover">&#128465; Remover caixa</button>
       <button class="btnSave" id="gavOk">&#10003; Concluir</button>
     </div>
   </div>
@@ -352,6 +355,7 @@
       <input id="qtyVal" type="number" inputmode="numeric" min="0" step="1" value="0">
       <button class="qtyBtn" id="qtyPlus" aria-label="Mais">+</button>
     </div>
+    <div class="modalRow" id="qtyOutroRow"><button class="mbtn o" id="qtyOutro">&#10133; Outro produto nesta caixa (1/5)</button></div>
     <div class="modalRow"><button class="mbtn r" id="qtyRemove">Remover caixa</button></div>
     <div class="modalRow">
       <button class="mbtn g" id="qtyCancel">Cancelar</button>
@@ -424,36 +428,40 @@
   const endereco = (p, s) => 'E' + estDe(p) + '·' + numeroCelula(p, s);
 
   // ================= ESTADO (exemplo) =================
-  // caixa normal: {id,s,p,slot,codigo,qtd}
-  // gaveteiro:    {id,s,p,slot,tipo:'gav',nome,itens:[{codigo,qtd}]}
+  // Toda caixa: {id,s,p,slot,nome,itens:[{codigo,qtd}]} com 1 a 5 itens, como o
+  // rack do galpão: itens[0] é o principal (vai pro estante_layout) e, do 2º em
+  // diante, a caixa é MISTA (itens extras numa tabela à parte, como galpao_rack_itens).
   let seq = 1;
-  const nova = o => ({id: seq++, ...o});
+  const nova = o => ({id: seq++, nome:'', ...o});
+  const cx1 = (s,p,slot,codigo,qtd) => nova({s,p,slot,itens:[{codigo,qtd}]});
+  const misto = c => c.itens.length > 1;
   let caixas = [
-    nova({s:2,p:0,slot:0,codigo:'80105',qtd:6}),
-    nova({s:2,p:0,slot:1,tipo:'gav',nome:'Peças Hoppner',itens:[
+    cx1(2,0,0,'80105',6),
+    nova({s:2,p:0,slot:1,nome:'Peças Hoppner',itens:[
       {codigo:'90105',qtd:6},{codigo:'90106',qtd:12},{codigo:'90107',qtd:25},{codigo:'90108',qtd:20},
       {codigo:'90109',qtd:8}]}),
-    nova({s:2,p:0,slot:2,codigo:'80106',qtd:4}),
-    nova({s:2,p:0,slot:3,codigo:'80201',qtd:10}),
-    nova({s:2,p:0,slot:4,tipo:'gav',nome:'Bicos e registros',itens:[
+    cx1(2,0,2,'80106',4),
+    cx1(2,0,3,'80201',10),
+    nova({s:2,p:0,slot:4,itens:[
       {codigo:'90101',qtd:24},{codigo:'90102',qtd:18},{codigo:'90103',qtd:30},{codigo:'90104',qtd:40}]}),
-    nova({s:4,p:0,slot:0,codigo:'80204',qtd:12}),
-    nova({s:4,p:0,slot:1,codigo:'80205',qtd:12}),
-    nova({s:4,p:0,slot:2,codigo:'80206',qtd:8}),
-    nova({s:3,p:1,slot:0,codigo:'80101',qtd:3}),
-    nova({s:3,p:1,slot:1,codigo:'80102',qtd:2}),
-    nova({s:0,p:1,slot:0,codigo:'80301',qtd:15}),
-    nova({s:1,p:3,slot:4,tipo:'gav',nome:'Abraçadeiras e conexões',itens:[
+    cx1(4,0,0,'80204',12),
+    cx1(4,0,1,'80205',12),
+    cx1(4,0,2,'80206',8),
+    cx1(3,1,0,'80101',3),
+    cx1(3,1,1,'80102',2),
+    cx1(0,1,0,'80301',15),
+    cx1(2,1,0,'90112',3),
+    nova({s:1,p:3,slot:4,itens:[
       {codigo:'90201',qtd:50},{codigo:'90202',qtd:35},{codigo:'90203',qtd:15}]}),
   ];
-  let armado = null;          // produto do catálogo ou {gav:true}
+  let armado = null;          // produto do catálogo
   let sel = null;             // {s,p,slot}
   let secao = 0;
   let gavAberto = null;
 
   // ================= estoque_localizado derivado =================
   // Chave UNIQUE(produto, local_tipo, local_num, coluna, nivel): o slot não entra,
-  // então caixa e gaveteiro do mesmo produto na mesma posição somam numa linha.
+  // então o mesmo produto em duas caixas da mesma posição soma numa linha só.
   function linhasEstoque(){
     const m = new Map();
     const add = (codigo, p, s, qtd, origem) => {
@@ -463,8 +471,7 @@
       l.quantidade += qtd; l.origens.push(origem); m.set(k, l);
     };
     for (const c of caixas){
-      if (c.tipo === 'gav') for (const it of c.itens) add(it.codigo, c.p, c.s, it.qtd, 'gaveteiro');
-      else if (c.qtd != null) add(c.codigo, c.p, c.s, c.qtd, 'caixa');
+      for (const it of c.itens) if (it.qtd != null) add(it.codigo, c.p, c.s, it.qtd, c.id);
     }
     return [...m.values()];
   }
@@ -487,7 +494,7 @@
   const W_CX = 0.185, GAP_CX = 0.03;
 
   const COL_SHELF_TOP=[64,108,84], COL_SHELF_SIDE=[40,72,56], COL_IRON=[24,34,29], COL_BRACKET=[28,40,34];
-  const COL_GAV_VAZIO=[58,64,72], COL_LISTRA=[43,42,39];
+  const COL_LISTRA=[43,42,39];
 
   const cv = $('cv'), ctx = cv.getContext('2d');
   let W=0, H=0;
@@ -528,11 +535,11 @@
     const inner = SLOT - (MAX_SLOTS*W_CX + (MAX_SLOTS-1)*GAP_CX);
     return local*SLOT + inner/2 + slot*(W_CX+GAP_CX);
   }
-  // Gaveteiro: mesmo slot, mas baixo (42% do vão) e mais largo (come o respiro dos lados).
+  // Caixa mista ocupa exatamente o volume de uma caixa normal; só a pintura muda.
   function geoGav(c){
-    const local = c.p - secao*COLS, x0 = slotX(local, c.slot) - GAP_CX*0.45;
-    const x1 = x0 + W_CX + GAP_CX*0.9, y0 = ys[c.s]+TH, y1 = y0 + vao(c.s)*0.56, zf = Z0+0.04;
-    return {x0,x1,y0,y1,zf,zb:Z1-0.08};
+    const local = c.p - secao*COLS, x0 = slotX(local, c.slot);
+    const y0 = ys[c.s]+TH;
+    return {x0, x1:x0+W_CX, y0, y1:y0+vao(c.s)*0.74, zf:Z0+0.08, zb:Z1-0.10};
   }
 
   const prodQuads = [];
@@ -541,11 +548,9 @@
     for (const c of caixas){
       if (Math.floor(c.p/COLS) !== secao) continue;
       const n0 = prodQuads.length;
-      if (c.tipo === 'gav'){
+      if (misto(c)){
         const g = geoGav(c), n = c.itens.length;
-        if (!n){
-          box(prodQuads, g.x0,g.y0,g.zf, g.x1,g.y1,g.zb, COL_GAV_VAZIO);
-        } else {
+        {
           // Uma fatia horizontal por produto, de cima pra baixo na ordem da lista,
           // pintada pelo saldo; um filete escuro separa as fatias (o listrado do Gêmeo).
           const h = (g.y1-g.y0)/n, fil = Math.min(0.004, h*0.22);
@@ -556,9 +561,8 @@
           });
         }
       } else {
-        const local = c.p - secao*COLS, x0 = slotX(local, c.slot);
-        const col = hexRgb(prodById(c.codigo)?.cor || '#888888');
-        box(prodQuads, x0, ys[c.s]+TH, Z0+0.08, x0+W_CX, ys[c.s]+TH+vao(c.s)*0.74, Z1-0.10, col);
+        const g = geoGav(c), col = hexRgb(prodById(c.itens[0].codigo)?.cor || '#888888');
+        box(prodQuads, g.x0,g.y0,g.zf, g.x1,g.y1,g.zb, col);
       }
       for (let i=n0;i<prodQuads.length;i++) prodQuads[i].cx = c;
     }
@@ -641,15 +645,8 @@
         if (livre===null){ toast('Posição '+endereco(p,hit.s)+' cheia (6 slots)'); return; }
         slot=livre;
       }
-      if (armado.gav){
-        const g = nova({s:hit.s,p,slot,tipo:'gav',nome:'',itens:[]});
-        caixas.push(g); desarmar();
-        sel={s:hit.s,p,slot}; rebuild(); kick();
-        abrirGaveteiro(g, true);
-      } else {
-        caixas.push(nova({s:hit.s,p,slot,codigo:armado.codigo,qtd:null}));
-        sel={s:hit.s,p,slot}; rebuild(); kick();
-      }
+      caixas.push(cx1(hit.s,p,slot,armado.codigo,null));
+      sel={s:hit.s,p,slot}; rebuild(); kick();
       atualizarChip();
       return;
     }
@@ -659,7 +656,7 @@
     ocup.sort((a,b)=>Math.abs(a.slot-est)-Math.abs(b.slot-est));
     const c = ocup[0];
     sel = {s:c.s,p:c.p,slot:c.slot}; atualizarChip(); kick();
-    if (c.tipo==='gav') abrirGaveteiro(c); else abrirQtdCaixa(c);
+    if (misto(c)) abrirGaveteiro(c); else abrirQtdCaixa(c);
   }
 
   const selecionada = () => sel && sel.slot!=null ? caixas.find(c=>c.s===sel.s&&c.p===sel.p&&c.slot===sel.slot) : null;
@@ -668,8 +665,8 @@
     if (!sel){ chip.hidden=true; return; }
     const c = selecionada();
     $('addrTxt').textContent = endereco(sel.p,sel.s) + (sel.slot!=null?' · slot '+(sel.slot+1):'');
-    $('addrProd').textContent = !c ? '' : c.tipo==='gav'
-      ? '🗄 '+(c.nome||'Gaveteiro')+' ('+c.itens.length+'/'+MAX_ITENS_GAV+')' : nomeDe(c.codigo);
+    $('addrProd').textContent = !c ? '' : misto(c)
+      ? '🗄 '+(c.nome||'Caixa mista')+' ('+c.itens.length+'/'+MAX_ITENS_GAV+')' : nomeDe(c.itens[0].codigo);
     chip.hidden=false;
   }
 
@@ -693,7 +690,7 @@
     for (const d of drawn){
       const s=shade(d.q), [r,g2,b]=d.q.col, isSel = d.q.cx && d.q.cx===sc, m=isSel?1.22:1;
       ctx.fillStyle=`rgb(${Math.min(255,r*s*m)|0},${Math.min(255,g2*s*m)|0},${Math.min(255,b*s*m)|0})`;
-      const fatia = d.q.cx && d.q.cx.tipo==='gav';
+      const fatia = d.q.cx && misto(d.q.cx);
       ctx.strokeStyle = isSel ? (fatia ? 'rgba(232,119,34,0.55)' : '#e87722') : 'rgba(11,13,16,0.35)';
       ctx.lineWidth = isSel&&!fatia ? 1.6 : fatia ? 0.35 : 0.6;
       poly(d.pp); ctx.fill(); ctx.stroke();
@@ -708,7 +705,7 @@
       }
     }
 
-    if (sc && sc.tipo==='gav' && Math.floor(sc.p/COLS)===secao){
+    if (sc && misto(sc) && Math.floor(sc.p/COLS)===secao){
       const g=geoGav(sc), pp=[[g.x0,g.y0,g.zf],[g.x1,g.y0,g.zf],[g.x1,g.y1,g.zf],[g.x0,g.y1,g.zf]].map(project);
       if (!pp.some(q=>q.vz<0.5)){ poly(pp); ctx.lineWidth=1.8; ctx.strokeStyle='#e87722'; ctx.stroke(); }
     }
@@ -726,10 +723,10 @@
       ctx.fillText(n,p.sx,p.sy+fs*0.05);
     }
 
-    // selo "+N" em cima de cada gaveteiro
+    // selo "+N" em cima de cada caixa mista
     for (const c of caixas){
-      if (c.tipo!=='gav' || Math.floor(c.p/COLS)!==secao) continue;
-      const gg=geoGav(c), p=project([(gg.x0+gg.x1)/2, gg.y1+0.075, gg.zf]);
+      if (!misto(c) || Math.floor(c.p/COLS)!==secao) continue;
+      const gg=geoGav(c), p=project([(gg.x0+gg.x1)/2, gg.y1+0.06, gg.zf]);
       if (p.vz<0.5) continue;
       const fs=Math.max(9,p.f*0.06/p.vz), t='+'+c.itens.length;
       ctx.font=mono(fs,700);
@@ -833,8 +830,8 @@
       const el=document.querySelector('#minimap .mseg[data-i="'+i+'"] .cnt');
       if (el){ el.textContent=n; el.hidden=n===0; }
     }
-    const gavs=caixas.filter(c=>c.tipo==='gav');
-    $('catCount').textContent = CATALOGO.length+' produtos no catálogo · '+gavs.length+' gaveteiro'+(gavs.length===1?'':'s')+' na parede';
+    const mistas=caixas.filter(misto).length;
+    $('catCount').textContent = CATALOGO.length+' produtos no catálogo · '+mistas+' caixa'+(mistas===1?'':'s')+' mista'+(mistas===1?'':'s')+' na parede';
     $('btnLimpar').disabled = caixas.length===0;
     // Sem Posição = catálogo sem nenhuma linha em estoque_localizado
     const end = new Set(linhasEstoque().map(l=>l.produto_codigo));
@@ -874,33 +871,28 @@
   function armar(a){
     armado=a;
     const chip=$('armedChip');
-    chip.classList.toggle('gav', !!a.gav);
-    $('armedSw').style.background = a.gav ? '#7d8fa3' : a.cor;
-    $('armedTx').textContent = a.gav
-      ? '🗄 Gaveteiro — toque num slot livre para colocar'
-      : '✓ '+a.nome+' — toque numa posição para adicionar';
+    $('armedSw').style.background = a.cor;
+    $('armedTx').textContent = '✓ '+a.nome+' — toque numa posição para adicionar';
     chip.hidden=false;
     abrirExpander(0);
   }
   function desarmar(){ armado=null; $('armedChip').hidden=true; }
   $('armedX').addEventListener('click',desarmar);
-  $('btnNovoGav').addEventListener('click',()=>armar({gav:true}));
 
   const inp1=$('inp1'), sug1=$('sug1');
   inp1.addEventListener('input',()=>renderSug(sug1,filtrar(inp1.value),p=>{
     inp1.value=''; sug1.hidden=true; armar(p);
   }));
 
-  // Onde está — enxerga caixas e itens de gaveteiro
+  // Onde está — enxerga todos os produtos de cada caixa, mista ou não
   function ondeEsta(codigo){
     const r=[];
     for (const c of caixas){
-      if (c.tipo==='gav'){
-        const it=c.itens.find(i=>i.codigo===codigo);
-        if (it) r.push({c, txt:endereco(c.p,c.s)+' · 🗄 '+(c.nome||'Gaveteiro')+' ('+it.qtd+' un)'});
-      } else if (c.codigo===codigo){
-        r.push({c, txt:endereco(c.p,c.s)+' · slot '+(c.slot+1)+(c.qtd!=null?' ('+c.qtd+')':'')});
-      }
+      const it=c.itens.find(i=>i.codigo===codigo);
+      if (!it) continue;
+      r.push({c, txt:endereco(c.p,c.s)+' · slot '+(c.slot+1)
+        +(misto(c)?' · 🗄 '+(c.nome||'caixa mista')+' '+c.itens.length+'/'+MAX_ITENS_GAV:'')
+        +(it.qtd!=null?' ('+it.qtd+' un)':'')});
     }
     return r;
   }
@@ -930,6 +922,8 @@
     $('qtyAddr').textContent=cfg.addr;
     $('qtyVal').value=cfg.valor;
     $('qtyRemove').textContent=cfg.removerTxt;
+    $('qtyOutroRow').hidden=!cfg.onOutro;
+    if (cfg.onOutro) $('qtyOutro').innerHTML='➕ Outro produto nesta caixa (1/'+MAX_ITENS_GAV+')';
     $('qtyModal').classList.add('open');
     setTimeout(()=>{ $('qtyVal').focus(); $('qtyVal').select(); },60);
   }
@@ -941,14 +935,18 @@
   $('qtySave').addEventListener('click',()=>{ const n=lerQtd(); fecharQtd(); qtyCfg?.onSave(n); });
   $('qtyVal').addEventListener('keydown',e=>{ if(e.key==='Enter') $('qtySave').click(); });
   $('qtyRemove').addEventListener('click',()=>{ fecharQtd(); qtyCfg?.onRemove(); });
+  $('qtyOutro').addEventListener('click',()=>{ const n=lerQtd(); fecharQtd(); qtyCfg?.onOutro(n); });
 
   function abrirQtdCaixa(c){
-    abrirQtd({titulo:nomeDe(c.codigo), addr:endereco(c.p,c.s)+' · slot '+(c.slot+1), valor:c.qtd??0, removerTxt:'Remover caixa',
-      onSave:n=>{ c.qtd=n; atualizarPainel(); toast('Quantidade salva: '+n,'ok'); },
+    const it=c.itens[0];
+    abrirQtd({titulo:nomeDe(it.codigo), addr:endereco(c.p,c.s)+' · slot '+(c.slot+1), valor:it.qtd??0, removerTxt:'Remover caixa',
+      onSave:n=>{ it.qtd=n; atualizarPainel(); toast('Quantidade salva: '+n,'ok'); },
+      // Salva a quantidade digitada e abre a lista já com a busca pronta para o 2º produto.
+      onOutro:n=>{ it.qtd=n; abrirGaveteiro(c, true); },
       onRemove:()=>{ caixas=caixas.filter(x=>x!==c); sel=null; atualizarChip(); rebuild(); kick(); }});
   }
 
-  // ================= GAVETEIRO =================
+  // ================= CAIXA (lista de produtos) =================
   let confirmaRemover=false;
   function abrirGaveteiro(g, novo){
     gavAberto=g; confirmaRemover=false;
@@ -957,79 +955,89 @@
     $('gavGrav').open=false;
     desenharGaveteiro();
     $('gavSheet').classList.add('open');
-    if (novo) setTimeout(()=>$('gavNome').focus(),80);
+    if (novo) setTimeout(()=>$('gavBusca').focus(),80);
   }
   function desenharGaveteiro(flashCod){
     const g=gavAberto; if(!g) return;
-    const total=g.itens.reduce((a,i)=>a+i.qtd,0);
+    const total=g.itens.reduce((a,i)=>a+(i.qtd||0),0);
     $('gavSelo').textContent='+'+g.itens.length;
     $('gavIcone').innerHTML = (g.itens.length?g.itens:[{}]).map(it=>{ const st=it.codigo?saldoDe(it.codigo).st:'ok'; return `<i class="${st==='falta'?'f':st==='sobra'?'a':''}"></i>`; }).join('');
     $('gavAddr').innerHTML='<b>'+endereco(g.p,g.s)+'</b> · slot '+(g.slot+1)+' · '+g.itens.length+'/'+MAX_ITENS_GAV+' produtos · '+total+' un';
     const cheio = g.itens.length >= MAX_ITENS_GAV;
     $('gavBusca').disabled = cheio;
     $('gavBusca').placeholder = cheio
-      ? 'Gaveteiro cheio ('+MAX_ITENS_GAV+'/'+MAX_ITENS_GAV+') — tire um produto para pôr outro'
-      : '➕ Adicionar produto ao gaveteiro ('+g.itens.length+'/'+MAX_ITENS_GAV+')...';
-    $('gavLista').innerHTML = g.itens.length ? g.itens.map((it,i)=>{
+      ? 'Caixa cheia ('+MAX_ITENS_GAV+'/'+MAX_ITENS_GAV+') — tire um produto para pôr outro'
+      : '➕ Outro produto nesta caixa ('+g.itens.length+'/'+MAX_ITENS_GAV+')...';
+    $('gavLista').innerHTML = g.itens.map((it,i)=>{
       const p=prodById(it.codigo), sd=saldoDe(it.codigo);
       const st = sd.sis==null ? 'sem saldo no sistema'
         : `sist. ${sd.sis} · end. ${sd.end} · <b>${sd.st==='falta'?'faltam '+(-sd.dif):sd.st==='sobra'?'+'+sd.dif+' além':'ok'}</b>`;
       return `<div class="gRow ${sd.st}${it.codigo===flashCod?' flash':''}" data-i="${i}">
         <span class="sw" style="background:${p?.cor||'#888'}"></span>
         <div class="txt"><span class="cod">${it.codigo}</span><span class="nm">${esc(nomeDe(it.codigo))}</span><span class="st">${st}</span></div>
-        <div class="stepper"><button data-a="menos" aria-label="Menos">−</button><button class="q" data-a="editar" aria-label="Editar quantidade">${it.qtd}</button><button data-a="mais" aria-label="Mais">+</button></div>
-        <button class="del" data-a="tirar" aria-label="Tirar do gaveteiro">🗑</button>
+        <div class="stepper"><button data-a="menos" aria-label="Menos">−</button><button class="q" data-a="editar" aria-label="Editar quantidade">${it.qtd??0}</button><button data-a="mais" aria-label="Mais">+</button></div>
+        <button class="del" data-a="tirar" aria-label="Tirar da caixa">🗑</button>
       </div>`;
-    }).join('') : '<div class="gEmpty">Gaveteiro vazio.<br>Busque acima para colocar as peças que ficam nele.</div>';
+    }).join('');
     if (flashCod) $('gavLista').querySelector('.flash')?.scrollIntoView({block:'nearest'});
-    // linhas que este gaveteiro grava em estoque_localizado
+    // linhas que esta caixa grava em estoque_localizado
     const linhas=linhasEstoque().filter(l=>l.local_num===estDe(g.p)&&l.face_ou_coluna===colDe(g.p)&&l.andar_ou_nivel===g.s&&g.itens.some(i=>i.codigo===l.produto_codigo));
     $('gavGravSum').textContent='Gravação em estoque_localizado · '+linhas.length+' linha'+(linhas.length===1?'':'s');
     $('gavGravTab').innerHTML='<tr><th>produto_codigo</th><th>local</th><th>local_num</th><th>coluna</th><th>nivel</th><th>qtd</th><th>end.</th></tr>'+
-      linhas.map(l=>`<tr><td>${l.produto_codigo}</td><td>${l.local_tipo}</td><td class="n">${l.local_num}</td><td class="n">${l.face_ou_coluna}</td><td class="n">${l.andar_ou_nivel}</td><td class="n">${l.quantidade}${l.origens.includes('caixa')?' <span class="soma">(+cx)</span>':''}</td><td>${l.endereco}</td></tr>`).join('');
+      linhas.map(l=>`<tr><td>${l.produto_codigo}</td><td>${l.local_tipo}</td><td class="n">${l.local_num}</td><td class="n">${l.face_ou_coluna}</td><td class="n">${l.andar_ou_nivel}</td><td class="n">${l.quantidade}${l.origens.some(o=>o!==g.id)?' <span class="soma">(+outra cx)</span>':''}</td><td>${l.endereco}</td></tr>`).join('');
     const rb=$('gavRemover');
     rb.classList.toggle('armado',confirmaRemover);
-    rb.innerHTML = confirmaRemover ? 'Toque de novo p/ remover' : '🗑 Remover gaveteiro';
+    rb.innerHTML = confirmaRemover ? 'Toque de novo p/ remover' : '🗑 Remover caixa';
     rebuild(); atualizarChip(); kick();
   }
   $('gavLista').addEventListener('click',e=>{
     const b=e.target.closest('button[data-a]'); if(!b) return;
     const g=gavAberto, i=+b.closest('.gRow').dataset.i, it=g.itens[i];
     const a=b.dataset.a;
-    if (a==='mais'){ it.qtd++; desenharGaveteiro(); }
-    else if (a==='menos'){ it.qtd=Math.max(0,it.qtd-1); desenharGaveteiro(); }
-    else if (a==='tirar'){ g.itens.splice(i,1); desenharGaveteiro(); toast(nomeDe(it.codigo)+' saiu do gaveteiro','ok'); }
+    if (a==='mais'){ it.qtd=(it.qtd||0)+1; desenharGaveteiro(); }
+    else if (a==='menos'){ it.qtd=Math.max(0,(it.qtd||0)-1); desenharGaveteiro(); }
+    else if (a==='tirar') tirarItem(it);
     else if (a==='editar') editarItem(it);
   });
+  // Tirar o último produto tira a caixa; com um só que sobra ela volta a ser caixa comum.
+  function tirarItem(it){
+    const g=gavAberto;
+    if (g.itens.length===1){ removerCaixa(); return; }
+    g.itens=g.itens.filter(x=>x!==it);
+    desenharGaveteiro();
+    toast(nomeDe(it.codigo)+' saiu da caixa'+(g.itens.length===1?' · voltou a ser caixa comum':''),'ok');
+  }
   function editarItem(it, recemAdicionado){
-    abrirQtd({titulo:nomeDe(it.codigo), addr:endereco(gavAberto.p,gavAberto.s)+' · 🗄 '+(gavAberto.nome||'Gaveteiro'),
-      valor:it.qtd, removerTxt:'Tirar do gaveteiro',
+    abrirQtd({titulo:nomeDe(it.codigo), addr:endereco(gavAberto.p,gavAberto.s)+' · slot '+(gavAberto.slot+1)+(gavAberto.nome?' · 🗄 '+gavAberto.nome:''),
+      valor:it.qtd??0, removerTxt:'Tirar da caixa',
       onSave:n=>{ it.qtd=n; desenharGaveteiro(it.codigo); },
       onCancel:()=>{ if(recemAdicionado) desenharGaveteiro(it.codigo); },
-      onRemove:()=>{ gavAberto.itens=gavAberto.itens.filter(x=>x!==it); desenharGaveteiro(); }});
+      onRemove:()=>tirarItem(it)});
   }
   $('gavNome').addEventListener('input',()=>{ gavAberto.nome=$('gavNome').value.trim(); atualizarChip(); });
   const gavBusca=$('gavBusca'), gavSug=$('gavSug');
   gavBusca.addEventListener('input',()=>renderSug(gavSug,filtrar(gavBusca.value),p=>{
     gavBusca.value=''; gavSug.hidden=true;
     const ja=gavAberto.itens.find(i=>i.codigo===p.codigo);
-    if (ja){ toast('Esse produto já está no gaveteiro — corrija a quantidade dele.'); desenharGaveteiro(p.codigo); return; }
-    if (gavAberto.itens.length >= MAX_ITENS_GAV){ toast('O gaveteiro já tem '+MAX_ITENS_GAV+' produtos.'); return; }
+    if (ja){ toast('Esse produto já está nesta caixa — corrija a quantidade dele.'); desenharGaveteiro(p.codigo); return; }
+    if (gavAberto.itens.length >= MAX_ITENS_GAV){ toast('A caixa já tem '+MAX_ITENS_GAV+' produtos.'); return; }
     const it={codigo:p.codigo,qtd:1};
     gavAberto.itens.push(it);
     desenharGaveteiro(p.codigo);
     editarItem(it,true);
   }, p=>gavAberto?.itens.some(i=>i.codigo===p.codigo)?'<span class="em">✓ já está</span>':''));
-  $('gavRemover').addEventListener('click',()=>{
-    if (!confirmaRemover && gavAberto.itens.length){ confirmaRemover=true; desenharGaveteiro(); return; }
+  function removerCaixa(){
     const n=gavAberto.itens.length;
     caixas=caixas.filter(c=>c!==gavAberto); gavAberto=null; sel=null;
     $('gavSheet').classList.remove('open');
     rebuild(); atualizarChip(); kick();
-    toast('Gaveteiro removido'+(n?' · '+n+' produtos voltam p/ Sem Posição':''),'ok');
+    toast('Caixa removida · '+n+' produto'+(n===1?'':'s')+' sem esta posição','ok');
+  }
+  $('gavRemover').addEventListener('click',()=>{
+    if (!confirmaRemover){ confirmaRemover=true; desenharGaveteiro(); return; }
+    removerCaixa();
   });
   function fecharGaveteiro(){
-    if (gavAberto && !gavAberto.nome) gavAberto.nome='Gaveteiro';
     gavAberto=null; $('gavSheet').classList.remove('open');
     rebuild(); atualizarChip(); kick();
   }
@@ -1057,9 +1065,12 @@
   });
   $('btnSalvar').addEventListener('click',()=>{
     const out={
-      estante_layout: caixas.filter(c=>c.tipo!=='gav').map(c=>({estante_num:estDe(c.p),coluna:colDe(c.p),nivel:c.s,slot:c.slot,produto_codigo:c.codigo,produto_nome:nomeDe(c.codigo)})),
-      estante_gaveteiros: caixas.filter(c=>c.tipo==='gav').map(c=>({estante_num:estDe(c.p),coluna:colDe(c.p),nivel:c.s,slot:c.slot,endereco:endereco(c.p,c.s),nome:c.nome||'Gaveteiro',
-        itens:c.itens.map(i=>({produto_codigo:i.codigo,produto_nome:nomeDe(i.codigo),quantidade:i.qtd}))})),
+      // principal de cada caixa, como hoje (+ nome opcional)
+      estante_layout: caixas.map(c=>({estante_num:estDe(c.p),coluna:colDe(c.p),nivel:c.s,slot:c.slot,
+        produto_codigo:c.itens[0].codigo,produto_nome:nomeDe(c.itens[0].codigo),nome:c.nome||null})),
+      // 2º ao 5º produto das caixas mistas (espelho do galpao_rack_itens)
+      estante_layout_itens: caixas.filter(misto).flatMap(c=>c.itens.slice(1).map(i=>({estante_num:estDe(c.p),coluna:colDe(c.p),nivel:c.s,slot:c.slot,
+        produto_codigo:i.codigo,produto_nome:nomeDe(i.codigo)}))),
       estoque_localizado: linhasEstoque().map(({origens,...l})=>l),
     };
     $('jsonOut').value=JSON.stringify(out,null,2);
