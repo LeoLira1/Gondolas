@@ -1,12 +1,13 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'caixa_mista.dart';
+import 'galpao_saldo.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
-        corEnderecoDivergentePositiva;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
 import 'models.dart'
-    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
-         expositorMonitorNum, letraEstanteCelula;
+    show corConferenciaCiano, expositorMonitorNum, letraEstanteCelula,
+         CaixaColocadaEstante;
 import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,7 +30,8 @@ import 'scene_gestures.dart';
 // Todos os níveis são superfícies de apoio (sem ganchos): empilham caixas
 // como nas estantes comuns, com o nº de fileiras em profundidade acompanhando
 // a profundidade do nível — a base comporta mais fileiras que a prateleira
-// superior.
+// superior. Cada caixa é uma caixa mista, como as das estantes: até 5
+// produtos (caixa_mista.dart).
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ExpositorMonitorCell {
@@ -148,6 +150,21 @@ class ExpositorMonitorGeometry {
       ];
 
   // ── Caixas apoiadas — fileiras em profundidade conforme o nível ────────────
+  //
+  /// O volume ocupado pelas fileiras de [addCaixaProduto]; a caixa mista
+  /// (caixa_mista.dart) é desenhada nele, em fatias, como um bloco só.
+  VolumeCaixa volumeCaixa(ExpositorMonitorCell celula) {
+    final zF = zFrenteNivel(celula.nivel) - 0.01;
+    final n  = fileirasNivel(celula.nivel);
+    final y0 = celula.ySurface;
+    return (
+      x0: celula.xCenter - wCaixa / 2, x1: celula.xCenter + wCaixa / 2,
+      y0: y0,                          y1: y0 + hCaixa,
+      z0: zF - n * dCaixa - (n - 1) * _gapFileira, z1: zF,
+      tamanhoBadge: wCaixa * 0.45,
+    );
+  }
+
   void addCaixaProduto(
     List<Face> faces, {
     required ExpositorMonitorCell celula,
@@ -325,6 +342,8 @@ class ExpositorMonitorPainter extends CustomPainter {
   final bool                      wireframe;
   final bool                      showLabels;
   final List<Face>                extraFaces;
+  // Selo "+N" das caixas mistas (ver caixa_mista.dart).
+  final List<SeloCaixa>               selos;
 
   static final Vec3 _lightDir = Vec3(4, 10, 5).normalized;
 
@@ -332,6 +351,7 @@ class ExpositorMonitorPainter extends CustomPainter {
     this.wireframe  = false,
     this.showLabels = true,
     this.extraFaces = const [],
+    this.selos      = const [],
   });
 
   @override
@@ -345,6 +365,7 @@ class ExpositorMonitorPainter extends CustomPainter {
     _draw(canvas, faces);
     _drawMarca(canvas, size);
     if (showLabels) _drawLabels(canvas, size);
+    desenharSelos(canvas, size, camera, selos, fovGraus: 42);
   }
 
   (Offset, double)? _projectPoint(Vec3 v, Size size) {
@@ -550,6 +571,7 @@ class ExpositorMonitorPainter extends CustomPainter {
       old.wireframe          != wireframe          ||
       old.showLabels         != showLabels         ||
       old.extraFaces         != extraFaces         ||
+      old.selos              != selos              ||
       old.geometry.width     != geometry.width     ||
       old.geometry.height    != geometry.height    ||
       old.geometry.showFloor != geometry.showFloor;
@@ -565,7 +587,8 @@ class ExpositorMonitorScene extends StatefulWidget {
   final bool                     autoRotate;
   final bool                     showLabels;
   // Reutiliza CaixaColocadaEstante: coluna = coluna, nivel = nível (0 = base,
-  // 3 = prateleira superior), slot = 0 sempre (um produto por endereço).
+  // 3 = prateleira superior), slot = 0 sempre. Cada caixa é mista (até 5
+  // produtos, várias linhas no mesmo endereço).
   final List<CaixaColocadaEstante> caixas;
   final String?                    produtoSelecionadoId;
   final Map<String, Color>         corPorProduto;
@@ -576,6 +599,8 @@ class ExpositorMonitorScene extends StatefulWidget {
   final Set<String>                divergentes;
   final Set<String>                divergentesPositivas;
   final Set<String>                destacadosCodigos;
+  // Saldo dos produtos das caixas mistas — pinta as fatias.
+  final Map<String, SaldoProduto>  saldos;
 
   const ExpositorMonitorScene({
     super.key,
@@ -593,6 +618,7 @@ class ExpositorMonitorScene extends StatefulWidget {
     this.divergentes          = const {},
     this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
+    this.saldos               = const {},
   });
 
   @override
@@ -737,38 +763,31 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
-    for (final caixa in widget.caixas) {
-      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
-      final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final celulaList = widget.geometry.cells
-          .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
-          .toList();
-      if (celulaList.isEmpty) continue;
-      final chave = chaveEnderecoEstoque(
-        produtoCodigo: caixa.produtoId,
-        localTipo:     'estante',
-        localNum:      expositorMonitorNum,
-        faceOuColuna:  caixa.coluna,
-        andarOuNivel:  caixa.nivel,
-      );
-      // Divergência de contagem pinta a caixa inteira: azul escuro quando é
-      // positiva (contado > sistema), vermelho nas demais. Destaques de
-      // conferência e busca (momentâneos) têm prioridade sobre ela.
-      final isDivergente = widget.divergentes.contains(chave);
-      final isDivergentePositiva = widget.divergentesPositivas.contains(chave);
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : isDivergentePositiva
-                  ? corEnderecoDivergentePositiva
-                  : isDivergente
-                      ? corEnderecoDivergente
-                      : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      widget.geometry.addCaixaProduto(extraFaces,
-          celula: celulaList.first, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
-    }
+    final celulas = <(int, int), ExpositorMonitorCell>{
+      for (final c in widget.geometry.cells) (c.coluna, c.nivel): c,
+    };
+    // Caixa mista, como nas estantes (fatias + selo "+N").
+    final selos = montarCaixasDaEstante(
+      extraFaces,
+      linhas:               widget.caixas,
+      estanteNum:           expositorMonitorNum,
+      corPorProduto:        widget.corPorProduto,
+      saldos:               widget.saldos,
+      destacadoCodigo:      widget.destacadoCodigo,
+      destacadosCodigos:    widget.destacadosCodigos,
+      divergentes:          widget.divergentes,
+      divergentesPositivas: widget.divergentesPositivas,
+      desatualizados:       widget.desatualizados,
+      corConferencia:       corConferenciaCiano,
+      volume: (caixa) {
+        final celula = celulas[(caixa.coluna, caixa.nivel)];
+        return celula == null ? null : widget.geometry.volumeCaixa(celula);
+      },
+      caixaLisa: (caixa, cor, desatualizado) =>
+          widget.geometry.addCaixaProduto(extraFaces,
+              celula: celulas[(caixa.coluna, caixa.nivel)]!,
+              color: cor, desatualizado: desatualizado),
+    );
 
     return Listener(
       onPointerDown:   aoEncostarDedo,
@@ -782,7 +801,8 @@ class _ExpositorMonitorSceneState extends State<ExpositorMonitorScene>
           painter: ExpositorMonitorPainter(_camera, widget.geometry,
               wireframe:  widget.wireframe,
               showLabels: widget.showLabels,
-              extraFaces: extraFaces),
+              extraFaces: extraFaces,
+              selos:      selos),
           child:   const SizedBox.expand(),
         ),
       ),

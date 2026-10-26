@@ -57,6 +57,19 @@ bool estanteAceitaCaixaMista(int estanteNum) =>
     !ehIlhaPaletes(estanteNum) &&
     !ehMostruario(estanteNum);
 
+/// Endereço (estante, nível) cuja caixa pode guardar mais de um produto: as
+/// estantes de [estanteAceitaCaixaMista] e, nos expositores, os endereços que
+/// são caixa — a base do MagnoJet (1–5), as prateleiras e os cestos do
+/// Nellore e todos os níveis do Monitor. Ganchos seguem com um produto só
+/// (a sacolinha pendurada é do produto), e o Expositor de Madeira também.
+bool enderecoAceitaCaixaMista(int estanteNum, int nivel) {
+  if (estanteNum == expositorMagnojetNum) return nivel == nivelBaseMagnojet;
+  // Nellore: 1–2 = prateleiras, 3 = cestos; 4–5 = ganchos.
+  if (estanteNum == expositorNelloreNum) return nivel >= 1 && nivel <= 3;
+  if (estanteNum == expositorMonitorNum) return true;
+  return estanteAceitaCaixaMista(estanteNum);
+}
+
 /// Quantidade gravada em estoque_localizado de [codigo] na posição (estante,
 /// coluna, nível) — a chave não tem slot, então é a do produto na posição
 /// inteira. Null quando nunca foi contado ali.

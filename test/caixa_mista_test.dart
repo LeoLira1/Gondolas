@@ -4,6 +4,9 @@ import 'package:gondola_camda/caixa_mista.dart';
 import 'package:gondola_camda/estante_edr300_scene.dart';
 import 'package:gondola_camda/estante_parede_scene.dart';
 import 'package:gondola_camda/estante_scene.dart';
+import 'package:gondola_camda/expositor_magnojet_scene.dart';
+import 'package:gondola_camda/expositor_monitor_scene.dart';
+import 'package:gondola_camda/expositor_nellore_scene.dart';
 import 'package:gondola_camda/galpao_config.dart';
 import 'package:gondola_camda/galpao_saldo.dart';
 import 'package:gondola_camda/gondola_scene.dart'
@@ -168,6 +171,29 @@ void main() {
       }
     });
 
+    test('expositores: as caixas aceitam caixa mista, os ganchos não', () {
+      // MagnoJet: só as caixas da base (1–5).
+      expect(enderecoAceitaCaixaMista(expositorMagnojetNum, nivelBaseMagnojet),
+          isTrue);
+      for (var n = 0; n < linhasExpositorMagnojet; n++) {
+        expect(enderecoAceitaCaixaMista(expositorMagnojetNum, n), isFalse);
+      }
+      // Nellore: prateleiras (1–2) e cestos (3); ganchos (4–5) não.
+      for (final n in [1, 2, 3]) {
+        expect(enderecoAceitaCaixaMista(expositorNelloreNum, n), isTrue);
+      }
+      expect(enderecoAceitaCaixaMista(expositorNelloreNum, 4), isFalse);
+      expect(enderecoAceitaCaixaMista(expositorNelloreNum, 5), isFalse);
+      // Monitor: todos os níveis.
+      for (var n = 0; n < niveisExpositorMonitor; n++) {
+        expect(enderecoAceitaCaixaMista(expositorMonitorNum, n), isTrue);
+      }
+      expect(enderecoAceitaCaixaMista(expositorMadeiraNum, 0), isFalse);
+      expect(enderecoAceitaCaixaMista(paleteNumMin, 0), isFalse);
+      // Estantes comuns seguem a regra da estante.
+      expect(enderecoAceitaCaixaMista(13, 2), isTrue);
+    });
+
     test('quantidade na posição soma estoque_localizado sem olhar o slot', () {
       final linhas = [
         {'produto_codigo': 'P1', 'local_tipo': 'estante', 'local_num': 13,
@@ -297,6 +323,59 @@ void main() {
       )).painter as Edr300Painter;
       expect(edr.selos.map((s) => s.texto), ['+2']);
       expect(edr.extraFaces.any((f) => f.color == corEnderecoDivergente), isTrue);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('expositores 9, 19 e 20 listram a caixa mista com 5 produtos',
+        (tester) async {
+      List<CaixaColocadaEstante> cinco(int coluna, int nivel) => [
+            for (final c in ['P1', 'P2', 'P3', 'P4', 'P5'])
+              CaixaColocadaEstante(
+                  coluna: coluna, nivel: nivel, slot: 0, produtoId: c),
+          ];
+
+      await pump(tester, ExpositorMagnojetScene(
+        geometry: const ExpositorMagnojetGeometry(),
+        autoRotate: false,
+        caixas: [
+          ...cinco(1, nivelBaseMagnojet),
+          // Gancho segue sacolinha lisa, sem selo.
+          const CaixaColocadaEstante(coluna: 0, nivel: 0, slot: 0, produtoId: 'G'),
+        ],
+        saldos: saldos,
+      ));
+      final magno = tester.widget<CustomPaint>(find.descendant(
+        of: find.byType(ExpositorMagnojetScene),
+        matching: find.byType(CustomPaint),
+      )).painter as ExpositorMagnojetPainter;
+      expect(magno.selos.map((s) => s.texto), ['+5']);
+      expect(magno.extraFaces.any((f) => f.color == corFileteFatia), isTrue);
+
+      await pump(tester, ExpositorNelloreScene(
+        geometry: const ExpositorNelloreGeometry(),
+        autoRotate: false,
+        caixas: [...cinco(0, 1), ...cinco(1, 3)],
+        saldos: saldos,
+      ));
+      final nellore = tester.widget<CustomPaint>(find.descendant(
+        of: find.byType(ExpositorNelloreScene),
+        matching: find.byType(CustomPaint),
+      )).painter as ExpositorNellorePainter;
+      expect(nellore.selos.map((s) => s.texto), ['+5', '+5']);
+
+      await pump(tester, ExpositorMonitorScene(
+        geometry: const ExpositorMonitorGeometry(),
+        autoRotate: false,
+        caixas: cinco(2, 0),
+        saldos: saldos,
+      ));
+      final monitor = tester.widget<CustomPaint>(find.descendant(
+        of: find.byType(ExpositorMonitorScene),
+        matching: find.byType(CustomPaint),
+      )).painter as ExpositorMonitorPainter;
+      expect(monitor.selos.map((s) => s.texto), ['+5']);
+      expect(monitor.extraFaces.any((f) => f.color == corEnderecoDivergente),
+          isTrue);
       await tester.pumpWidget(const SizedBox());
     });
   });
