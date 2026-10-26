@@ -1937,7 +1937,8 @@ class TursoService {
         produto_codigo TEXT NOT NULL,
         produto_nome TEXT NOT NULL,
         cor_hex TEXT NOT NULL DEFAULT '#E87722',
-        registrado_em TEXT NOT NULL
+        registrado_em TEXT NOT NULL,
+        caixa_nome TEXT
       )
     ''');
     esquema.add('''
@@ -2162,10 +2163,15 @@ class TursoService {
     // IF NOT EXISTS), e o resto é idempotente. Uma leitura do esquema e um
     // lote transacional, em vez de uma transação interativa comando a comando.
     final colunasRack = await client.query('PRAGMA table_info(galpao_racks)');
+    // Nome da caixa da estante (caixa mista): mesma regra — só se faltar.
+    final colunasEstante =
+        await client.query('PRAGMA table_info(estante_layout)');
     await client.batch(
       textoDoLote([
         if (!colunasRack.any((c) => c['name'] == 'rack_uuid'))
           'ALTER TABLE galpao_racks ADD COLUMN rack_uuid TEXT',
+        if (!colunasEstante.any((c) => c['name'] == colunaCaixaNome))
+          'ALTER TABLE estante_layout ADD COLUMN $colunaCaixaNome TEXT',
         ...migracaoRackIdentidade,
       ]),
     );
@@ -2181,6 +2187,7 @@ class TursoService {
     migracaoGalpaoUnidades,
     migracaoBarracaoLayout2x2,
     ...migracaoRackIdentidade,
+    'estante_layout.$colunaCaixaNome',
   ].join('\u0001');
 
   /// True quando as migrações já rodaram até o fim NESTE banco, a partir deste
@@ -2876,8 +2883,11 @@ class TursoService {
 
   static const String _colunasLayoutGondola =
       'gondola_num, andar, produto_codigo, produto_nome, pos_x, pos_z, cor_hex';
+  // caixa_nome: nome opcional da caixa da estante (ver caixa_mista.dart),
+  // acrescentado por migração — ver [colunaCaixaNome].
   static const String _colunasLayoutEstante =
-      'estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex';
+      'estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex, '
+      'caixa_nome';
 
   /// Cópias completas das duas tabelas de layout: servem a busca do mapa, o
   /// prewarm e a cena de cada estrutura (ver [LayoutsDaCopia]). Ordem de id,
@@ -2939,7 +2949,11 @@ class TursoService {
     return rows.map((r) => _caixaLayoutDaLinha(r, gondolaNum)).toList();
   }
 
-  // Máximo de linhas por INSERT multi-linha: 8 parâmetros por linha mantém o
+  /// Coluna do nome da caixa em estante_layout. Acrescentada por migração
+  /// (ALTER só se faltar): bancos antigos não a têm até o app abrir neles.
+  static const String colunaCaixaNome = 'caixa_nome';
+
+  // Máximo de linhas por INSERT multi-linha: 9 parâmetros por linha mantém o
   // statement bem abaixo do limite de variáveis do SQLite (999).
   static const int _maxLinhasPorInsert = 100;
 
@@ -3138,6 +3152,7 @@ class TursoService {
     produtoCodigo: r['produto_codigo'] as String? ?? '',
     produtoNome: r['produto_nome'] as String? ?? '',
     corHex: r['cor_hex'] as String? ?? '#888888',
+    nomeCaixa: r['caixa_nome'] as String?,
   );
 
   /// Layout da estante já em memória, ou null se nada se sabe dela ainda (ver
@@ -3305,13 +3320,14 @@ class TursoService {
             item.produtoCodigo,
             item.produtoNome,
             item.corHex,
+            item.nomeCaixa,
             agora,
           ]);
         }
         await tx.execute(
           'INSERT INTO estante_layout '
-          '(estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex, registrado_em) '
-          'VALUES ${List.filled(lote.length, '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}',
+          '(estante_num, coluna, nivel, slot, produto_codigo, produto_nome, cor_hex, $colunaCaixaNome, registrado_em) '
+          'VALUES ${List.filled(lote.length, '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}',
           positional: params,
         );
       }
@@ -3345,6 +3361,7 @@ class TursoService {
             'produto_codigo': i.produtoCodigo,
             'produto_nome': i.produtoNome,
             'cor_hex': i.corHex,
+            colunaCaixaNome: i.nomeCaixa,
           },
       ]);
       // Layout não grava estoque_localizado (o produto que sai é tratado à

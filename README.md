@@ -119,6 +119,22 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   `galpao_rack_itens`, presos pelo `rack_uuid`, e cada um vira uma linha
   própria no espelho de `estoque_localizado` (mesmo nível), então busca,
   saldo, Modo Conferência e baixa automática enxergam todos eles.
+- **Caixa mista na estante: até 5 produtos na mesma caixa**, como o rack misto
+  do galpão (para peças pequenas e miudezas). Ao tocar numa caixa comum, o
+  diálogo de quantidade ganha `Outro produto nesta caixa (n/5)`. Do 2º produto
+  em diante, a caixa é desenhada listrada, uma fatia por produto de cima para
+  baixo, pintada pelo saldo (vermelho falta endereçar, azul acima do sistema,
+  branco fecha), com um selo `+N` em cima. Tocar nela abre a lista da caixa:
+  nome opcional (ex.: "Peças Hoppner"), quantidade de cada produto na posição
+  (pelo diálogo de quantidade de sempre, que grava `estoque_localizado` no
+  endereço da posição, ex.: `E13·4`), busca para pôr outro produto e lixeira.
+  Vale nas estantes de madeira, nas EDR-300 e na Estante Parede. Cada produto
+  da caixa é uma linha de `estante_layout` no mesmo `(coluna, nivel, slot)`, e
+  o nome fica em `estante_layout.caixa_nome`. Por isso a busca "onde está", o
+  Modo Conferência e o "Limpar produto" enxergam todos os produtos sem mudança,
+  e um aparelho com o app antigo não apaga os produtos extras ao salvar. Como
+  `estoque_localizado` não tem slot, o mesmo produto em duas caixas da mesma
+  posição divide uma quantidade só, como já acontecia com duas caixas comuns.
 - **Quantidade em UNIDADES, do ERP ao cubo.** O galpão já converteu para
   litros (baldes/caixas × 20) e isso era discrepância garantida contra o
   `qtd_sistema` do `estoque_mestre`, que está em unidade: o mesmo produto que
