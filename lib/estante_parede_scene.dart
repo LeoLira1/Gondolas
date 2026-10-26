@@ -1,8 +1,9 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
-        corEnderecoDivergentePositiva;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
+import 'caixa_mista.dart';
+import 'galpao_saldo.dart';
 import 'models.dart';
 import 'scene_gestures.dart';
 
@@ -173,6 +174,18 @@ class EstanteParedeGeometry {
     }
   }
 
+  /// O volume da caixa no slot — o mesmo de [addBoxProduto]; a caixa mista
+  /// (caixa_mista.dart) é desenhada nele, em fatias.
+  static VolumeCaixa volumeCaixa(CelulaParede celula, int slot) {
+    final x0 = xSlot0(celula) + slot * (wCaixa + gap);
+    return (
+      x0: x0,               x1: x0 + wCaixa,
+      y0: celula.yTop,      y1: celula.yTop + alturaCaixa(celula.nivel),
+      z0: zParede + 0.10,   z1: zFrente - 0.08,
+      tamanhoBadge: wCaixa * 0.4,
+    );
+  }
+
   static void _box(
     List<Face> faces, {
     required double x0, required double x1,
@@ -197,6 +210,9 @@ class EstanteParedePainter extends CustomPainter {
   final List<Face> extraFaces;
   final bool       showLabels;
   final int        estanteAtual; // 13..18 — define letras e posições globais
+  // Selo "+N" de cada caixa mista — desenhado mesmo com os rótulos ocultos:
+  // é o que diz quantos produtos a caixa listrada guarda.
+  final List<SeloCaixa> selos;
 
   static final Vec3 _lightDir = Vec3(-3, 10, 6).normalized;
 
@@ -204,6 +220,7 @@ class EstanteParedePainter extends CustomPainter {
     this.extraFaces   = const <Face>[],
     this.showLabels   = true,
     this.estanteAtual = estanteParedeMin,
+    this.selos        = const <SeloCaixa>[],
   });
 
   @override
@@ -215,6 +232,7 @@ class EstanteParedePainter extends CustomPainter {
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
     if (showLabels) _drawLabels(canvas, size);
+    desenharSelos(canvas, size, camera, selos);
   }
 
   void _project(List<Face> faces, Size size) {
@@ -376,7 +394,8 @@ class EstanteParedePainter extends CustomPainter {
       old.camera.dist  != camera.dist  ||
       old.showLabels   != showLabels   ||
       old.estanteAtual != estanteAtual ||
-      old.extraFaces   != extraFaces;
+      old.extraFaces   != extraFaces   ||
+      old.selos        != selos;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -407,6 +426,9 @@ class EstanteParedeScene extends StatefulWidget {
   // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
   // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
   final Set<String> destacadosCodigos;
+  // Saldo (sistema × endereçado) dos produtos das caixas mistas: pinta cada
+  // fatia da caixa listrada (ver caixa_mista.dart).
+  final Map<String, SaldoProduto> saldos;
 
   const EstanteParedeScene({
     super.key,
@@ -422,6 +444,7 @@ class EstanteParedeScene extends StatefulWidget {
     this.divergentes          = const {},
     this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
+    this.saldos               = const {},
   });
 
   @override
@@ -592,38 +615,35 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene>
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
-    for (final caixa in widget.caixas) {
-      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
-      final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final celulaList = EstanteParedeGeometry.celulas()
-          .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
-          .toList();
-      if (celulaList.isEmpty) continue;
-      final chave = chaveEnderecoEstoque(
-        produtoCodigo: caixa.produtoId,
-        localTipo:     'estante',
-        localNum:      widget.estanteAtual,
-        faceOuColuna:  caixa.coluna,
-        andarOuNivel:  caixa.nivel,
-      );
-      // Divergência de contagem pinta a caixa inteira: azul escuro quando é
-      // positiva (contado > sistema), vermelho nas demais. Destaques de
-      // conferência e busca (momentâneos) têm prioridade sobre ela.
-      final isDivergente = widget.divergentes.contains(chave);
-      final isDivergentePositiva = widget.divergentesPositivas.contains(chave);
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : isDivergentePositiva
-                  ? corEnderecoDivergentePositiva
-                  : isDivergente
-                      ? corEnderecoDivergente
-                      : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      EstanteParedeGeometry.addBoxProduto(extraFaces,
-          celula: celulaList.first, slot: caixa.slot, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
+    CelulaParede? celulaDe(CaixaEstante caixa) {
+      for (final c in EstanteParedeGeometry.celulas()) {
+        if (c.coluna == caixa.coluna && c.nivel == caixa.nivel) return c;
+      }
+      return null;
     }
+    final selos = montarCaixasDaEstante(
+      extraFaces,
+      linhas:               widget.caixas,
+      estanteNum:           widget.estanteAtual,
+      corPorProduto:        widget.corPorProduto,
+      saldos:               widget.saldos,
+      destacadoCodigo:      widget.destacadoCodigo,
+      destacadosCodigos:    widget.destacadosCodigos,
+      divergentes:          widget.divergentes,
+      divergentesPositivas: widget.divergentesPositivas,
+      desatualizados:       widget.desatualizados,
+      corConferencia:       corConferenciaCiano,
+      volume: (caixa) {
+        final celula = celulaDe(caixa);
+        return celula == null
+            ? null
+            : EstanteParedeGeometry.volumeCaixa(celula, caixa.slot);
+      },
+      caixaLisa: (caixa, cor, desatualizado) =>
+          EstanteParedeGeometry.addBoxProduto(extraFaces,
+              celula: celulaDe(caixa)!, slot: caixa.slot, color: cor,
+              desatualizado: desatualizado),
+    );
 
     return Listener(
       onPointerDown:   aoEncostarDedo,
@@ -637,7 +657,8 @@ class _EstanteParedeSceneState extends State<EstanteParedeScene>
           painter: EstanteParedePainter(_camera,
               extraFaces:   extraFaces,
               showLabels:   widget.showLabels,
-              estanteAtual: widget.estanteAtual),
+              estanteAtual: widget.estanteAtual,
+              selos:        selos),
           child:   const SizedBox.expand(),
         ),
       ),

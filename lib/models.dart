@@ -630,18 +630,34 @@ class ProdutoEncontrado {
       );
 }
 
+/// Uma linha de estante_layout na tela: UM produto numa caixa. Uma caixa com
+/// vários produtos (caixa mista, ver caixa_mista.dart) é mais de uma linha no
+/// mesmo (coluna, nivel, slot).
 class CaixaColocadaEstante {
   final int    coluna;
   final int    nivel;
   final int    slot;
   final String produtoId;
 
+  /// Nome opcional da caixa (ex.: "Peças Hoppner"), o mesmo em todas as
+  /// linhas dela — estante_layout.caixa_nome.
+  final String? nomeCaixa;
+
   const CaixaColocadaEstante({
     required this.coluna,
     required this.nivel,
     required this.slot,
     required this.produtoId,
+    this.nomeCaixa,
   });
+
+  CaixaColocadaEstante comNomeCaixa(String? nome) => CaixaColocadaEstante(
+        coluna:    coluna,
+        nivel:     nivel,
+        slot:      slot,
+        produtoId: produtoId,
+        nomeCaixa: nome,
+      );
 }
 
 class CaixaLayoutEstante {
@@ -652,6 +668,7 @@ class CaixaLayoutEstante {
   final String produtoCodigo;
   final String produtoNome;
   final String corHex;
+  final String? nomeCaixa;
 
   const CaixaLayoutEstante({
     required this.estanteNum,
@@ -661,5 +678,6 @@ class CaixaLayoutEstante {
     required this.produtoCodigo,
     required this.produtoNome,
     required this.corHex,
+    this.nomeCaixa,
   });
 }

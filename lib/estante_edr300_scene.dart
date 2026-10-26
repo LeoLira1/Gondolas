@@ -1,12 +1,12 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'caixa_mista.dart';
+import 'galpao_saldo.dart';
 import 'gondola_scene.dart'
-    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
-        corEnderecoDivergentePositiva;
+    show Vec3, Camera, Face, addBadgeEnderecoDesatualizado;
 import 'models.dart'
-    show CaixaColocadaEstante, chaveEnderecoEstoque, corConferenciaCiano,
-        letraDoIndice;
+    show CaixaColocadaEstante, corConferenciaCiano, letraDoIndice;
 import 'scene_gestures.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +104,18 @@ class Edr300Geometry {
 
   static int slotsPorCelula(Edr300Cell c) =>
       (c.largura / (wCaixa + gap)).floor().clamp(1, 99);
+
+  /// O volume da caixa no slot — o mesmo de [addBoxProduto]; a caixa mista
+  /// (caixa_mista.dart) é desenhada nele, em fatias.
+  static VolumeCaixa volumeCaixa(Edr300Cell celula, int slot) {
+    final xCenter = celula.xMin + wCaixa / 2 + slot * (wCaixa + gap);
+    return (
+      x0: xCenter - wCaixa / 2, x1: xCenter + wCaixa / 2,
+      y0: celula.yTop,          y1: celula.yTop + hCaixa,
+      z0: -dCaixa / 2,          z1: dCaixa / 2,
+      tamanhoBadge: wCaixa * 0.6,
+    );
+  }
 
   static void addBoxProduto(
     List<Face> faces, {
@@ -232,6 +244,8 @@ class Edr300Painter extends CustomPainter {
   final bool           wireframe;
   final bool           showLabels;
   final List<Face>     extraFaces;
+  // Selo "+N" das caixas mistas (ver caixa_mista.dart).
+  final List<SeloCaixa> selos;
 
   static final Vec3 _lightDir = Vec3(4, 10, 5).normalized;
 
@@ -239,6 +253,7 @@ class Edr300Painter extends CustomPainter {
     this.wireframe  = false,
     this.showLabels = true,
     this.extraFaces = const [],
+    this.selos      = const [],
   });
 
   @override
@@ -251,6 +266,7 @@ class Edr300Painter extends CustomPainter {
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
     if (showLabels) _drawLabels(canvas, size);
+    desenharSelos(canvas, size, camera, selos, fovGraus: 42);
   }
 
   void _project(List<Face> faces, Size size) {
@@ -386,6 +402,7 @@ class Edr300Painter extends CustomPainter {
       old.wireframe          != wireframe          ||
       old.showLabels         != showLabels         ||
       old.extraFaces         != extraFaces         ||
+      old.selos              != selos              ||
       old.geometry.shelves   != geometry.shelves   ||
       old.geometry.height    != geometry.height    ||
       old.geometry.width     != geometry.width     ||
@@ -428,6 +445,8 @@ class Edr300Scene extends StatefulWidget {
   // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
   // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
   final Set<String>                                     destacadosCodigos;
+  // Saldo dos produtos das caixas mistas: pinta as fatias delas.
+  final Map<String, SaldoProduto>                       saldos;
 
   const Edr300Scene({
     super.key,
@@ -446,6 +465,7 @@ class Edr300Scene extends StatefulWidget {
     this.divergentes         = const {},
     this.divergentesPositivas = const {},
     this.destacadosCodigos   = const {},
+    this.saldos              = const {},
   });
 
   @override
@@ -640,38 +660,35 @@ class _Edr300SceneState extends State<Edr300Scene>
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
-    for (final caixa in widget.caixas) {
-      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
-      final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
-      final celulaList = widget.geometry.cells
-          .where((c) => c.coluna == caixa.coluna && c.nivel == caixa.nivel)
-          .toList();
-      if (celulaList.isEmpty) continue;
-      final chave = chaveEnderecoEstoque(
-        produtoCodigo: caixa.produtoId,
-        localTipo:     'estante',
-        localNum:      widget.estanteNum,
-        faceOuColuna:  caixa.coluna,
-        andarOuNivel:  caixa.nivel,
-      );
-      // Divergência de contagem pinta a caixa inteira: azul escuro quando é
-      // positiva (contado > sistema), vermelho nas demais. Destaques de
-      // conferência e busca (momentâneos) têm prioridade sobre ela.
-      final isDivergente = widget.divergentes.contains(chave);
-      final isDivergentePositiva = widget.divergentesPositivas.contains(chave);
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : isDivergentePositiva
-                  ? corEnderecoDivergentePositiva
-                  : isDivergente
-                      ? corEnderecoDivergente
-                      : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      Edr300Geometry.addBoxProduto(extraFaces,
-          celula: celulaList.first, slot: caixa.slot, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
+    Edr300Cell? celulaDe(CaixaEstante caixa) {
+      for (final c in widget.geometry.cells) {
+        if (c.coluna == caixa.coluna && c.nivel == caixa.nivel) return c;
+      }
+      return null;
     }
+    final selos = montarCaixasDaEstante(
+      extraFaces,
+      linhas:               widget.caixas,
+      estanteNum:           widget.estanteNum,
+      corPorProduto:        widget.corPorProduto,
+      saldos:               widget.saldos,
+      destacadoCodigo:      widget.destacadoCodigo,
+      destacadosCodigos:    widget.destacadosCodigos,
+      divergentes:          widget.divergentes,
+      divergentesPositivas: widget.divergentesPositivas,
+      desatualizados:       widget.desatualizados,
+      corConferencia:       corConferenciaCiano,
+      volume: (caixa) {
+        final celula = celulaDe(caixa);
+        return celula == null
+            ? null
+            : Edr300Geometry.volumeCaixa(celula, caixa.slot);
+      },
+      caixaLisa: (caixa, cor, desatualizado) =>
+          Edr300Geometry.addBoxProduto(extraFaces,
+              celula: celulaDe(caixa)!, slot: caixa.slot, color: cor,
+              desatualizado: desatualizado),
+    );
 
     return Listener(
       onPointerDown:   aoEncostarDedo,
@@ -685,7 +702,8 @@ class _Edr300SceneState extends State<Edr300Scene>
           painter: Edr300Painter(_camera, widget.geometry,
               wireframe:  widget.wireframe,
               showLabels: widget.showLabels,
-              extraFaces: extraFaces),
+              extraFaces: extraFaces,
+              selos:      selos),
           child:   const SizedBox.expand(),
         ),
       ),
