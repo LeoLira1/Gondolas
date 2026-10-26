@@ -11,7 +11,10 @@ const List<String> _andarNomes = ['Base', 'Meio', 'Topo'];
 
 /// Abre o dialog de quantidades por endereço de um produto. Chamado ao tocar
 /// numa caixa existente (gôndola ou estante), fora do modo de edição de layout.
-Future<void> mostrarQuantidadeDialog(
+///
+/// Devolve os endereços excluídos na lixeira, para a tela tirar do layout a
+/// caixa do produto que estava neles.
+Future<List<EnderecoLocalizado>> mostrarQuantidadeDialog(
   BuildContext context, {
   required String produtoCodigo,
   required String produtoNome,
@@ -19,8 +22,9 @@ Future<void> mostrarQuantidadeDialog(
   required int localNum,
   required int faceOuColuna,
   required int andarOuNivel,
-}) {
-  return showDialog<void>(
+}) async {
+  final excluidos = <EnderecoLocalizado>[];
+  await showDialog<void>(
     context: context,
     builder: (_) => _QuantidadeDialog(
       produtoCodigo: produtoCodigo,
@@ -29,8 +33,10 @@ Future<void> mostrarQuantidadeDialog(
       localNum: localNum,
       faceOuColuna: faceOuColuna,
       andarOuNivel: andarOuNivel,
+      excluidos: excluidos,
     ),
   );
+  return excluidos;
 }
 
 String _labelEndereco(EnderecoLocalizado e) {
@@ -101,6 +107,8 @@ class _QuantidadeDialog extends StatefulWidget {
   final int localNum;
   final int faceOuColuna;
   final int andarOuNivel;
+  // Recebe cada endereço excluído na lixeira (ver mostrarQuantidadeDialog).
+  final List<EnderecoLocalizado> excluidos;
 
   const _QuantidadeDialog({
     required this.produtoCodigo,
@@ -109,6 +117,7 @@ class _QuantidadeDialog extends StatefulWidget {
     required this.localNum,
     required this.faceOuColuna,
     required this.andarOuNivel,
+    required this.excluidos,
   });
 
   @override
@@ -310,6 +319,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
 
   void _removerLinhaLocal(_LinhaEndereco l) {
     _editou = true;
+    widget.excluidos.add(l.endereco);
     setState(() {
       _linhas.remove(l);
       _linhasRemovidas.add(l);
@@ -337,7 +347,8 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     final qtd = l.endereco.quantidade;
     final avisos = <String>[
       'Excluir o endereço ${_labelEndereco(l.endereco)}? '
-          'O registro de quantidade deste endereço será apagado.',
+          'O registro de quantidade deste endereço será apagado e a caixa '
+          'sai da ${l.endereco.ehGondola ? 'gôndola' : 'estante'}.',
       if (qtd > 0)
         'Este endereço tem ${_fmtQtd(qtd)} un registradas — o total contado '
             'do produto vai diminuir.',

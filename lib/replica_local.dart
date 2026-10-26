@@ -24,7 +24,7 @@ String idBanco(String url) {
 /// arquivo de metadados do sync, como reconhecer uma replica que divergiu do
 /// servidor e como explicar uma falha de sincronização para o usuário.
 ///
-/// Mora fora do `TursoService` pelo mesmo motivo do `layout_cache.dart`: sem
+/// Mora fora do `TursoService` pelo mesmo motivo do `layouts_copia.dart`: sem
 /// Flutter, sem libsql e sem I/O, dá para testar direto em `flutter test` — e
 /// é justamente aqui que ficam as decisões que quebraram o app em produção
 /// (ver `frameDuravelDaReplica` e `erroDeReplicaDivergente`).
@@ -222,6 +222,8 @@ const List<TabelaDoCarimbo> tabelasDoCarimbo = [
       "COALESCE(GROUP_CONCAT(numero || ':' || rua || ':' || eixo || ':' || pos_x || ':' || pos_z, '|'),'')"),
   TabelaDoCarimbo('barracao_enderecos',
       "COALESCE(GROUP_CONCAT(id || ':' || rotulo || ':' || pos_x || ':' || pos_z || ':' || produto_codigo || ':' || produto_nome || ':' || quantidade || ':' || atualizado_em, '|'),'')"),
+  TabelaDoCarimbo('barracao_gaiolas',
+      "COALESCE(GROUP_CONCAT(gaiola_uuid || ':' || endereco_id || ':' || nivel || ':' || produto_codigo || ':' || quantidade || ':' || atualizado_em, '|'),'')"),
   TabelaDoCarimbo('inventario_cicli',
       "COALESCE(GROUP_CONCAT(data_contagem || ':' || produto_id || ':' || COALESCE(qtd_contada,'') || ':' || COALESCE(divergencia,'') || ':' || COALESCE(contado_em,''), '|'),'')"),
   TabelaDoCarimbo('estoque_mestre',

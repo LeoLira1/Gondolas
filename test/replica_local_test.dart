@@ -309,6 +309,8 @@ void main() {
               const AssinaturaTabela(contagem: 129, marca: 'posicoes'),
           'barracao_enderecos':
               const AssinaturaTabela(contagem: 80, marca: 'barracao'),
+          'barracao_gaiolas':
+              const AssinaturaTabela(contagem: 3, marca: 'gaiolas'),
           'inventario_cicli':
               const AssinaturaTabela(contagem: 2, marca: 'inventario'),
           'estoque_mestre':

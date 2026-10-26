@@ -7,6 +7,7 @@ import 'barracao_config.dart';
 import 'barracao_service.dart' show EnderecoBarracao;
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, ProjecaoCamera;
+import 'estocados_busca.dart' show chaveDestaque;
 import 'models.dart' show corConferenciaCiano;
 import 'scene_gestures.dart';
 
@@ -40,6 +41,11 @@ import 'scene_gestures.dart';
 
 const Color corCamdaBarracao = Color(0xFFe87722);
 
+/// Um toque na cena: o endereço e o NÍVEL da pilha (1 = a gaiola do chão).
+/// Num endereço com vaga, tocar o contorno de cima devolve o próximo nível
+/// livre — é por ali que se empilha, como no galpão.
+typedef ToqueBarracao = ({EnderecoBarracao endereco, int nivel});
+
 const Color _corFundo       = Color(0xFF0b0c0e);
 const Color _corPiso        = Color(0xFF16181c);
 const Color _corPisoGrade   = Color(0x14FFFFFF);
@@ -66,6 +72,7 @@ const Color _corDestaqueBorda = Color(0xFFffc98a);
 /// barracão inteiro.
 Color corBagBarracao({
   required String produtoCodigo,
+  String produtoNome = '',
   Map<String, Color> corPorProduto = const {},
   String? destacadoCodigo,
   bool modoConferencia = false,
@@ -77,7 +84,7 @@ Color corBagBarracao({
   }
   if (destacadoCodigo != null &&
       destacadoCodigo.isNotEmpty &&
-      produtoCodigo == destacadoCodigo) {
+      chaveDestaque(produtoCodigo, produtoNome) == destacadoCodigo) {
     return corCamdaBarracao;
   }
   return corPorProduto[produtoCodigo] ?? _corBagPadrao;
@@ -113,6 +120,7 @@ class BarracaoGeometry {
     List<EnderecoBarracao> enderecos, {
     Map<String, Color> corPorProduto = const {},
     int? selecionadoId,
+    int selecionadoNivel = 1,
     String? destacadoCodigo,
     bool modoConferencia = false,
     Set<String> codigosConferencia = const {},
@@ -121,8 +129,8 @@ class BarracaoGeometry {
     // sobrescrevem `==`, então o registro compara referência — que é
     // exatamente o contrato de "a página trocou os dados", e não uma varredura
     // de 100 endereços a cada frame.
-    final chave = (enderecos, corPorProduto, selecionadoId, destacadoCodigo,
-        modoConferencia, codigosConferencia);
+    final chave = (enderecos, corPorProduto, selecionadoId, selecionadoNivel,
+        destacadoCodigo, modoConferencia, codigosConferencia);
     final cache = _cacheFaces;
     if (cache != null && _cacheChave == chave) return cache;
 
@@ -131,7 +139,7 @@ class BarracaoGeometry {
     for (final e in enderecos) {
       _palete(faces, e,
           corPorProduto:   corPorProduto,
-          selecionado:     e.id == selecionadoId,
+          nivelSelecionado: e.id == selecionadoId ? selecionadoNivel : null,
           destacadoCodigo: destacadoCodigo,
           modoConferencia: modoConferencia,
           codigosConferencia: codigosConferencia);
@@ -154,7 +162,7 @@ class BarracaoGeometry {
 
   static void _paredes(List<Face> faces) {
     const esp = BarracaoConfig.espessuraParede;
-    const h   = BarracaoConfig.peDireito;
+    const h   = BarracaoConfig.alturaParede;
     const z1  = BarracaoConfig.profundidade;
     const x1  = BarracaoConfig.largura;
 
@@ -193,7 +201,7 @@ class BarracaoGeometry {
       final xb = t.x0 + t.largura * (i + 1) / n;
       _caixa(faces,
           x0: xa, x1: xb, y0: t.y0, y1: t.y1, z0: z0, z1: z1,
-          cor: cor, corTopo: t.y1 >= BarracaoConfig.peDireito
+          cor: cor, corTopo: t.y1 >= BarracaoConfig.alturaParede
               ? _corParedeTopo
               : cor);
     }
@@ -213,50 +221,62 @@ class BarracaoGeometry {
     }
   }
 
-  // ── Palete + bag ───────────────────────────────────────────────────────────
+  // ── Pilha de gaiolas ───────────────────────────────────────────────────────
 
   static void _palete(
     List<Face> faces,
     EnderecoBarracao e, {
     required Map<String, Color> corPorProduto,
-    required bool selecionado,
+    int? nivelSelecionado,
     String? destacadoCodigo,
     bool modoConferencia = false,
     Set<String> codigosConferencia = const {},
   }) {
+    // O estrado do chão é desenhado SEMPRE, com produto ou sem: o palete é o
+    // endereço, e um endereço livre continua sendo um lugar do barracão — é
+    // informação, não ausência dela (mesma leitura da vaga do galpão).
+    if (!e.ocupado) {
+      _estrado(faces, e, 0, selecionado: nivelSelecionado == 1);
+      return;
+    }
+    for (final g in e.gaiolas) {
+      final selecionado = nivelSelecionado == g.nivel;
+      final y0 = BarracaoConfig.yDoNivel(g.nivel);
+      _estrado(faces, e, y0, selecionado: selecionado);
+
+      const bx = BarracaoConfig.bagX / 2;
+      const bz = BarracaoConfig.bagZ / 2;
+      final cor = corBagBarracao(
+        produtoCodigo:   g.codigo,
+        produtoNome:     g.nome,
+        corPorProduto:   corPorProduto,
+        destacadoCodigo: destacadoCodigo,
+        modoConferencia: modoConferencia,
+        codigosConferencia: codigosConferencia,
+      );
+      _caixa(faces,
+          x0: e.x - bx, x1: e.x + bx,
+          y0: y0 + BarracaoConfig.paleteAltura,
+          y1: y0 + BarracaoConfig.alturaCarga,
+          z0: e.z - bz, z1: e.z + bz,
+          // Seleção clareia a gaiola e mantém a cor do produto legível por
+          // baixo — a mesma escolha do cubo selecionado no galpão.
+          cor: selecionado ? Color.lerp(cor, Colors.white, 0.30)! : cor);
+    }
+  }
+
+  /// O estrado de madeira de uma gaiola, com a base em [y0].
+  static void _estrado(List<Face> faces, EnderecoBarracao e, double y0,
+      {required bool selecionado}) {
     const px = BarracaoConfig.paleteX / 2;
     const pz = BarracaoConfig.paleteZ / 2;
-
-    // O estrado de madeira é desenhado SEMPRE, com produto ou sem: o palete é
-    // o endereço, e um endereço livre continua sendo um lugar do barracão —
-    // é informação, não ausência dela (mesma leitura da vaga do galpão).
     _caixa(faces,
         x0: e.x - px, x1: e.x + px,
-        y0: 0,        y1: BarracaoConfig.paleteAltura,
+        y0: y0,       y1: y0 + BarracaoConfig.paleteAltura,
         z0: e.z - pz, z1: e.z + pz,
         cor: selecionado
             ? Color.lerp(_corMadeira, Colors.white, 0.30)!
             : _corMadeira);
-
-    if (!e.ocupado) return;
-
-    const bx = BarracaoConfig.bagX / 2;
-    const bz = BarracaoConfig.bagZ / 2;
-    final cor = corBagBarracao(
-      produtoCodigo:   e.produtoCodigo,
-      corPorProduto:   corPorProduto,
-      destacadoCodigo: destacadoCodigo,
-      modoConferencia: modoConferencia,
-      codigosConferencia: codigosConferencia,
-    );
-    _caixa(faces,
-        x0: e.x - bx, x1: e.x + bx,
-        y0: BarracaoConfig.paleteAltura,
-        y1: BarracaoConfig.paleteAltura + BarracaoConfig.bagAltura,
-        z0: e.z - bz, z1: e.z + bz,
-        // Seleção clareia o bag e mantém a cor do produto legível por baixo —
-        // a mesma escolha do cubo selecionado no galpão.
-        cor: selecionado ? Color.lerp(cor, Colors.white, 0.30)! : cor);
   }
 
   /// Caixa alinhada aos eixos: 5 faces (topo + 4 laterais). O fundo não é
@@ -330,6 +350,10 @@ class BarracaoPainter extends CustomPainter {
   /// Endereço selecionado (id da linha), ou null sem seleção.
   final int? selecionadoId;
 
+  /// Nível selecionado na pilha do endereço [selecionadoId]. Pode ser o
+  /// próximo nível livre — a vaga em que se vai empilhar.
+  final int selecionadoNivel;
+
   /// Produto destacado pela busca: TODOS os paletes com este código acendem em
   /// laranja CAMDA. É o código que manda, não o endereço — a pergunta que a
   /// busca responde é "onde está este produto", que raramente tem uma resposta
@@ -347,6 +371,7 @@ class BarracaoPainter extends CustomPainter {
     this.enderecos        = const [],
     this.corPorProduto    = const {},
     this.selecionadoId,
+    this.selecionadoNivel = 1,
     this.destacadoCodigo,
     this.modoConferencia = false,
     this.codigosConferencia = const {},
@@ -374,6 +399,7 @@ class BarracaoPainter extends CustomPainter {
       enderecos,
       corPorProduto:   corPorProduto,
       selecionadoId:   selecionadoId,
+      selecionadoNivel: selecionadoNivel,
       destacadoCodigo: codigoAceso,
       modoConferencia: modoConferencia,
       codigosConferencia: codigosConferencia,
@@ -388,8 +414,8 @@ class BarracaoPainter extends CustomPainter {
     for (final e in enderecos) {
       final n = contagemConferencia[e.id];
       if (n == null || n <= 0) continue;
-      final hit = proj.projetar(
-          Vec3(e.x, BarracaoConfig.alturaCarga + 28, e.z));
+      final hit = proj.projetar(Vec3(e.x,
+          BarracaoConfig.yDoNivel(math.max(e.niveis, 1) + 1) + 28, e.z));
       if (hit == null) continue;
       final centro = hit.$1;
       canvas.drawCircle(centro, 10,
@@ -504,31 +530,43 @@ class BarracaoPainter extends CustomPainter {
       ..strokeWidth = 1.0;
 
     final lista = <({double depth, Path path, Paint traco})>[];
-    for (final e in enderecos) {
-      final sel = e.id == selecionadoId;
-      final destacado =
-          codigoAceso != null && e.produtoCodigo == codigoAceso;
-      if (!sel && !destacado && e.ocupado) continue;
-
-      final contorno = _contornoDaCarga(proj, e);
-      if (contorno == null) continue;
+    void adicionar(EnderecoBarracao e, int nivel, Paint traco, bool marca) {
+      final contorno = _contornoDaCarga(proj, e, nivel);
+      if (contorno == null) return;
       lista.add((
         // Onde o contorno entra na fila depende do que ele é.
         //
         // MARCA (selecionado, ou aceso pela busca): tem de ser vista, então
-        // entra pelo canto mais PRÓXIMO — depois das faces do próprio bag,
+        // entra pelo canto mais PRÓXIMO — depois das faces da própria gaiola,
         // que senão comeriam o traço. Uma marca dessas é uma resposta a algo
         // que a pessoa acabou de pedir; cobri-la é pior que o risco de ela
         // passar por cima de um vizinho.
         //
-        // ARAME do palete livre: é ambiente, e entra pelo canto mais
-        // DISTANTE. Foi o que tirou da tela o arame de um palete do fundo
-        // riscando a carga da fileira da frente — os dois se sobrepõem na
-        // projeção, e o livre não tem bag nenhum de si para vencer.
-        depth: (sel || destacado) ? contorno.perto : contorno.longe,
+        // ARAME da vaga livre: é ambiente, e entra pelo canto mais DISTANTE.
+        // Foi o que tirou da tela o arame de um palete do fundo riscando a
+        // carga da fileira da frente — os dois se sobrepõem na projeção, e a
+        // vaga não tem gaiola nenhuma de si para vencer.
+        depth: marca ? contorno.perto : contorno.longe,
         path:  contorno.path,
-        traco: sel ? selecionado : (destacado ? aceso : livre),
+        traco: traco,
       ));
+    }
+
+    for (final e in enderecos) {
+      final selNivel = e.id == selecionadoId ? selecionadoNivel : null;
+      // A vaga: onde a próxima gaiola entraria (o chão, num palete livre, ou
+      // em cima da pilha). Pilha cheia não tem vaga.
+      final vaga = e.cheio ? null : e.niveis + 1;
+      if (vaga != null && selNivel != vaga) adicionar(e, vaga, livre, false);
+      if (codigoAceso != null) {
+        for (final g in e.gaiolas) {
+          if (g.nivel != selNivel &&
+              chaveDestaque(g.codigo, g.nome) == codigoAceso) {
+            adicionar(e, g.nivel, aceso, true);
+          }
+        }
+      }
+      if (selNivel != null) adicionar(e, selNivel, selecionado, true);
     }
     return lista;
   }
@@ -537,11 +575,12 @@ class BarracaoPainter extends CustomPainter {
   /// espaço dele num palete livre), projetado, com a profundidade do canto
   /// mais próximo e a do mais distante — quem chama escolhe (ver [_contornos]).
   ({double perto, double longe, Path path})? _contornoDaCarga(
-      ProjecaoCamera proj, EnderecoBarracao e) {
+      ProjecaoCamera proj, EnderecoBarracao e, int nivel) {
     const bx = BarracaoConfig.bagX / 2;
     const bz = BarracaoConfig.bagZ / 2;
-    const y0 = BarracaoConfig.paleteAltura;
-    const y1 = BarracaoConfig.paleteAltura + BarracaoConfig.bagAltura;
+    final base = BarracaoConfig.yDoNivel(nivel);
+    final y0 = base + BarracaoConfig.paleteAltura;
+    final y1 = base + BarracaoConfig.alturaCarga;
 
     final cantos = <(double, double)>[
       (e.x - bx, e.z - bz),
@@ -551,7 +590,7 @@ class BarracaoPainter extends CustomPainter {
     ];
 
     final topo = <Offset>[];
-    final base = <Offset>[];
+    final baixo = <Offset>[];
     var perto = double.infinity;
     var longe = double.negativeInfinity;
     for (final (x, z) in cantos) {
@@ -559,7 +598,7 @@ class BarracaoPainter extends CustomPainter {
       final b = proj.projetar(Vec3(x, y0, z));
       if (a == null || b == null) return null;
       topo.add(a.$1);
-      base.add(b.$1);
+      baixo.add(b.$1);
       perto = math.min(perto, math.min(a.$2, b.$2));
       longe = math.max(longe, math.max(a.$2, b.$2));
     }
@@ -571,7 +610,7 @@ class BarracaoPainter extends CustomPainter {
     path.close();
     for (var i = 0; i < topo.length; i++) {
       path.moveTo(topo[i].dx, topo[i].dy);
-      path.lineTo(base[i].dx, base[i].dy);
+      path.lineTo(baixo[i].dx, baixo[i].dy);
     }
     return (perto: perto, longe: longe, path: path);
   }
@@ -679,6 +718,7 @@ class BarracaoPainter extends CustomPainter {
       old.camera.target.y  != camera.target.y  ||
       old.camera.target.z  != camera.target.z  ||
       old.selecionadoId    != selecionadoId    ||
+      old.selecionadoNivel != selecionadoNivel ||
       old.destacadoCodigo  != destacadoCodigo  ||
       old.modoConferencia  != modoConferencia  ||
       !setEquals(old.codigosConferencia, codigosConferencia) ||
@@ -694,21 +734,23 @@ class BarracaoScene extends StatefulWidget {
   final List<EnderecoBarracao> enderecos;
   final Map<String, Color>     corPorProduto;
   final int?                   selecionadoId;
+  final int                    selecionadoNivel;
   final String?                destacadoCodigo;
   final bool                   modoConferencia;
   final Set<String>            codigosConferencia;
   final Map<int, int>          contagemConferencia;
   final bool                   mostrarEtiquetas;
 
-  /// Toque num palete, ou null quando o toque caiu fora de qualquer alvo — é
-  /// o gesto de desfazer a seleção.
-  final ValueChanged<EnderecoBarracao?>? onTapEndereco;
+  /// Toque numa gaiola (ou na vaga de cima), ou null quando o toque caiu
+  /// fora de qualquer alvo — é o gesto de desfazer a seleção.
+  final ValueChanged<ToqueBarracao?>? onTapEndereco;
 
   const BarracaoScene({
     super.key,
     this.enderecos        = const [],
     this.corPorProduto    = const {},
     this.selecionadoId,
+    this.selecionadoNivel = 1,
     this.destacadoCodigo,
     this.modoConferencia = false,
     this.codigosConferencia = const {},
@@ -823,11 +865,10 @@ class _BarracaoSceneState extends State<BarracaoScene>
       setState(() {
         _camera = Camera(
           rotY: c0.rotY - delta.dx * 0.006,
-          // O piso do giro é mais alto que o das outras cenas de propósito. A
-          // parede das aberturas tem 6 m e o salão só 10 m de profundidade:
-          // abaixo de ~0,55 rad ela cobre o barracão inteiro, e a pessoa fica
-          // olhando para um paredão sem entender que basta subir a câmera.
-          rotX: (c0.rotX + delta.dy * 0.006).clamp(0.55, 1.45),
+          // Com a parede em corte (BarracaoConfig.alturaParede) a câmera pode
+          // descer bem: olhar as pilhas de gaiolas quase de lado é o que mostra
+          // os níveis. O piso só impede de deitar a vista no chão.
+          rotX: (c0.rotX + delta.dy * 0.006).clamp(0.25, 1.45),
           dist: (c0.dist / d.scale)
               .clamp(BarracaoScene._distMin, BarracaoScene._distMax),
           target: c0.target,
@@ -873,13 +914,19 @@ class _BarracaoSceneState extends State<BarracaoScene>
         ?.call(_hitTest(camera, rb.globalToLocal(toqueGlobal), rb.size));
   }
 
-  /// O palete sob o toque, ou null se o raio não acerta nenhum.
+  /// A gaiola sob o toque, ou null se o raio não acerta nenhuma.
   ///
-  /// O alvo é o volume INTEIRO da carga — estrado mais a altura do bag —
-  /// mesmo no palete livre: é por ele que se lança carga, exatamente como o
-  /// contorno da vaga do galpão, e mirar num estrado de 15 cm num barracão de
-  /// 35 m seria mira de precisão, não toque.
-  EnderecoBarracao? _hitTest(Camera camera, Offset toque, Size size) {
+  /// O alvo de cada nível é o volume INTEIRO da gaiola — estrado mais a
+  /// carga —, e a vaga (o próximo nível livre) também é alvo: é por ela que
+  /// se lança e se empilha, exatamente como o contorno da vaga do galpão.
+  /// Mirar num estrado de 15 cm num barracão de 35 m seria mira de precisão,
+  /// não toque.
+  ///
+  /// Mesma prioridade do galpão: quando o raio acerta uma gaiola do
+  /// endereço, a vaga de cima dele não compete — senão o toque na face de
+  /// cima da pilha atravessava a vaga primeiro e abria um lançamento em vez
+  /// da gaiola que a pessoa estava vendo.
+  ToqueBarracao? _hitTest(Camera camera, Offset toque, Size size) {
     final eye   = camera.position;
     final fwd   = (camera.target - eye).normalized;
     final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
@@ -895,17 +942,34 @@ class _BarracaoSceneState extends State<BarracaoScene>
     const hx = BarracaoConfig.paleteX / 2;
     const hz = BarracaoConfig.paleteZ / 2;
 
-    EnderecoBarracao? melhor;
+    double? tDe(EnderecoBarracao e, int nivel) {
+      final y0 = BarracaoConfig.yDoNivel(nivel);
+      return _rayAabb(eye, dir,
+          x0: e.x - hx, x1: e.x + hx,
+          y0: y0,       y1: y0 + BarracaoConfig.alturaCarga,
+          z0: e.z - hz, z1: e.z + hz);
+    }
+
+    ToqueBarracao? melhor;
     var melhorT = double.infinity;
 
     for (final e in widget.enderecos) {
-      final t = _rayAabb(eye, dir,
-          x0: e.x - hx, x1: e.x + hx,
-          y0: 0,        y1: BarracaoConfig.alturaCarga,
-          z0: e.z - hz, z1: e.z + hz);
-      if (t != null && t < melhorT) {
+      int? nivel;
+      double? t;
+      for (var n = 1; n <= e.niveis; n++) {
+        final tn = tDe(e, n);
+        if (tn != null && (t == null || tn < t)) {
+          t = tn;
+          nivel = n;
+        }
+      }
+      if (t == null && !e.cheio) {
+        t = tDe(e, e.niveis + 1);
+        nivel = e.niveis + 1;
+      }
+      if (t != null && nivel != null && t < melhorT) {
         melhorT = t;
-        melhor  = e;
+        melhor  = (endereco: e, nivel: nivel);
       }
     }
     return melhor;
@@ -963,6 +1027,7 @@ class _BarracaoSceneState extends State<BarracaoScene>
                 enderecos:        widget.enderecos,
                 corPorProduto:    widget.corPorProduto,
                 selecionadoId:    widget.selecionadoId,
+                selecionadoNivel: widget.selecionadoNivel,
                 destacadoCodigo:  widget.destacadoCodigo,
                 modoConferencia: widget.modoConferencia,
                 codigosConferencia: widget.codigosConferencia,

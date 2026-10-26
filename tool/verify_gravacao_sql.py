@@ -20,7 +20,8 @@ def tabela(nome):
 
 SCHEMA = [tabela(n) for n in (
     'app_mutacoes_aplicadas', 'estoque_localizado', 'contagens_log',
-    'galpao_racks', 'galpao_rack_itens', 'barracao_enderecos')]
+    'galpao_racks', 'galpao_rack_itens', 'barracao_enderecos',
+    'barracao_gaiolas')]
 
 
 def op(tipo, local, **kw):
@@ -70,6 +71,17 @@ OPS = {
     'bEst': op('barracaoAtribuir', 1, uuid='bE', produtoCodigo='EST:1', produtoNome='Bag · ANA', quantidade=1.0),
     'bv': op('barracaoEsvaziar', 1, uuid='bv'),
     'bAusente': op('barracaoAtribuir', 99, uuid='bx', produtoCodigo='300', quantidade=1.0),
+    # Barracão: gaiolas empilhadas no endereço 1
+    'g1': op('barracaoEmpilhar', 1, uuid='g1', produtoCodigo='500', produtoNome='G1', quantidade=10.0),
+    'g2': op('barracaoEmpilhar', 1, uuid='g2', produtoCodigo='600', produtoNome='G2', quantidade=3.0),
+    'g3': op('barracaoEmpilhar', 1, uuid='g3', produtoCodigo='300', produtoNome='Adubo', quantidade=2.0),
+    'g4': op('barracaoEmpilhar', 1, uuid='g4', produtoCodigo='700', quantidade=1.0),
+    'gEst': op('barracaoEmpilhar', 1, uuid='gE', produtoCodigo='EST:2', produtoNome='Bag · ZÉ', quantidade=1.0),
+    'gChaoLivre': op('barracaoEmpilhar', 1, uuid='g9', produtoCodigo='800', produtoNome='Chão', quantidade=4.0),
+    'gAjusta': op('barracaoAjustarGaiola', 1, uuid='ga', rackUuid='g2', produtoCodigo='600', quantidade=8.0),
+    'gAjustaAusente': op('barracaoAjustarGaiola', 1, uuid='gb', rackUuid='nao', quantidade=8.0),
+    'gTira1': op('barracaoEsvaziarGaiola', 1, uuid='gt', rackUuid='g1'),
+    'gTiraAusente': op('barracaoEsvaziarGaiola', 1, uuid='gt2', rackUuid='g1'),
 }
 
 GERADO = json.loads(subprocess.run(
@@ -105,7 +117,8 @@ class Lotes(unittest.TestCase):
     def foto(self):
         return [self.db.execute('SELECT * FROM %s ORDER BY 1' % t).fetchall()
                 for t in ('galpao_racks', 'estoque_localizado', 'contagens_log',
-                          'app_mutacoes_aplicadas', 'barracao_enderecos')]
+                          'app_mutacoes_aplicadas', 'barracao_enderecos',
+                          'barracao_gaiolas')]
 
     def itens(self, rack='u1'):
         return self.db.execute(
@@ -207,6 +220,23 @@ class Lotes(unittest.TestCase):
         self.assertIsNone(self.lote('mTiraPrincipal3'))
         self.assertEqual([(r[0], r[1], r[2]) for r in self.pilha()], [(1, 'u2', '200')])
         self.assertEqual(self.espelho(), [('200', 1, 7.5)])
+
+    def test_baixa_zera_principal_e_item_do_mesmo_rack(self):
+        # A baixa leu o rack com P (principal) e X (item i1) e zera os dois.
+        for n in ('l1', 'm1'):
+            self.assertIsNone(self.lote(n))
+        self.assertIsNone(self.lote('mTiraPrincipal'))      # P sai, X sobe
+        # O item_uuid lido antes não existe mais: é por isso que a baixa relê
+        # (GalpaoService.localizarNoRack) antes de gravar o item.
+        self.assertIn('GONDOLAS_CONFLITO:item_ausente', self.lote('mTiraItemDeNovo'))
+        achado = self.db.execute(
+            'SELECT item_uuid FROM galpao_rack_itens WHERE rack_uuid = ? AND produto_codigo = ? '
+            'UNION ALL SELECT NULL FROM galpao_racks WHERE rack_uuid = ? AND produto_codigo = ?',
+            ('u1', '501', 'u1', '501')).fetchall()
+        self.assertEqual(achado, [(None,)])                 # agora é o principal
+        self.assertIsNone(self.lote('mTiraPrincipal2'))     # e sai como principal
+        self.assertEqual(self.pilha(), [])
+        self.assertEqual(self.espelho(), [])
 
     def test_tirar_principal_de_rack_comum_e_esvaziar(self):
         for n in ('l1', 'l2', 'l3'):
@@ -344,6 +374,81 @@ class Lotes(unittest.TestCase):
         self.assertEqual(antes, self.foto())
 
 
+    # ── Barracão: pilha de gaiolas ──────────────────────────────────────────
+
+    def gaiolas(self, endereco=1):
+        chao = self.db.execute(
+            'SELECT 1, NULL, produto_codigo, quantidade FROM barracao_enderecos '
+            'WHERE id = ?', (endereco,)).fetchall()
+        acima = self.db.execute(
+            'SELECT nivel, gaiola_uuid, produto_codigo, quantidade FROM barracao_gaiolas '
+            'WHERE endereco_id = ? ORDER BY nivel', (endereco,)).fetchall()
+        return [r for r in chao if r[2] != ''] + acima
+
+    def test_gaiolas_empilham_no_topo_ate_quatro_e_sao_idempotentes(self):
+        for n in ('b1', 'g1', 'g2', 'g3'):
+            self.assertIsNone(self.lote(n))
+        self.assertEqual(self.gaiolas(), [(1, None, '300', 40.0), (2, 'g1', '500', 10.0),
+                                          (3, 'g2', '600', 3.0), (4, 'g3', '300', 2.0)])
+        # Mesmo produto em duas gaiolas do palete: uma linha só no espelho, somada.
+        self.assertEqual(self.espelho('barracao', 1), [('300', 0, 42.0), ('500', 0, 10.0), ('600', 0, 3.0)])
+        ultimo = self.db.execute('SELECT produto_codigo, endereco, qtd_anterior, qtd_nova FROM contagens_log ORDER BY id DESC LIMIT 1').fetchone()
+        self.assertEqual(ultimo, ('300', 'BARRACAO·BAR-01·N4', None, 2.0))
+        antes = self.foto()
+        self.assertIsNone(self.lote('g3'))
+        self.assertEqual(antes, self.foto())
+        self.assertIn('GONDOLAS_CONFLITO:pilha_cheia', self.lote('g4'))
+        self.assertEqual(antes, self.foto())
+
+    def test_gaiola_em_palete_livre_vai_para_o_chao(self):
+        self.assertIsNone(self.lote('gChaoLivre'))
+        self.assertEqual(self.gaiolas(), [(1, None, '800', 4.0)])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM barracao_gaiolas').fetchone()[0], 0)
+        self.assertEqual(self.espelho('barracao', 1), [('800', 0, 4.0)])
+        logs = self.db.execute('SELECT endereco, qtd_nova FROM contagens_log').fetchall()
+        self.assertEqual(logs, [('BARRACAO·BAR-01', 4.0)])
+
+    def test_ajustar_gaiola_pelo_uuid(self):
+        for n in ('b1', 'g1', 'g2', 'gAjusta'):
+            self.assertIsNone(self.lote(n))
+        self.assertEqual(self.gaiolas()[2], (3, 'g2', '600', 8.0))
+        self.assertEqual(self.espelho('barracao', 1), [('300', 0, 40.0), ('500', 0, 10.0), ('600', 0, 8.0)])
+        ultimo = self.db.execute('SELECT endereco, qtd_anterior, qtd_nova FROM contagens_log ORDER BY id DESC LIMIT 1').fetchone()
+        self.assertEqual(ultimo, ('BARRACAO·BAR-01·N3', 3.0, 8.0))
+        antes = self.foto()
+        self.assertIn('GONDOLAS_CONFLITO:gaiola_ausente', self.lote('gAjustaAusente'))
+        self.assertEqual(antes, self.foto())
+
+    def test_tirar_gaiola_do_meio_desce_a_pilha(self):
+        for n in ('b1', 'g1', 'g2', 'g3', 'gTira1'):
+            self.assertIsNone(self.lote(n))
+        self.assertEqual(self.gaiolas(), [(1, None, '300', 40.0), (2, 'g2', '600', 3.0), (3, 'g3', '300', 2.0)])
+        self.assertEqual(self.espelho('barracao', 1), [('300', 0, 42.0), ('600', 0, 3.0)])
+        ultimo = self.db.execute('SELECT produto_codigo, endereco, qtd_anterior, qtd_nova, origem FROM contagens_log ORDER BY id DESC LIMIT 1').fetchone()
+        self.assertEqual(ultimo, ('500', 'BARRACAO·BAR-01·N2', 10.0, 0, 'gondolas_app_barracao_exclusao'))
+        self.assertIn('GONDOLAS_CONFLITO:gaiola_ausente', self.lote('gTiraAusente'))
+        # Depois de descer, cabe uma de novo — no topo.
+        self.assertIsNone(self.lote('g4'))
+        self.assertEqual(self.gaiolas()[-1], (4, 'g4', '700', 1.0))
+
+    def test_tirar_a_do_chao_promove_a_de_cima(self):
+        for n in ('b1', 'g1', 'g2', 'g3', 'bv'):
+            self.assertIsNone(self.lote(n))
+        self.assertEqual(self.gaiolas(), [(1, None, '500', 10.0), (2, 'g2', '600', 3.0), (3, 'g3', '300', 2.0)])
+        self.assertEqual(self.espelho('barracao', 1), [('300', 0, 2.0), ('500', 0, 10.0), ('600', 0, 3.0)])
+        # Até esvaziar tudo, gaiola a gaiola pelo chão.
+        for uuid in ('bv2', 'bv3', 'bv4'):
+            self.db.executescript(GERADO['bv'].replace("'bv'", "'%s'" % uuid))
+        self.assertEqual(self.gaiolas(), [])
+        self.assertEqual(self.espelho('barracao', 1), [])
+
+    def test_gaiola_de_estocado_fora_do_espelho(self):
+        for n in ('b1', 'gEst'):
+            self.assertIsNone(self.lote(n))
+        self.assertEqual(self.gaiolas()[1][2], 'EST:2')
+        self.assertEqual(self.espelho('barracao', 1), [('300', 0, 40.0)])
+
+
 def esquema_da_abertura():
     """Os comandos que _criarEsquema junta num batch, lidos do próprio código."""
     ini = SOURCE.index('  Future<void> _criarEsquema(')
@@ -363,7 +468,8 @@ class Abertura(unittest.TestCase):
         for _ in range(2):
             db.executescript(';\n'.join(comandos))
         tabelas = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        self.assertTrue({'galpao_racks', 'galpao_rack_itens', 'barracao_enderecos', 'app_mutacoes_aplicadas',
+        self.assertTrue({'galpao_racks', 'galpao_rack_itens', 'barracao_enderecos', 'barracao_gaiolas',
+                         'app_mutacoes_aplicadas',
                          'estoque_localizado', 'contagens_log', 'galpao_posicoes'} <= tabelas)
         # Banco antigo: o lote acrescenta a coluna e a identidade de uma vez.
         db.execute("INSERT INTO galpao_racks (posicao, ordem, produto_codigo, atualizado_em) VALUES (1, 1, 'X', 'x')")
