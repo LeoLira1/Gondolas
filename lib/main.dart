@@ -4128,7 +4128,7 @@ class _EstantePageState extends State<EstantePage>
       faceOuColuna:  coluna,
       andarOuNivel:  nivel,
       caixaQueAceitaOutro:
-          estanteAceitaCaixaMista(_estanteAtual) ? daCaixa : null,
+          enderecoAceitaCaixaMista(_estanteAtual, nivel) ? daCaixa : null,
     );
   }
 
@@ -5167,6 +5167,7 @@ class _EstantePageState extends State<EstantePage>
                         divergentes:         _divergentes,
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
+                        saldos:              _saldos,
                       )
                 : _estanteAtual == expositorNelloreNum
                     ? ExpositorNelloreScene(
@@ -5182,6 +5183,7 @@ class _EstantePageState extends State<EstantePage>
                         divergentes:         _divergentes,
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
+                        saldos:              _saldos,
                       )
                 : _estanteAtual == expositorMonitorNum
                     ? ExpositorMonitorScene(
@@ -5197,6 +5199,7 @@ class _EstantePageState extends State<EstantePage>
                         divergentes:         _divergentes,
                         divergentesPositivas: _divergentesPositivas,
                         destacadosCodigos:   _destacadosCodigos,
+                        saldos:              _saldos,
                       )
                 : _estanteAtual == expositorMadeiraNum
                     ? ExpositorMadeiraScene(

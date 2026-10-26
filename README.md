@@ -128,7 +128,10 @@ unidade de armazenagem, empilhado direto sobre outro, no máximo 4 de altura.
   nome opcional (ex.: "Peças Hoppner"), quantidade de cada produto na posição
   (pelo diálogo de quantidade de sempre, que grava `estoque_localizado` no
   endereço da posição, ex.: `E13·4`), busca para pôr outro produto e lixeira.
-  Vale nas estantes de madeira, nas EDR-300 e na Estante Parede. Cada produto
+  Vale nas estantes de madeira, nas EDR-300, na Estante Parede e nas caixas
+  dos expositores: a base do MagnoJet (E9, 1–5), as prateleiras e os cestos do
+  Nellore (E19) e todos os endereços do Monitor (E20). Ganchos continuam com
+  um produto só. Cada produto
   da caixa é uma linha de `estante_layout` no mesmo `(coluna, nivel, slot)`, e
   o nome fica em `estante_layout.caixa_nome`. Por isso a busca "onde está", o
   Modo Conferência e o "Limpar produto" enxergam todos os produtos sem mudança,
