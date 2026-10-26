@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Gaveteiro da Estante Parede</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&display=swap">
+<style>
+  /* Layout: tela única do app — cabeçalho da estante, palco 3D, painel inferior; o gaveteiro abre numa folha por baixo. */
+  :root{
+    --bg:#0b0d10; --panel:#14171c; --panel2:#1a1e24; --line:#262c34; --line2:#2a2f37;
+    --orange:#e87722; --orange2:#f0a35e; --text:#e6e8ec; --muted:#8b919c;
+    --green:#4a9d6a; --green2:#6fcf97; --greenbg:#162416; --greenbtn:#2e6b46;
+    --red:#e57373; --redline:#3a2020;
+    --gav:#4c5a69; --gavFront:#7d8fa3; --input:#0e1114;
+    --mono:'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+    --sans:'Segoe UI', Roboto, system-ui, sans-serif;
+    color-scheme:dark;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  [hidden]{display:none!important}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans)}
+  #app{display:flex;flex-direction:column;height:100%;
+    padding-left:max(16px, env(safe-area-inset-left, 0px));
+    padding-right:max(16px, env(safe-area-inset-right, 0px))}
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  :focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+
+  header{display:flex;align-items:center;gap:12px;padding-block:10px 2px}
+  .back{color:var(--text);font-size:22px;line-height:1;opacity:.85}
+  .brand{background:linear-gradient(180deg,#7a4416,#5c3210);color:#fff;font-weight:700;font-size:13px;
+    letter-spacing:.5px;padding:5px 12px;border-radius:8px;border:1px solid rgba(232,119,34,.35)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green2);box-shadow:0 0 8px rgba(111,207,151,.7)}
+  header .spacer{flex:1}
+  .tag{font-family:var(--mono);font-size:10px;color:var(--orange);border:1px solid rgba(232,119,34,.4);
+    padding:3px 8px;border-radius:20px;letter-spacing:.5px}
+
+  .secnav{display:flex;align-items:center;justify-content:center;gap:20px}
+  .arrow{width:46px;height:46px;border:1px solid rgba(74,157,106,.5);border-radius:13px;
+    display:flex;align-items:center;justify-content:center;color:var(--orange);
+    font-size:20px;background:rgba(20,23,28,.7);user-select:none}
+  .arrow:active{background:rgba(232,119,34,.15)}
+  .secmid{text-align:center;min-width:96px}
+  .eyebrow{font-size:10px;letter-spacing:4px;color:var(--muted);font-weight:600}
+  .big{font-family:var(--mono);font-size:38px;font-weight:700;color:var(--orange);line-height:1;
+    text-shadow:0 0 24px rgba(232,119,34,.25)}
+  .sub{font-size:11px;color:var(--muted);font-family:var(--mono)}
+
+  .minimap{display:flex;justify-content:center;gap:6px;padding:6px 0 2px}
+  .mseg{width:38px;height:20px;border-radius:6px;border:1px solid var(--line2);background:var(--panel2);
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+    font-size:10px;color:var(--muted);position:relative}
+  .mseg.on{border-color:var(--orange);color:var(--orange);box-shadow:0 0 10px rgba(232,119,34,.35)}
+  .mseg .cnt{position:absolute;top:-6px;right:-5px;background:var(--orange);color:var(--bg);
+    font-size:8px;font-weight:700;border-radius:8px;padding:1px 4px}
+
+  #stage{flex:1;position:relative;min-height:140px}
+  canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+  canvas.dragging{cursor:grabbing}
+  .views{position:absolute;bottom:8px;right:0;display:flex;gap:6px}
+  .chip{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line2);
+    background:rgba(20,23,28,.85);padding:6px 10px;border-radius:20px;user-select:none}
+  .chip.on{color:var(--orange);border-color:rgba(232,119,34,.5)}
+
+  #addrChip{position:absolute;top:8px;left:0;right:0;width:fit-content;display:flex;align-items:center;gap:8px;
+    background:rgba(20,23,28,.92);border:1px solid rgba(232,119,34,.45);border-radius:10px;
+    padding:6px 10px;font-family:var(--mono);font-size:12px;max-width:100%}
+  #addrChip .addr{color:var(--orange);font-weight:700;white-space:nowrap}
+  #addrChip .pname{color:var(--text);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+
+  #toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom, 0px));
+    transform:translateX(-50%) translateY(20px);z-index:90;
+    background:#5a1a1a;color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;
+    opacity:0;transition:all .25s;pointer-events:none;white-space:nowrap}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.ok{background:var(--greenbtn)}
+
+  #bottomPanel{background:var(--panel);border-top:1px solid #22272e;flex:0 0 auto;
+    display:flex;flex-direction:column;max-height:46vh;overflow-y:auto;
+    margin-left:calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+    margin-right:calc(-1 * max(16px, env(safe-area-inset-right, 0px)));
+    padding-left:max(12px, env(safe-area-inset-left, 0px));
+    padding-right:max(12px, env(safe-area-inset-right, 0px));
+    padding-bottom:env(safe-area-inset-bottom, 0px)}
+  .catCount{text-align:center;font-size:12px;color:var(--muted);padding:8px 0 0}
+
+  .armedChip{display:flex;margin-top:8px;padding:7px 10px;background:var(--greenbg);
+    border:1px solid var(--greenbtn);border-radius:6px;align-items:center;gap:8px}
+  .armedChip.gav{background:rgba(232,119,34,.08);border-color:rgba(232,119,34,.5)}
+  .armedChip .sw{width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+  .armedChip .tx{color:var(--green2);font-size:11px;font-weight:500;flex:1;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .armedChip.gav .tx{color:var(--orange2)}
+  .armedChip .x{color:var(--muted);font-size:15px;padding:0 4px}
+
+  .resultChip{display:flex;margin-top:8px;background:#1e2a20;border:1px solid var(--green);
+    border-radius:8px;align-items:flex-start;gap:8px;padding:8px 12px}
+  .resultChip .tx{color:#fff;font-size:13px;line-height:1.45;flex:1;min-width:0}
+  .resultChip .x{color:var(--muted);padding:0 4px}
+
+  .expander{margin-top:6px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
+  .expHead{display:flex;width:100%;align-items:center;gap:8px;padding:11px 12px;font-size:14px;
+    font-weight:600;user-select:none;text-align:left}
+  .expHead .badge{font-family:var(--mono);font-size:10px;color:var(--bg);background:var(--orange);
+    border-radius:10px;padding:1px 6px}
+  .expHead .car{margin-left:auto;color:var(--muted);transition:transform .2s}
+  .expander.open .expHead .car{transform:rotate(180deg)}
+  .expBody{display:none;padding:0 12px 10px}
+  .expander.open .expBody{display:block}
+
+  .search{width:100%;background:var(--input);border:1px solid var(--line2);border-radius:9px;
+    color:var(--text);padding:10px 12px;font-size:14px}
+  .sug{margin-top:6px;border:1px solid var(--line);border-radius:9px;overflow:hidden;max-height:170px;overflow-y:auto}
+  .sugItem{display:flex;width:100%;align-items:center;gap:9px;padding:9px 11px;font-size:13px;text-align:left;
+    border-bottom:1px solid #1d222a;background:#12161b}
+  .sugItem:last-child{border-bottom:none}
+  .sugItem:active{background:#1a222b}
+  .sw{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+  .cod{font-family:var(--mono);font-size:11px;color:var(--orange2);flex:0 0 auto}
+  .sugItem .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sugItem .cat{color:var(--muted);font-size:10px;font-family:var(--mono)}
+  .sugItem .em{color:var(--green2);font-size:10px;font-family:var(--mono)}
+
+  .btnGav{display:flex;width:100%;align-items:center;gap:10px;margin-top:8px;padding:10px 12px;
+    border:1px dashed rgba(232,119,34,.55);border-radius:9px;color:var(--orange2);font-size:13px;font-weight:600;text-align:left}
+  .btnGav small{display:block;color:var(--muted);font-weight:400;font-size:11px}
+  .gavIcon{width:30px;height:22px;flex:0 0 auto;border-radius:4px;background:var(--gav);
+    display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:3px}
+  .gavIcon i{background:var(--gavFront);border-radius:1px;position:relative}
+  .gavIcon i::after{content:"";position:absolute;left:35%;right:35%;top:45%;height:1.5px;background:#1d242c}
+
+  .semPos{display:flex;flex-direction:column;max-height:170px;overflow-y:auto;border:1px solid var(--line);border-radius:9px}
+  .semPos div{display:flex;align-items:center;gap:9px;padding:8px 11px;font-size:12px;border-bottom:1px solid #1d222a;background:#12161b}
+  .semPos div:last-child{border-bottom:none}
+  .semPos .vazio{color:var(--green2)}
+
+  .footRow{display:flex;align-items:center;padding:8px 0 12px;gap:10px}
+  .btnGhost{display:flex;align-items:center;gap:6px;color:var(--red);border:1px solid var(--redline);
+    padding:9px 14px;border-radius:9px;font-size:13px;font-weight:600;user-select:none}
+  .btnGhost:disabled{opacity:.4}
+  .footRow .spacer{flex:1}
+  .btnSave{display:flex;align-items:center;gap:7px;background:var(--greenbtn);color:#fff;
+    padding:10px 18px;border-radius:9px;font-size:13px;font-weight:600;user-select:none}
+
+  /* ───── folha do gaveteiro ───── */
+  .sheetWrap{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;z-index:40;
+    align-items:flex-end;justify-content:center}
+  .sheetWrap.open{display:flex}
+  .sheet{width:min(100%,520px);max-height:88%;display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid rgba(232,119,34,.35);border-bottom:none;
+    border-radius:18px 18px 0 0;
+    padding:8px max(16px, env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    gap:10px;animation:sobe .22s ease-out}
+  @keyframes sobe{from{transform:translateY(30px);opacity:.4}to{transform:none;opacity:1}}
+  @media (prefers-reduced-motion: reduce){.sheet{animation:none}#toast{transition:none}}
+  .grab{width:40px;height:4px;border-radius:2px;background:#3a414b;align-self:center}
+  .gHead{display:flex;align-items:center;gap:12px}
+  .gHead .gavIcon{width:44px;height:32px;padding:4px;gap:3px}
+  .gHead .nomeBox{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  #gavNome{width:100%;background:transparent;border:none;border-bottom:1px dashed #3a414b;
+    color:var(--text);font-size:17px;font-weight:700;padding:2px 0}
+  #gavNome:focus{outline:none;border-bottom-color:var(--orange)}
+  .gAddr{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .gAddr b{color:var(--orange);font-weight:700}
+  .gSel{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--bg);background:var(--orange);
+    border-radius:12px;padding:3px 10px;flex:0 0 auto}
+
+  .gSearch{position:relative}
+  .gSearch .sug{position:absolute;left:0;right:0;top:100%;z-index:5;box-shadow:0 10px 24px rgba(0,0,0,.5)}
+
+  .gList{flex:1;min-height:80px;overflow-y:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel2)}
+  .gRow{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;
+    padding:9px 10px;border-bottom:1px solid #1f242b}
+  .gRow:last-child{border-bottom:none}
+  .gRow.flash{animation:flash .9s}
+  @keyframes flash{0%,40%{background:rgba(232,119,34,.22)}100%{background:transparent}}
+  .gRow .txt{min-width:0;display:flex;flex-direction:column;gap:1px}
+  .gRow .nm{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .stepper{display:flex;align-items:center;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
+  .stepper button{width:32px;height:32px;color:var(--orange);font-size:18px;background:var(--input)}
+  .stepper .q{min-width:46px;height:32px;font-family:var(--mono);font-size:14px;font-weight:700;
+    font-variant-numeric:tabular-nums;color:var(--text);border-inline:1px solid var(--line2);background:var(--panel)}
+  .del{width:32px;height:32px;color:var(--red);border-radius:8px;font-size:15px}
+  .gEmpty{padding:22px 14px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5}
+
+  details.grav{border:1px solid var(--line);border-radius:10px;background:#101318}
+  details.grav summary{cursor:pointer;padding:9px 12px;font-size:12px;color:var(--muted);font-family:var(--mono);list-style:none}
+  details.grav summary::before{content:"▸ ";color:var(--orange)}
+  details.grav[open] summary::before{content:"▾ "}
+  .gravWrap{overflow-x:auto;padding:0 10px 10px}
+  table{border-collapse:collapse;font-family:var(--mono);font-size:10.5px;width:100%;font-variant-numeric:tabular-nums}
+  th{color:var(--muted);font-weight:500;text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:4px 6px;border-bottom:1px solid #1a1e24;white-space:nowrap;color:#c9d0da}
+  td.n{text-align:right}
+  td .soma{color:var(--orange2)}
+  .gravNota{font-size:11px;color:var(--muted);padding:0 12px 10px;line-height:1.45}
+
+  .gFoot{display:flex;gap:8px}
+  .gFoot .btnGhost{flex:0 0 auto}
+  .gFoot .btnGhost.armado{background:#3a1a1a;color:#fff}
+  .gFoot .btnSave{flex:1;justify-content:center}
+
+  /* modais */
+  .modalWrap{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+    align-items:center;justify-content:center;z-index:60;padding:16px}
+  .modalWrap.open{display:flex}
+  .modalBox{width:min(92vw,420px);background:var(--panel);border:1px solid rgba(232,119,34,.35);
+    border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+  .modalBox h3{font-family:var(--mono);color:var(--orange);font-size:15px;text-wrap:balance}
+  .modalBox .addr{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .qtyRow{display:flex;align-items:center;gap:10px;justify-content:center}
+  .qtyBtn{width:52px;height:52px;border-radius:12px;background:var(--panel2);border:1px solid var(--line2);
+    color:var(--orange);font-size:26px;display:flex;align-items:center;justify-content:center;user-select:none}
+  #qtyVal{font-family:var(--mono);font-size:32px;font-weight:700;color:var(--text);
+    width:120px;text-align:center;background:var(--input);border:1px solid var(--line2);
+    border-radius:12px;padding:6px 8px}
+  .modalRow{display:flex;gap:8px}
+  .mbtn{flex:1;display:flex;align-items:center;justify-content:center;padding:11px 0;
+    border-radius:11px;font-size:14px;font-weight:600;user-select:none}
+  .mbtn.g{color:var(--muted);border:1px solid var(--line2)}
+  .mbtn.r{color:var(--red);border:1px solid var(--redline)}
+  .mbtn.p{background:var(--greenbtn);color:#fff}
+  .modalBox textarea{width:100%;height:240px;background:var(--bg);color:#c9d0da;border:1px solid var(--line2);
+    border-radius:10px;padding:10px;font-family:var(--mono);font-size:11px;resize:none}
+</style>
+
+<div id="app">
+  <header>
+    <div class="back">&#8592;</div>
+    <div class="brand">CAMDA</div>
+    <div class="dot"></div>
+    <div class="spacer"></div>
+    <div class="tag">PRÉVIA · GAVETEIRO</div>
+  </header>
+
+  <div class="secnav">
+    <button class="arrow" id="prevSec" aria-label="Seção anterior">&#8249;</button>
+    <div class="secmid">
+      <div class="eyebrow">ESTANTE PAREDE</div>
+      <div class="big" id="secNum">E13</div>
+      <div class="sub" id="secSub">seção 1 de 6 · 1–12</div>
+    </div>
+    <button class="arrow" id="nextSec" aria-label="Próxima seção">&#8250;</button>
+  </div>
+
+  <div class="minimap" id="minimap"></div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="addrChip" hidden><span class="addr" id="addrTxt"></span><span class="pname" id="addrProd"></span></div>
+    <div class="views">
+      <button class="chip" data-v="frente">Frente</button>
+      <button class="chip on" data-v="3d">3D</button>
+      <button class="chip" data-v="topo">Topo</button>
+    </div>
+  </div>
+
+  <div id="bottomPanel">
+    <div class="catCount" id="catCount"></div>
+    <div class="armedChip" id="armedChip" hidden>
+      <div class="sw" id="armedSw"></div>
+      <div class="tx" id="armedTx"></div>
+      <button class="x" id="armedX" aria-label="Cancelar">&times;</button>
+    </div>
+    <div class="resultChip" id="resultChip" hidden>
+      <span>&#128205;</span>
+      <div class="tx" id="resultTx"></div>
+      <button class="x" id="resultX" aria-label="Fechar">&times;</button>
+    </div>
+
+    <div class="expander" id="exp1">
+      <button class="expHead" data-e="1">&#10133; Adicionar produto <span class="car">&#9662;</span></button>
+      <div class="expBody">
+        <input class="search" id="inp1" type="text" placeholder="Buscar produto..." autocomplete="off">
+        <div class="sug" id="sug1" hidden></div>
+        <button class="btnGav" id="btnNovoGav">
+          <span class="gavIcon"><i></i><i></i><i></i><i></i></span>
+          <span>Novo gaveteiro<small>Caixa de miudezas: ocupa 1 slot e guarda vários produtos</small></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="expander" id="exp2">
+      <button class="expHead" data-e="2">&#128269; Onde está? <span class="car">&#9662;</span></button>
+      <div class="expBody">
+        <input class="search" id="inp2" type="text" placeholder="Nome ou código do produto" autocomplete="off">
+        <div class="sug" id="sug2" hidden></div>
+      </div>
+    </div>
+
+    <div class="expander" id="exp3">
+      <button class="expHead" data-e="3">&#128203; Sem Posição <span class="badge" id="semPosN">0</span><span class="car">&#9662;</span></button>
+      <div class="expBody"><div class="semPos" id="semPos"></div></div>
+    </div>
+
+    <div class="footRow">
+      <button class="btnGhost" id="btnLimpar">&#128465; Limpar</button>
+      <div class="spacer"></div>
+      <button class="btnSave" id="btnSalvar">&#128190; Salvar layout</button>
+    </div>
+  </div>
+</div>
+
+<!-- folha do gaveteiro -->
+<div class="sheetWrap" id="gavSheet">
+  <div class="sheet" role="dialog" aria-label="Gaveteiro">
+    <div class="grab"></div>
+    <div class="gHead">
+      <span class="gavIcon"><i></i><i></i><i></i><i></i></span>
+      <div class="nomeBox">
+        <input id="gavNome" type="text" maxlength="40" placeholder="Nome do gaveteiro (ex.: Peças Hoppner)" autocomplete="off">
+        <div class="gAddr" id="gavAddr"></div>
+      </div>
+      <div class="gSel" id="gavSelo">+0</div>
+    </div>
+    <div class="gSearch">
+      <input class="search" id="gavBusca" type="text" placeholder="&#10133; Adicionar produto ao gaveteiro..." autocomplete="off">
+      <div class="sug" id="gavSug" hidden></div>
+    </div>
+    <div class="gList" id="gavLista"></div>
+    <details class="grav" id="gavGrav">
+      <summary id="gavGravSum">Gravação em estoque_localizado</summary>
+      <div class="gravWrap"><table id="gavGravTab"></table></div>
+      <div class="gravNota">Uma linha por produto no endereço da posição (sem slot). É isso que faz o produto sair da lista Sem Posição e aparecer no Onde está.</div>
+    </details>
+    <div class="gFoot">
+      <button class="btnGhost" id="gavRemover">&#128465; Remover gaveteiro</button>
+      <button class="btnSave" id="gavOk">&#10003; Concluir</button>
+    </div>
+  </div>
+</div>
+
+<!-- dialog de quantidade -->
+<div class="modalWrap" id="qtyModal">
+  <div class="modalBox">
+    <h3 id="qtyProd">Produto</h3>
+    <div class="addr" id="qtyAddr"></div>
+    <div class="qtyRow">
+      <button class="qtyBtn" id="qtyMinus" aria-label="Menos">&minus;</button>
+      <input id="qtyVal" type="number" inputmode="numeric" min="0" step="1" value="0">
+      <button class="qtyBtn" id="qtyPlus" aria-label="Mais">+</button>
+    </div>
+    <div class="modalRow"><button class="mbtn r" id="qtyRemove">Remover caixa</button></div>
+    <div class="modalRow">
+      <button class="mbtn g" id="qtyCancel">Cancelar</button>
+      <button class="mbtn p" id="qtySave">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- modal salvar layout -->
+<div class="modalWrap" id="saveModal">
+  <div class="modalBox" style="width:min(92vw,560px)">
+    <h3>Layout + estoque_localizado (JSON)</h3>
+    <textarea id="jsonOut" readonly></textarea>
+    <div class="modalRow">
+      <button class="mbtn g" id="btnFechar">Fechar</button>
+      <button class="mbtn p" id="btnCopiar">Copiar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  // ================= CATÁLOGO (exemplo — no app vem do estoque_mestre) =================
+  const CATALOGO = [
+    {codigo:'80101', nome:'VANTACOR 5L',            cat:'INSETICIDA',  cor:'#7b2d8b'},
+    {codigo:'80102', nome:'BORAL FULL 5L',          cat:'HERBICIDA',   cor:'#b03a2e'},
+    {codigo:'80105', nome:'ENGEO PLENO S 1L',       cat:'INSETICIDA',  cor:'#1e8449'},
+    {codigo:'80106', nome:'KARATE ZEON 1L',         cat:'INSETICIDA',  cor:'#c0392b'},
+    {codigo:'80201', nome:'THION C 1L',             cat:'VETERINÁRIA', cor:'#196f3d'},
+    {codigo:'80204', nome:'CÁLCIO REFORÇADO 500ML', cat:'VETERINÁRIA', cor:'#cb4335'},
+    {codigo:'80205', nome:'TURBO CÁLCIO 500ML',     cat:'VETERINÁRIA', cor:'#e67e22'},
+    {codigo:'80206', nome:'FORTEMIL 500ML',         cat:'VETERINÁRIA', cor:'#2e86c1'},
+    {codigo:'80207', nome:'ORGANOVIT 500ML',        cat:'VETERINÁRIA', cor:'#884ea0'},
+    {codigo:'80301', nome:'SAL MINERAL CAMDA 30KG', cat:'NUTRIÇÃO',    cor:'#a04000'},
+    {codigo:'90101', nome:'BICO LECHLER LU 110-02', cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90102', nome:'BICO LECHLER LU 110-03', cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90103', nome:'BICO CONE JA-2',         cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90104', nome:'ANEL O-RING 3/4',        cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90105', nome:'DIAFRAGMA BOMBA HOPPNER',cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90106', nome:'VÁLVULA ANTIGOTEJO',     cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90107', nome:'PORCA CAPA DE BICO',     cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90108', nome:'FILTRO DE BICO 80 MESH', cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90109', nome:'ENGATE RÁPIDO 1/2',      cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90110', nome:'REGISTRO ESFERA 3/4',    cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90111', nome:'GATILHO PULV. COSTAL',   cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90112', nome:'LANÇA INOX 50CM',        cat:'PEÇAS',       cor:'#95a5a6'},
+    {codigo:'90201', nome:'ABRAÇADEIRA ROSCA 1/2',  cat:'FERRAGENS',   cor:'#f4d03f'},
+    {codigo:'90202', nome:'ABRAÇADEIRA ROSCA 3/4',  cat:'FERRAGENS',   cor:'#f4d03f'},
+    {codigo:'90203', nome:'ESPIGÃO 1/2 x 3/4',      cat:'FERRAGENS',   cor:'#f4d03f'},
+    {codigo:'90204', nome:'PARAFUSO SEXT 3/8 x 2',  cat:'FERRAGENS',   cor:'#f4d03f'},
+    {codigo:'90205', nome:'FITA VEDA ROSCA 18MM',   cat:'FERRAGENS',   cor:'#f4d03f'},
+  ];
+  const prodById = c => CATALOGO.find(p => p.codigo === c);
+  const nomeDe = c => prodById(c)?.nome || c;
+  const hexRgb = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+
+  // ================= ENDEREÇOS (mesma régua do models.dart) =================
+  // Parede: seção 0..5 = estantes 13..18; 2 colunas × 6 níveis (0 = base).
+  const EST_MIN = 13, NIVEIS = 6, COLS = 2, NSEC = 6, MAX_SLOTS = 6;
+  const estDe = p => EST_MIN + Math.floor(p / COLS);
+  const colDe = p => p % COLS;
+  const numeroCelula = (p, s) => Math.floor(p / COLS) * NIVEIS * COLS + colDe(p) * NIVEIS + (NIVEIS - 1 - s) + 1;
+  const endereco = (p, s) => 'E' + estDe(p) + '·' + numeroCelula(p, s);
+
+  // ================= ESTADO (exemplo) =================
+  // caixa normal: {id,s,p,slot,codigo,qtd}
+  // gaveteiro:    {id,s,p,slot,tipo:'gav',nome,itens:[{codigo,qtd}]}
+  let seq = 1;
+  const nova = o => ({id: seq++, ...o});
+  let caixas = [
+    nova({s:2,p:0,slot:0,codigo:'80105',qtd:6}),
+    nova({s:2,p:0,slot:1,tipo:'gav',nome:'Peças Hoppner',itens:[
+      {codigo:'90101',qtd:24},{codigo:'90102',qtd:18},{codigo:'90103',qtd:30},{codigo:'90104',qtd:40},
+      {codigo:'90105',qtd:6},{codigo:'90106',qtd:12},{codigo:'90107',qtd:25},{codigo:'90108',qtd:20},
+      {codigo:'90109',qtd:8},{codigo:'90110',qtd:4},{codigo:'90111',qtd:5}]}),
+    nova({s:2,p:0,slot:2,codigo:'80106',qtd:4}),
+    nova({s:2,p:0,slot:3,codigo:'80201',qtd:10}),
+    nova({s:4,p:0,slot:0,codigo:'80204',qtd:12}),
+    nova({s:4,p:0,slot:1,codigo:'80205',qtd:12}),
+    nova({s:4,p:0,slot:2,codigo:'80206',qtd:8}),
+    nova({s:3,p:1,slot:0,codigo:'80101',qtd:3}),
+    nova({s:3,p:1,slot:1,codigo:'80102',qtd:2}),
+    nova({s:0,p:1,slot:0,codigo:'80301',qtd:15}),
+    nova({s:1,p:3,slot:4,tipo:'gav',nome:'Abraçadeiras e conexões',itens:[
+      {codigo:'90201',qtd:50},{codigo:'90202',qtd:35},{codigo:'90203',qtd:15}]}),
+  ];
+  let armado = null;          // produto do catálogo ou {gav:true}
+  let sel = null;             // {s,p,slot}
+  let secao = 0;
+  let gavAberto = null;
+
+  // ================= estoque_localizado derivado =================
+  // Chave UNIQUE(produto, local_tipo, local_num, coluna, nivel): o slot não entra,
+  // então caixa e gaveteiro do mesmo produto na mesma posição somam numa linha.
+  function linhasEstoque(){
+    const m = new Map();
+    const add = (codigo, p, s, qtd, origem) => {
+      const k = codigo + '|' + estDe(p) + '|' + colDe(p) + '|' + s;
+      const l = m.get(k) || {produto_codigo:codigo, local_tipo:'estante', local_num:estDe(p),
+        face_ou_coluna:colDe(p), andar_ou_nivel:s, quantidade:0, endereco:endereco(p,s), origens:[]};
+      l.quantidade += qtd; l.origens.push(origem); m.set(k, l);
+    };
+    for (const c of caixas){
+      if (c.tipo === 'gav') for (const it of c.itens) add(it.codigo, c.p, c.s, it.qtd, 'gaveteiro');
+      else if (c.qtd != null) add(c.codigo, c.p, c.s, c.qtd, 'caixa');
+    }
+    return [...m.values()];
+  }
+
+  // ================= GEOMETRIA (EstanteParedeGeometry) =================
+  const ys = [0, 0.46, 0.94, 1.42, 1.90, 2.38];
+  const TH = 0.08, DEPTH = 0.58, Z0 = -DEPTH/2, Z1 = DEPTH/2;   // Z0 = frente (corredor)
+  const SLOT = 1.3, SEC_W = COLS * SLOT, TOPO = ys[NIVEIS-1];
+  const W_CX = 0.185, GAP_CX = 0.03;
+
+  const COL_SHELF_TOP=[64,108,84], COL_SHELF_SIDE=[40,72,56], COL_IRON=[24,34,29], COL_BRACKET=[28,40,34];
+  const COL_GAV=hexRgb('#5a6f86'), COL_GAV_FRENTE=hexRgb('#a3b6cb'), COL_PUXADOR=[29,36,44];
+
+  const cv = $('cv'), ctx = cv.getContext('2d');
+  let W=0, H=0;
+  function resize(){
+    const DPR = Math.min(window.devicePixelRatio||1, 2);
+    const r = cv.getBoundingClientRect();
+    W = r.width; H = r.height;
+    cv.width = W*DPR; cv.height = H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    render();
+  }
+  window.addEventListener('resize', resize);
+
+  function box(arr,x0,y0,z0,x1,y1,z1,col){
+    const p=[[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+    const f=[[0,1,2,3],[5,4,7,6],[4,0,3,7],[1,5,6,2],[3,2,6,7],[4,5,1,0]];
+    for (const q of f) arr.push({pts:q.map(i=>p[i]), col});
+  }
+  const staticQuads = [];
+  (function(){
+    for (let k=0;k<ys.length;k++){
+      box(staticQuads,0,ys[k],Z0,SEC_W,ys[k]+TH,Z1,COL_SHELF_SIDE);
+      box(staticQuads,0,ys[k]+TH,Z0,SEC_W,ys[k]+TH+0.001,Z1,COL_SHELF_TOP);
+    }
+    for (const px of [0,SEC_W]){
+      box(staticQuads,px-0.05,0,Z1-0.05,px+0.05,TOPO+TH+0.12,Z1+0.03,COL_IRON);
+      for (let k=1;k<ys.length;k++){
+        const drop=Math.min(0.34,(ys[k]-ys[k-1])*0.75);
+        const pts=[[px-0.028,ys[k]-drop,Z1-0.05],[px+0.028,ys[k]-drop,Z1-0.05],
+                   [px+0.028,ys[k]-0.005,Z0+0.10],[px-0.028,ys[k]-0.005,Z0+0.10]];
+        staticQuads.push({pts,col:COL_BRACKET});
+      }
+    }
+  })();
+
+  const vao = s => s < NIVEIS-1 ? ys[s+1]-ys[s]-TH : 0.42;
+  function slotX(local, slot){
+    const inner = SLOT - (MAX_SLOTS*W_CX + (MAX_SLOTS-1)*GAP_CX);
+    return local*SLOT + inner/2 + slot*(W_CX+GAP_CX);
+  }
+  // Gaveteiro: mesmo slot, mas baixo (42% do vão) e mais largo (come o respiro dos lados).
+  function geoGav(c){
+    const local = c.p - secao*COLS, x0 = slotX(local, c.slot) - GAP_CX*0.45;
+    const x1 = x0 + W_CX + GAP_CX*0.9, y0 = ys[c.s]+TH, y1 = y0 + vao(c.s)*0.45, zf = Z0+0.04;
+    return {x0,x1,y0,y1,zf,zb:Z1-0.08};
+  }
+
+  const prodQuads = [];
+  function rebuild(){
+    prodQuads.length = 0;
+    for (const c of caixas){
+      if (Math.floor(c.p/COLS) !== secao) continue;
+      const n0 = prodQuads.length;
+      if (c.tipo === 'gav'){
+        const g = geoGav(c);
+        box(prodQuads, g.x0,g.y0,g.zf, g.x1,g.y1,g.zb, COL_GAV);
+        // 2×2 gavetinhas na frente, cada uma com puxador
+        const mx=0.012, w=(g.x1-g.x0-mx*3)/2, h=(g.y1-g.y0-mx*3)/2, z=g.zf-0.003;
+        for (let r=0;r<2;r++) for (let k=0;k<2;k++){
+          const ax=g.x0+mx+k*(w+mx), ay=g.y0+mx+r*(h+mx);
+          prodQuads.push({pts:[[ax,ay,z],[ax+w,ay,z],[ax+w,ay+h,z],[ax,ay+h,z]], col:COL_GAV_FRENTE, flat:true});
+          const hx=ax+w*0.32, hw=w*0.36, hy=ay+h*0.42, hh=Math.max(0.008,h*0.16), z2=z-0.002;
+          prodQuads.push({pts:[[hx,hy,z2],[hx+hw,hy,z2],[hx+hw,hy+hh,z2],[hx,hy+hh,z2]], col:COL_PUXADOR, flat:true});
+        }
+      } else {
+        const local = c.p - secao*COLS, x0 = slotX(local, c.slot);
+        const col = hexRgb(prodById(c.codigo)?.cor || '#888888');
+        box(prodQuads, x0, ys[c.s]+TH, Z0+0.08, x0+W_CX, ys[c.s]+TH+vao(c.s)*0.74, Z1-0.10, col);
+      }
+      for (let i=n0;i<prodQuads.length;i++) prodQuads[i].cx = c;
+    }
+    atualizarPainel();
+  }
+
+  // ================= CÂMERA =================
+  const target = {x:SEC_W/2, y:TOPO/2+0.2, z:0};
+  let pan = {x:0,y:0};
+  const VIEWS = {
+    frente:{yaw:0.0001,pitch:-0.03,dist:4.3},
+    '3d':{yaw:-0.32,pitch:-0.2,dist:4.0},
+    topo:{yaw:-0.08,pitch:-1.15,dist:4.6},
+  };
+  let cam = {...VIEWS['3d']}, camT = {...VIEWS['3d']};
+  const YAW_LIM=1.35, PITCH_MIN=-1.25, PITCH_MAX=0.55;
+
+  function project(pt){
+    const dx=pt[0]-target.x-pan.x, dy=pt[1]-target.y-pan.y, dz=pt[2]-target.z;
+    const cy=Math.cos(cam.yaw), sy=Math.sin(cam.yaw), cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+    const x1=dx*cy-dz*sy, z1=dx*sy+dz*cy, y2=dy*cp-z1*sp, z2=dy*sp+z1*cp;
+    const vz=z2+cam.dist, f=Math.min(W,H)*1.15;
+    return {sx:W/2+f*x1/vz, sy:H/2-f*y2/vz, vz, f};
+  }
+  function shade(q){
+    if (q.flat) return 0.95;
+    const [a,b,c]=[q.pts[0],q.pts[1],q.pts[3]];
+    const u=[b[0]-a[0],b[1]-a[1],b[2]-a[2]], v=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+    const nx=u[1]*v[2]-u[2]*v[1], ny=u[2]*v[0]-u[0]*v[2], nz=u[0]*v[1]-u[1]*v[0];
+    const L=Math.hypot(nx,ny,nz)||1;
+    return 0.45+0.55*Math.abs((nx*-0.35+ny*0.82+nz*0.45)/L);
+  }
+
+  // ================= PICKING =================
+  function cellFront(s,local){
+    const x0=local*SLOT, x1=(local+1)*SLOT, yb=ys[s]+TH, yt=s<NIVEIS-1?ys[s+1]:TOPO+0.5;
+    return [[x0,yb,Z0],[x1,yb,Z0],[x1,yt,Z0],[x0,yt,Z0]];
+  }
+  function pointInPoly(poly,mx,my){
+    let inside=false;
+    for (let i=0,j=3;i<4;j=i++){
+      const xi=poly[i].sx, yi=poly[i].sy, xj=poly[j].sx, yj=poly[j].sy;
+      if (((yi>my)!==(yj>my)) && (mx<(xj-xi)*(my-yi)/(yj-yi)+xi)) inside=!inside;
+    }
+    return inside;
+  }
+  function pickCell(mx,my){
+    let best=null, bestZ=Infinity;
+    for (let s=0;s<NIVEIS;s++) for (let l=0;l<COLS;l++){
+      const poly=cellFront(s,l).map(project);
+      if (poly.some(q=>q.vz<0.5) || !pointInPoly(poly,mx,my)) continue;
+      const z=(poly[0].vz+poly[2].vz)/2;
+      if (z<bestZ){
+        const tTop=(mx-poly[3].sx)/((poly[2].sx-poly[3].sx)||1);
+        const tBot=(mx-poly[0].sx)/((poly[1].sx-poly[0].sx)||1);
+        const t=Math.max(0,Math.min(1,(tTop+tBot)/2));
+        bestZ=z; best={s,local:l,hx:l*SLOT+t*SLOT};
+      }
+    }
+    return best;
+  }
+  function slotFromHx(local,hx){
+    const inner=SLOT-(MAX_SLOTS*W_CX+(MAX_SLOTS-1)*GAP_CX);
+    return Math.max(0,Math.min(MAX_SLOTS-1,Math.floor((hx-local*SLOT-inner/2)/(W_CX+GAP_CX))));
+  }
+  const caixasEm = (s,p) => caixas.filter(c=>c.s===s&&c.p===p);
+
+  // ================= TOQUE =================
+  function onTap(hit){
+    const p = secao*COLS + hit.local;
+    if (armado){
+      let slot = slotFromHx(hit.local, hit.hx);
+      const ocup = new Set(caixasEm(hit.s,p).map(c=>c.slot));
+      if (ocup.has(slot)){
+        let livre=null;
+        for (let d=1;d<MAX_SLOTS;d++){
+          if (slot+d<MAX_SLOTS && !ocup.has(slot+d)){livre=slot+d;break;}
+          if (slot-d>=0 && !ocup.has(slot-d)){livre=slot-d;break;}
+        }
+        if (livre===null){ toast('Posição '+endereco(p,hit.s)+' cheia (6 slots)'); return; }
+        slot=livre;
+      }
+      if (armado.gav){
+        const g = nova({s:hit.s,p,slot,tipo:'gav',nome:'',itens:[]});
+        caixas.push(g); desarmar();
+        sel={s:hit.s,p,slot}; rebuild(); kick();
+        abrirGaveteiro(g, true);
+      } else {
+        caixas.push(nova({s:hit.s,p,slot,codigo:armado.codigo,qtd:null}));
+        sel={s:hit.s,p,slot}; rebuild(); kick();
+      }
+      atualizarChip();
+      return;
+    }
+    const ocup = caixasEm(hit.s,p);
+    if (!ocup.length){ sel={s:hit.s,p,slot:null}; atualizarChip(); kick(); return; }
+    const est = slotFromHx(hit.local, hit.hx);
+    ocup.sort((a,b)=>Math.abs(a.slot-est)-Math.abs(b.slot-est));
+    const c = ocup[0];
+    sel = {s:c.s,p:c.p,slot:c.slot}; atualizarChip(); kick();
+    if (c.tipo==='gav') abrirGaveteiro(c); else abrirQtdCaixa(c);
+  }
+
+  const selecionada = () => sel && sel.slot!=null ? caixas.find(c=>c.s===sel.s&&c.p===sel.p&&c.slot===sel.slot) : null;
+  function atualizarChip(){
+    const chip=$('addrChip');
+    if (!sel){ chip.hidden=true; return; }
+    const c = selecionada();
+    $('addrTxt').textContent = endereco(sel.p,sel.s) + (sel.slot!=null?' · slot '+(sel.slot+1):'');
+    $('addrProd').textContent = !c ? '' : c.tipo==='gav'
+      ? '🗄 '+(c.nome||'Gaveteiro')+' (+'+c.itens.length+')' : nomeDe(c.codigo);
+    chip.hidden=false;
+  }
+
+  // ================= RENDER =================
+  const mono = (fs,w) => (w||600)+' '+fs+"px 'JetBrains Mono', ui-monospace, monospace";
+  function poly(pp){ ctx.beginPath(); ctx.moveTo(pp[0].sx,pp[0].sy); for (let i=1;i<pp.length;i++) ctx.lineTo(pp[i].sx,pp[i].sy); ctx.closePath(); }
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    const g=ctx.createRadialGradient(W/2,H*0.7,10,W/2,H*0.7,Math.max(W,H)*0.6);
+    g.addColorStop(0,'rgba(232,119,34,0.05)'); g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+    const sc = selecionada();
+    const drawn=[];
+    for (const q of staticQuads.concat(prodQuads)){
+      const pp=q.pts.map(project);
+      if (pp.some(p=>p.vz<0.5)) continue;
+      drawn.push({pp, z:(pp[0].vz+pp[1].vz+pp[2].vz+pp[3].vz)/4 - (q.flat?0.004:0), q});
+    }
+    drawn.sort((A,B)=>B.z-A.z);
+    for (const d of drawn){
+      const s=shade(d.q), [r,g2,b]=d.q.col, isSel = d.q.cx && d.q.cx===sc, m=isSel?1.22:1;
+      ctx.fillStyle=`rgb(${Math.min(255,r*s*m)|0},${Math.min(255,g2*s*m)|0},${Math.min(255,b*s*m)|0})`;
+      ctx.strokeStyle = isSel&&!d.q.flat ? '#e87722' : 'rgba(11,13,16,0.35)';
+      ctx.lineWidth = isSel&&!d.q.flat ? 1.6 : 0.6;
+      poly(d.pp); ctx.fill(); ctx.stroke();
+    }
+
+    if (sel && Math.floor(sel.p/COLS)===secao){
+      const pp=cellFront(sel.s, sel.p-secao*COLS).map(project);
+      if (!pp.some(q=>q.vz<0.5)){
+        poly(pp); ctx.fillStyle='rgba(232,119,34,0.05)'; ctx.fill();
+        ctx.lineWidth=2; ctx.strokeStyle='#e87722'; ctx.shadowColor='rgba(232,119,34,0.8)'; ctx.shadowBlur=10;
+        ctx.stroke(); ctx.shadowBlur=0;
+      }
+    }
+
+    // número de cada posição na borda da prateleira (E13·1 … E13·12)
+    for (let s=0;s<NIVEIS;s++) for (let l=0;l<COLS;l++){
+      const p=project([l*SLOT+0.14, ys[s]+TH*0.5, Z0-0.005]);
+      if (p.vz<0.5) continue;
+      const fs=Math.max(8,p.f*0.075/p.vz), n=String(numeroCelula(secao*COLS+l, s));
+      ctx.font=mono(fs,700);
+      const tw=ctx.measureText(n).width;
+      ctx.fillStyle='rgba(11,13,16,0.8)';
+      ctx.beginPath(); ctx.roundRect(p.sx-tw/2-fs*0.4,p.sy-fs*0.62,tw+fs*0.8,fs*1.24,fs*0.3); ctx.fill();
+      ctx.fillStyle='#f0a35e'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(n,p.sx,p.sy+fs*0.05);
+    }
+
+    // selo "+N" em cima de cada gaveteiro
+    for (const c of caixas){
+      if (c.tipo!=='gav' || Math.floor(c.p/COLS)!==secao) continue;
+      const gg=geoGav(c), p=project([(gg.x0+gg.x1)/2, gg.y1+0.075, gg.zf]);
+      if (p.vz<0.5) continue;
+      const fs=Math.max(9,p.f*0.06/p.vz), t='+'+c.itens.length;
+      ctx.font=mono(fs,700);
+      const w=ctx.measureText(t).width+fs*0.9, h=fs*1.35;
+      ctx.fillStyle='#e87722'; ctx.shadowColor='rgba(0,0,0,0.6)'; ctx.shadowBlur=6;
+      ctx.beginPath(); ctx.roundRect(p.sx-w/2,p.sy-h/2,w,h,h/2); ctx.fill(); ctx.shadowBlur=0;
+      ctx.lineWidth=1.2; ctx.strokeStyle='#0b0d10'; ctx.stroke();
+      ctx.fillStyle='#0b0d10'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(t,p.sx,p.sy+fs*0.05);
+    }
+  }
+
+  let animating=false;
+  function tick(){
+    let need=false;
+    for (const k of ['yaw','pitch','dist']){
+      const d=camT[k]-cam[k];
+      if (Math.abs(d)>0.0008){cam[k]+=d*0.22;need=true;} else cam[k]=camT[k];
+    }
+    render();
+    if (need) requestAnimationFrame(tick); else animating=false;
+  }
+  function kick(){ if(!animating){animating=true;requestAnimationFrame(tick);} }
+
+  // ================= INPUT 3D =================
+  const pointers=new Map();
+  let moved=0,lastX=0,lastY=0,pinchD=0,panLast=null;
+  cv.addEventListener('pointerdown',e=>{
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    moved=0; lastX=e.clientX; lastY=e.clientY;
+    if (pointers.size===2){
+      const [a,b]=[...pointers.values()];
+      pinchD=Math.hypot(a.x-b.x,a.y-b.y); panLast={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    }
+    cv.setPointerCapture(e.pointerId); cv.classList.add('dragging');
+  });
+  cv.addEventListener('pointermove',e=>{
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if (pointers.size===1){
+      const dx=e.clientX-lastX, dy=e.clientY-lastY;
+      moved+=Math.abs(dx)+Math.abs(dy);
+      camT.yaw=Math.max(-YAW_LIM,Math.min(YAW_LIM,camT.yaw+dx*0.0075));
+      camT.pitch=Math.max(PITCH_MIN,Math.min(PITCH_MAX,camT.pitch+dy*0.0065));
+      lastX=e.clientX; lastY=e.clientY; kick();
+    } else if (pointers.size===2){
+      const [a,b]=[...pointers.values()];
+      const d=Math.hypot(a.x-b.x,a.y-b.y), c={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+      if (pinchD>0){camT.dist=Math.max(2.6,Math.min(14,camT.dist*(pinchD/d)));pinchD=d;}
+      if (panLast){
+        const scale=camT.dist/(Math.min(W,H)*1.15);
+        pan.x=Math.max(-SEC_W,Math.min(SEC_W,pan.x-(c.x-panLast.x)*scale));
+        pan.y=Math.max(-2,Math.min(2,pan.y+(c.y-panLast.y)*scale));
+        panLast=c;
+      }
+      moved+=10; kick();
+    }
+  });
+  function endPointer(e){
+    pointers.delete(e.pointerId);
+    if (pointers.size<2){pinchD=0;panLast=null;}
+    if (pointers.size===0){
+      cv.classList.remove('dragging');
+      if (moved<8){
+        const r=cv.getBoundingClientRect(), hit=pickCell(e.clientX-r.left,e.clientY-r.top);
+        if (hit) onTap(hit); else {sel=null;atualizarChip();kick();}
+      }
+    }
+  }
+  cv.addEventListener('pointerup',endPointer);
+  cv.addEventListener('pointercancel',endPointer);
+  cv.addEventListener('wheel',e=>{ e.preventDefault(); camT.dist=Math.max(2.6,Math.min(14,camT.dist+e.deltaY*0.008)); kick(); },{passive:false});
+  function setChip(v){ document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on',c.dataset.v===v)); }
+  document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+    Object.assign(camT,VIEWS[c.dataset.v]); pan={x:0,y:0}; setChip(c.dataset.v); kick();
+  }));
+
+  // ================= SEÇÕES =================
+  function gotoSec(i){
+    secao=(i+NSEC)%NSEC;
+    $('secNum').textContent='E'+(EST_MIN+secao);
+    $('secSub').textContent='seção '+(secao+1)+' de 6 · '+(secao*12+1)+'–'+(secao*12+12);
+    document.querySelectorAll('#minimap .mseg').forEach((m,idx)=>m.classList.toggle('on',idx===secao));
+    if (sel && Math.floor(sel.p/COLS)!==secao){sel=null;atualizarChip();}
+    rebuild(); kick();
+  }
+  $('prevSec').addEventListener('click',()=>gotoSec(secao-1));
+  $('nextSec').addEventListener('click',()=>gotoSec(secao+1));
+  for (let i=0;i<NSEC;i++){
+    const m=document.createElement('button');
+    m.className='mseg'+(i===0?' on':''); m.dataset.i=i;
+    m.innerHTML='E'+(EST_MIN+i)+'<span class="cnt" hidden>0</span>';
+    m.addEventListener('click',()=>gotoSec(i));
+    $('minimap').appendChild(m);
+  }
+
+  // ================= PAINEL =================
+  function atualizarPainel(){
+    for (let i=0;i<NSEC;i++){
+      const n=caixas.filter(c=>Math.floor(c.p/COLS)===i).length;
+      const el=document.querySelector('#minimap .mseg[data-i="'+i+'"] .cnt');
+      if (el){ el.textContent=n; el.hidden=n===0; }
+    }
+    const gavs=caixas.filter(c=>c.tipo==='gav');
+    $('catCount').textContent = CATALOGO.length+' produtos no catálogo · '+gavs.length+' gaveteiro'+(gavs.length===1?'':'s')+' na parede';
+    $('btnLimpar').disabled = caixas.length===0;
+    // Sem Posição = catálogo sem nenhuma linha em estoque_localizado
+    const end = new Set(linhasEstoque().map(l=>l.produto_codigo));
+    const sem = CATALOGO.filter(p=>!end.has(p.codigo));
+    $('semPosN').textContent = sem.length;
+    $('semPos').innerHTML = sem.length
+      ? sem.map(p=>`<div><span class="sw" style="background:${p.cor}"></span><span class="cod">${p.codigo}</span>${esc(p.nome)}</div>`).join('')
+      : '<div class="vazio">✓ Todos os produtos têm endereço</div>';
+  }
+
+  let expAberto=0;
+  function abrirExpander(n){
+    expAberto = expAberto===n ? 0 : n;
+    for (const k of [1,2,3]) $('exp'+k).classList.toggle('open', expAberto===k);
+    if (expAberto===1||expAberto===2) setTimeout(()=>$('inp'+expAberto).focus(),50);
+  }
+  document.querySelectorAll('.expHead').forEach(h=>h.addEventListener('click',()=>abrirExpander(+h.dataset.e)));
+
+  // A mesma busca de produto serve aos três lugares (adicionar, onde está, gaveteiro).
+  function filtrar(q){
+    q=q.trim().toLowerCase();
+    if (!q) return [];
+    return CATALOGO.filter(p=>p.nome.toLowerCase().includes(q)||p.codigo.includes(q)).slice(0,7);
+  }
+  function renderSug(el,list,onPick,extra){
+    el.innerHTML=''; el.hidden=!list.length;
+    for (const p of list){
+      const it=document.createElement('button');
+      it.className='sugItem';
+      const ex = extra ? extra(p) : '';
+      it.innerHTML=`<span class="sw" style="background:${p.cor}"></span><span class="cod">${p.codigo}</span><span class="nm">${esc(p.nome)}</span>${ex||`<span class="cat">${p.cat}</span>`}`;
+      it.addEventListener('click',()=>onPick(p));
+      el.appendChild(it);
+    }
+  }
+
+  function armar(a){
+    armado=a;
+    const chip=$('armedChip');
+    chip.classList.toggle('gav', !!a.gav);
+    $('armedSw').style.background = a.gav ? '#7d8fa3' : a.cor;
+    $('armedTx').textContent = a.gav
+      ? '🗄 Gaveteiro — toque num slot livre para colocar'
+      : '✓ '+a.nome+' — toque numa posição para adicionar';
+    chip.hidden=false;
+    abrirExpander(0);
+  }
+  function desarmar(){ armado=null; $('armedChip').hidden=true; }
+  $('armedX').addEventListener('click',desarmar);
+  $('btnNovoGav').addEventListener('click',()=>armar({gav:true}));
+
+  const inp1=$('inp1'), sug1=$('sug1');
+  inp1.addEventListener('input',()=>renderSug(sug1,filtrar(inp1.value),p=>{
+    inp1.value=''; sug1.hidden=true; armar(p);
+  }));
+
+  // Onde está — enxerga caixas e itens de gaveteiro
+  function ondeEsta(codigo){
+    const r=[];
+    for (const c of caixas){
+      if (c.tipo==='gav'){
+        const it=c.itens.find(i=>i.codigo===codigo);
+        if (it) r.push({c, txt:endereco(c.p,c.s)+' · 🗄 '+(c.nome||'Gaveteiro')+' ('+it.qtd+' un)'});
+      } else if (c.codigo===codigo){
+        r.push({c, txt:endereco(c.p,c.s)+' · slot '+(c.slot+1)+(c.qtd!=null?' ('+c.qtd+')':'')});
+      }
+    }
+    return r;
+  }
+  const inp2=$('inp2'), sug2=$('sug2');
+  inp2.addEventListener('input',()=>renderSug(sug2,filtrar(inp2.value),p=>{
+    inp2.value=''; sug2.hidden=true;
+    const achou=ondeEsta(p.codigo);
+    $('resultTx').innerHTML = achou.length
+      ? '<b>'+esc(p.nome)+'</b><br>'+achou.map(a=>esc(a.txt)).join('<br>')
+      : '<b>'+esc(p.nome)+'</b> — sem posição na parede';
+    $('resultChip').hidden=false;
+    if (achou.length){
+      const c0=achou[0].c;
+      gotoSec(Math.floor(c0.p/COLS)); sel={s:c0.s,p:c0.p,slot:c0.slot}; atualizarChip(); kick();
+    }
+    abrirExpander(0);
+  }, p=>{ const n=ondeEsta(p.codigo).length; return n?`<span class="em">📍 ${n}</span>`:'<span class="cat">sem posição</span>'; }));
+  $('resultX').addEventListener('click',()=>$('resultChip').hidden=true);
+
+  // ================= DIALOG QUANTIDADE (genérico) =================
+  let qtyCfg=null;
+  function abrirQtd(cfg){
+    qtyCfg=cfg;
+    $('qtyProd').textContent=cfg.titulo;
+    $('qtyAddr').textContent=cfg.addr;
+    $('qtyVal').value=cfg.valor;
+    $('qtyRemove').textContent=cfg.removerTxt;
+    $('qtyModal').classList.add('open');
+    setTimeout(()=>{ $('qtyVal').focus(); $('qtyVal').select(); },60);
+  }
+  const lerQtd = () => Math.max(0, Math.round(+$('qtyVal').value||0));
+  $('qtyMinus').addEventListener('click',()=>$('qtyVal').value=Math.max(0,lerQtd()-1));
+  $('qtyPlus').addEventListener('click',()=>$('qtyVal').value=lerQtd()+1);
+  const fecharQtd = () => $('qtyModal').classList.remove('open');
+  $('qtyCancel').addEventListener('click',()=>{ fecharQtd(); qtyCfg?.onCancel?.(); });
+  $('qtySave').addEventListener('click',()=>{ const n=lerQtd(); fecharQtd(); qtyCfg?.onSave(n); });
+  $('qtyVal').addEventListener('keydown',e=>{ if(e.key==='Enter') $('qtySave').click(); });
+  $('qtyRemove').addEventListener('click',()=>{ fecharQtd(); qtyCfg?.onRemove(); });
+
+  function abrirQtdCaixa(c){
+    abrirQtd({titulo:nomeDe(c.codigo), addr:endereco(c.p,c.s)+' · slot '+(c.slot+1), valor:c.qtd??0, removerTxt:'Remover caixa',
+      onSave:n=>{ c.qtd=n; atualizarPainel(); toast('Quantidade salva: '+n,'ok'); },
+      onRemove:()=>{ caixas=caixas.filter(x=>x!==c); sel=null; atualizarChip(); rebuild(); kick(); }});
+  }
+
+  // ================= GAVETEIRO =================
+  let confirmaRemover=false;
+  function abrirGaveteiro(g, novo){
+    gavAberto=g; confirmaRemover=false;
+    $('gavNome').value=g.nome;
+    $('gavBusca').value=''; $('gavSug').hidden=true;
+    $('gavGrav').open=false;
+    desenharGaveteiro();
+    $('gavSheet').classList.add('open');
+    if (novo) setTimeout(()=>$('gavNome').focus(),80);
+  }
+  function desenharGaveteiro(flashCod){
+    const g=gavAberto; if(!g) return;
+    const total=g.itens.reduce((a,i)=>a+i.qtd,0);
+    $('gavSelo').textContent='+'+g.itens.length;
+    $('gavAddr').innerHTML='<b>'+endereco(g.p,g.s)+'</b> · slot '+(g.slot+1)+' · '+g.itens.length+' produto'+(g.itens.length===1?'':'s')+' · '+total+' un';
+    $('gavLista').innerHTML = g.itens.length ? g.itens.map((it,i)=>{
+      const p=prodById(it.codigo);
+      return `<div class="gRow${it.codigo===flashCod?' flash':''}" data-i="${i}">
+        <span class="sw" style="background:${p?.cor||'#888'}"></span>
+        <div class="txt"><span class="cod">${it.codigo}</span><span class="nm">${esc(nomeDe(it.codigo))}</span></div>
+        <div class="stepper"><button data-a="menos" aria-label="Menos">−</button><button class="q" data-a="editar" aria-label="Editar quantidade">${it.qtd}</button><button data-a="mais" aria-label="Mais">+</button></div>
+        <button class="del" data-a="tirar" aria-label="Tirar do gaveteiro">🗑</button>
+      </div>`;
+    }).join('') : '<div class="gEmpty">Gaveteiro vazio.<br>Busque acima para colocar as peças que ficam nele.</div>';
+    if (flashCod) $('gavLista').querySelector('.flash')?.scrollIntoView({block:'nearest'});
+    // linhas que este gaveteiro grava em estoque_localizado
+    const linhas=linhasEstoque().filter(l=>l.local_num===estDe(g.p)&&l.face_ou_coluna===colDe(g.p)&&l.andar_ou_nivel===g.s&&g.itens.some(i=>i.codigo===l.produto_codigo));
+    $('gavGravSum').textContent='Gravação em estoque_localizado · '+linhas.length+' linha'+(linhas.length===1?'':'s');
+    $('gavGravTab').innerHTML='<tr><th>produto_codigo</th><th>local</th><th>local_num</th><th>coluna</th><th>nivel</th><th>qtd</th><th>end.</th></tr>'+
+      linhas.map(l=>`<tr><td>${l.produto_codigo}</td><td>${l.local_tipo}</td><td class="n">${l.local_num}</td><td class="n">${l.face_ou_coluna}</td><td class="n">${l.andar_ou_nivel}</td><td class="n">${l.quantidade}${l.origens.includes('caixa')?' <span class="soma">(+cx)</span>':''}</td><td>${l.endereco}</td></tr>`).join('');
+    const rb=$('gavRemover');
+    rb.classList.toggle('armado',confirmaRemover);
+    rb.innerHTML = confirmaRemover ? 'Toque de novo p/ remover' : '🗑 Remover gaveteiro';
+    rebuild(); atualizarChip(); kick();
+  }
+  $('gavLista').addEventListener('click',e=>{
+    const b=e.target.closest('button[data-a]'); if(!b) return;
+    const g=gavAberto, i=+b.closest('.gRow').dataset.i, it=g.itens[i];
+    const a=b.dataset.a;
+    if (a==='mais'){ it.qtd++; desenharGaveteiro(); }
+    else if (a==='menos'){ it.qtd=Math.max(0,it.qtd-1); desenharGaveteiro(); }
+    else if (a==='tirar'){ g.itens.splice(i,1); desenharGaveteiro(); toast(nomeDe(it.codigo)+' saiu do gaveteiro','ok'); }
+    else if (a==='editar') editarItem(it);
+  });
+  function editarItem(it, recemAdicionado){
+    abrirQtd({titulo:nomeDe(it.codigo), addr:endereco(gavAberto.p,gavAberto.s)+' · 🗄 '+(gavAberto.nome||'Gaveteiro'),
+      valor:it.qtd, removerTxt:'Tirar do gaveteiro',
+      onSave:n=>{ it.qtd=n; desenharGaveteiro(it.codigo); },
+      onCancel:()=>{ if(recemAdicionado) desenharGaveteiro(it.codigo); },
+      onRemove:()=>{ gavAberto.itens=gavAberto.itens.filter(x=>x!==it); desenharGaveteiro(); }});
+  }
+  $('gavNome').addEventListener('input',()=>{ gavAberto.nome=$('gavNome').value.trim(); atualizarChip(); });
+  const gavBusca=$('gavBusca'), gavSug=$('gavSug');
+  gavBusca.addEventListener('input',()=>renderSug(gavSug,filtrar(gavBusca.value),p=>{
+    gavBusca.value=''; gavSug.hidden=true;
+    const ja=gavAberto.itens.find(i=>i.codigo===p.codigo);
+    if (ja){ toast('Já está no gaveteiro — ajuste a quantidade'); desenharGaveteiro(p.codigo); return; }
+    const it={codigo:p.codigo,qtd:1};
+    gavAberto.itens.push(it);
+    desenharGaveteiro(p.codigo);
+    editarItem(it,true);
+  }, p=>gavAberto?.itens.some(i=>i.codigo===p.codigo)?'<span class="em">✓ já está</span>':''));
+  $('gavRemover').addEventListener('click',()=>{
+    if (!confirmaRemover && gavAberto.itens.length){ confirmaRemover=true; desenharGaveteiro(); return; }
+    const n=gavAberto.itens.length;
+    caixas=caixas.filter(c=>c!==gavAberto); gavAberto=null; sel=null;
+    $('gavSheet').classList.remove('open');
+    rebuild(); atualizarChip(); kick();
+    toast('Gaveteiro removido'+(n?' · '+n+' produtos voltam p/ Sem Posição':''),'ok');
+  });
+  function fecharGaveteiro(){
+    if (gavAberto && !gavAberto.nome) gavAberto.nome='Gaveteiro';
+    gavAberto=null; $('gavSheet').classList.remove('open');
+    rebuild(); atualizarChip(); kick();
+  }
+  $('gavOk').addEventListener('click',fecharGaveteiro);
+  $('gavSheet').addEventListener('click',e=>{ if(e.target===$('gavSheet')) fecharGaveteiro(); });
+
+  // ================= TOAST =================
+  let toastT=null;
+  function toast(msg,cls){
+    const t=$('toast'); t.textContent=msg; t.className='show'+(cls?' '+cls:'');
+    clearTimeout(toastT); toastT=setTimeout(()=>t.className='',2200);
+  }
+
+  // ================= LIMPAR / SALVAR =================
+  let limparArmado=false;
+  $('btnLimpar').addEventListener('click',()=>{
+    if (!caixas.length) return;
+    if (!limparArmado){
+      limparArmado=true; $('btnLimpar').textContent='Toque de novo ('+caixas.length+')';
+      setTimeout(()=>{ limparArmado=false; $('btnLimpar').innerHTML='🗑 Limpar'; },2500);
+      return;
+    }
+    limparArmado=false; $('btnLimpar').innerHTML='🗑 Limpar';
+    caixas=[]; sel=null; atualizarChip(); rebuild(); kick();
+  });
+  $('btnSalvar').addEventListener('click',()=>{
+    const out={
+      estante_layout: caixas.filter(c=>c.tipo!=='gav').map(c=>({estante_num:estDe(c.p),coluna:colDe(c.p),nivel:c.s,slot:c.slot,produto_codigo:c.codigo,produto_nome:nomeDe(c.codigo)})),
+      estante_gaveteiros: caixas.filter(c=>c.tipo==='gav').map(c=>({estante_num:estDe(c.p),coluna:colDe(c.p),nivel:c.s,slot:c.slot,endereco:endereco(c.p,c.s),nome:c.nome||'Gaveteiro',
+        itens:c.itens.map(i=>({produto_codigo:i.codigo,produto_nome:nomeDe(i.codigo),quantidade:i.qtd}))})),
+      estoque_localizado: linhasEstoque().map(({origens,...l})=>l),
+    };
+    $('jsonOut').value=JSON.stringify(out,null,2);
+    $('saveModal').classList.add('open');
+  });
+  $('btnFechar').addEventListener('click',()=>$('saveModal').classList.remove('open'));
+  $('btnCopiar').addEventListener('click',async()=>{
+    const ta=$('jsonOut');
+    try{ await navigator.clipboard.writeText(ta.value); }catch(e){ ta.select(); }
+    $('btnCopiar').textContent='Copiado ✓';
+    setTimeout(()=>$('btnCopiar').textContent='Copiar',1500);
+  });
+
+  if (document.fonts) document.fonts.ready.then(()=>render());
+  sel={s:2,p:0,slot:1};
+  rebuild(); atualizarChip(); resize();
+})();
+</script>
+
+</html>
