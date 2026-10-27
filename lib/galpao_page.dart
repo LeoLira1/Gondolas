@@ -289,6 +289,9 @@ class _GalpaoPageState extends State<GalpaoPage> {
     if (!mounted || !_persistindo) return;
     _carregarPilhas();
     unawaited(_carregarCatalogo());
+    // A lista de estocados também muda (entrega no app Estocados): é ela que
+    // dispara a baixa automática do palete entregue.
+    unawaited(_carregarEstocados());
     // Uma sincronização também traz as confirmações feitas no app de contagem:
     // rack conferido no meio do caminho tem de apagar sem o usuário pedir.
     if (_modoConferencia && _consultandoConferencia) {
@@ -482,12 +485,53 @@ class _GalpaoPageState extends State<GalpaoPage> {
       final itens = await carregarEstocados();
       if (!mounted) return;
       setState(() {
+        _itensEstocados = itens;
         _estocados = itens.map(produtoDeEstocado).toList();
         _aplicarCatalogo(_catalogo);
       });
+      _baixarEstocadosEntregues();
     } catch (_) {
-      // Sem a lista, o painel segue com o catálogo da loja.
+      // Sem a lista, o painel segue com o catálogo da loja — e sem baixa
+      // automática: sem saber o saldo, nenhum palete sai.
     }
+  }
+
+  /// A lista de `materiais_terceiros` (saldo > 0) como veio do banco. Null
+  /// até a primeira leitura dar certo.
+  List<ItemEstocado>? _itensEstocados;
+
+  /// Baixa automática do estocado entregue: o palete "EST:" cujo item saiu da
+  /// lista (saldo zerado, o cooperado levou) sai do endereço sozinho, pela
+  /// mesma operação do "Retirar do endereço". Roda quando as pilhas e a lista
+  /// estão as duas na mão, em qualquer ordem que cheguem.
+  void _baixarEstocadosEntregues() {
+    final itens = _itensEstocados;
+    if (!_persistindo || itens == null || _carregandoPilhas) return;
+    final racks = [
+      for (final pilha in _pilhas.values)
+        for (final r in pilha)
+          if (!r.misto && r.rackUuid != null) r,
+    ];
+    final entregues = paletesEstocadosEntregues<RackGalpao>(
+      comSaldo: itens,
+      paletes: racks,
+      codigo: (r) => r.produtoCodigo,
+      nome: (r) => r.produtoNome,
+    )
+      // De cima para baixo: esvaziar desce a pilha, e o nível dos de baixo
+      // continua valendo.
+      ..sort((a, b) => b.ordem.compareTo(a.ordem));
+    if (entregues.isEmpty) return;
+    for (final r in entregues) {
+      _onEsvaziar(r.posicao, r.ordem);
+    }
+    _avisar(avisoBaixaEstocados([
+      for (final r in entregues.reversed)
+        (
+          nome: r.produtoNome.isEmpty ? r.produtoCodigo : r.produtoNome,
+          endereco: 'Galpão ${r.posicao} · N${r.ordem}',
+        ),
+    ]));
   }
 
   void _onTapEndereco(ToqueGalpao? toque) {
@@ -600,6 +644,7 @@ class _GalpaoPageState extends State<GalpaoPage> {
         ..addAll(pilhas);
       _carregandoPilhas = false;
     });
+    _baixarEstocadosEntregues();
   }
 
   void _aoMudarFila() {

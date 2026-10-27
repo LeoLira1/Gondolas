@@ -194,3 +194,51 @@ String resumoOcupacao({required int totalVagas, required Iterable<String> codigo
     if (loja > 0) '$loja loja',
   ].join(' · ');
 }
+
+/// Chave de comparação do nome do palete: sem acento, sem maiúscula e com os
+/// espaços normalizados — um espaço a mais na razão social não pode fazer um
+/// palete com saldo parecer entregue.
+String chaveDoPalete(String nome) =>
+    _normalizar(nome).trim().replaceAll(RegExp(r'\s+'), ' ');
+
+/// Baixa automática do estocado entregue: os paletes "EST:" cujo item não
+/// tem mais saldo em `materiais_terceiros` (o cooperado já levou tudo).
+///
+/// Devolve os paletes de [paletes] que devem sair do endereço, na ordem em
+/// que vieram. A ligação é pelo nome do palete ([nomeDoPalete]), a mesma do
+/// "📍 endereço" da lista de estocados.
+///
+/// Lista [comSaldo] vazia devolve NADA: tabela vazia ou lida pela metade é
+/// mais provável que "todos os cooperados levaram tudo", e apagar o galpão
+/// inteiro por uma leitura ruim não tem volta.
+List<T> paletesEstocadosEntregues<T>({
+  required Iterable<ItemEstocado> comSaldo,
+  required Iterable<T> paletes,
+  required String Function(T) codigo,
+  required String Function(T) nome,
+}) {
+  final chaves = {
+    for (final i in comSaldo)
+      if (i.saldo > 0) chaveDoPalete(nomeDoPalete(i)),
+  };
+  if (chaves.isEmpty) return const [];
+  return [
+    for (final p in paletes)
+      if (codigoEhEstocado(codigo(p)) && !chaves.contains(chaveDoPalete(nome(p))))
+        p,
+  ];
+}
+
+/// Texto da faixa depois da baixa automática: `Baixa automática: VANTACOR 1L ·
+/// MARCELO saiu de Galpão 43 · N3 (entregue ao cooperado).`
+String avisoBaixaEstocados(List<({String nome, String endereco})> baixados) {
+  if (baixados.isEmpty) return '';
+  if (baixados.length == 1) {
+    final b = baixados.first;
+    return 'Baixa automática: ${b.nome} saiu de ${b.endereco} '
+        '(entregue ao cooperado).';
+  }
+  final enderecos = baixados.map((b) => b.endereco).join(', ');
+  return 'Baixa automática: ${baixados.length} paletes de estocado entregues '
+      'saíram ($enderecos).';
+}

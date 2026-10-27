@@ -151,6 +151,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
     if (!mounted || !_persistindo) return;
     unawaited(_carregarEnderecos());
     unawaited(_carregarCatalogo());
+    unawaited(_carregarEstocados());
     if (_modoConferencia && _consultandoConferencia) {
       unawaited(_carregarConferencia());
     }
@@ -193,6 +194,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
         _selecionadoId = inicial;
       }
     });
+    _baixarEstocadosEntregues();
   }
 
   Future<void> _carregarCatalogo() async {
@@ -221,12 +223,43 @@ class _BarracaoPageState extends State<BarracaoPage> {
       final itens = await carregarEstocados();
       if (!mounted) return;
       setState(() {
+        _itensEstocados = itens;
         _estocados = itens.map(produtoDeEstocado).toList();
         _aplicarCatalogo(_catalogo);
       });
+      _baixarEstocadosEntregues();
     } catch (_) {
-      // Sem a lista, o painel segue com o catálogo da loja.
+      // Sem a lista, o painel segue com o catálogo da loja — e sem baixa
+      // automática: sem saber o saldo, nenhum palete sai.
     }
+  }
+
+  /// A lista de `materiais_terceiros` (saldo > 0). Null até a primeira
+  /// leitura dar certo.
+  List<ItemEstocado>? _itensEstocados;
+
+  /// Baixa automática do estocado entregue (ver o galpão): palete "EST:" cujo
+  /// item saiu da lista é esvaziado sozinho, como no "Esvaziar" do painel.
+  void _baixarEstocadosEntregues() {
+    final itens = _itensEstocados;
+    if (!_persistindo || itens == null || _carregandoEnderecos) return;
+    final entregues = paletesEstocadosEntregues<EnderecoBarracao>(
+      comSaldo: itens,
+      paletes: _enderecos.where((e) => e.ocupado),
+      codigo: (e) => e.produtoCodigo,
+      nome: (e) => e.produtoNome,
+    );
+    if (entregues.isEmpty) return;
+    for (final e in entregues) {
+      _esvaziar(e.id);
+    }
+    _avisar(avisoBaixaEstocados([
+      for (final e in entregues)
+        (
+          nome: e.produtoNome.isEmpty ? e.produtoCodigo : e.produtoNome,
+          endereco: e.rotulo,
+        ),
+    ]));
   }
 
   EnderecoBarracao? _porId(int id) {
