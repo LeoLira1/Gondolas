@@ -166,6 +166,9 @@ const Set<String> operacoesDeRevisaoManual = {
   'layout.salvarEstante',
   'barracao.atribuir',
   'barracao.esvaziar',
+  'barracao.empilhar',
+  'barracao.ajustarGaiola',
+  'barracao.esvaziarGaiola',
   'estoqueLocalizado.concluirContagem',
 };
 

@@ -11,7 +11,10 @@ const List<String> _andarNomes = ['Base', 'Meio', 'Topo'];
 
 /// Abre o dialog de quantidades por endereço de um produto. Chamado ao tocar
 /// numa caixa existente (gôndola ou estante), fora do modo de edição de layout.
-Future<void> mostrarQuantidadeDialog(
+///
+/// Devolve os endereços excluídos na lixeira, para a tela tirar do layout a
+/// caixa do produto que estava neles.
+Future<List<EnderecoLocalizado>> mostrarQuantidadeDialog(
   BuildContext context, {
   required String produtoCodigo,
   required String produtoNome,
@@ -19,8 +22,15 @@ Future<void> mostrarQuantidadeDialog(
   required int localNum,
   required int faceOuColuna,
   required int andarOuNivel,
-}) {
-  return showDialog<void>(
+  // Caixa de estante que aceita mais produtos (ver caixa_mista.dart): o
+  // rodapé ganha "Outro produto nesta caixa (n/5)". O botão salva o que foi
+  // digitado, fecha o diálogo e, depois de fechado, chama [onOutroProduto].
+  String? rotuloOutroProduto,
+  VoidCallback? onOutroProduto,
+}) async {
+  final excluidos = <EnderecoLocalizado>[];
+  var pediuOutroProduto = false;
+  await showDialog<void>(
     context: context,
     builder: (_) => _QuantidadeDialog(
       produtoCodigo: produtoCodigo,
@@ -29,8 +39,13 @@ Future<void> mostrarQuantidadeDialog(
       localNum: localNum,
       faceOuColuna: faceOuColuna,
       andarOuNivel: andarOuNivel,
+      excluidos: excluidos,
+      rotuloOutroProduto: onOutroProduto == null ? null : rotuloOutroProduto,
+      aoPedirOutroProduto: () => pediuOutroProduto = true,
     ),
   );
+  if (pediuOutroProduto) onOutroProduto?.call();
+  return excluidos;
 }
 
 String _labelEndereco(EnderecoLocalizado e) {
@@ -101,6 +116,11 @@ class _QuantidadeDialog extends StatefulWidget {
   final int localNum;
   final int faceOuColuna;
   final int andarOuNivel;
+  // Recebe cada endereço excluído na lixeira (ver mostrarQuantidadeDialog).
+  final List<EnderecoLocalizado> excluidos;
+  // Rótulo do "Outro produto nesta caixa" — null esconde o botão.
+  final String? rotuloOutroProduto;
+  final VoidCallback? aoPedirOutroProduto;
 
   const _QuantidadeDialog({
     required this.produtoCodigo,
@@ -109,6 +129,9 @@ class _QuantidadeDialog extends StatefulWidget {
     required this.localNum,
     required this.faceOuColuna,
     required this.andarOuNivel,
+    required this.excluidos,
+    this.rotuloOutroProduto,
+    this.aoPedirOutroProduto,
   });
 
   @override
@@ -310,6 +333,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
 
   void _removerLinhaLocal(_LinhaEndereco l) {
     _editou = true;
+    widget.excluidos.add(l.endereco);
     setState(() {
       _linhas.remove(l);
       _linhasRemovidas.add(l);
@@ -337,7 +361,8 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     final qtd = l.endereco.quantidade;
     final avisos = <String>[
       'Excluir o endereço ${_labelEndereco(l.endereco)}? '
-          'O registro de quantidade deste endereço será apagado.',
+          'O registro de quantidade deste endereço será apagado e a caixa '
+          'sai da ${l.endereco.ehGondola ? 'gôndola' : 'estante'}.',
       if (qtd > 0)
         'Este endereço tem ${_fmtQtd(qtd)} un registradas — o total contado '
             'do produto vai diminuir.',
@@ -636,6 +661,10 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
                   ),
                   const SizedBox(height: 10),
                   _buildResumo(),
+                  if (widget.rotuloOutroProduto != null) ...[
+                    const SizedBox(height: 10),
+                    _buildOutroProduto(),
+                  ],
                 ],
               ),
       ),
@@ -646,6 +675,27 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
       // saída. As ações de GRAVAÇÃO é que ficam travadas enquanto carrega —
       // salvar antes de saber o que já existe no endereço apagaria contagem.
       actions: [_buildAcoes()],
+    );
+  }
+
+  /// "Outro produto nesta caixa (n/5)": grava o que já foi digitado (como o
+  /// Salvar) e devolve a vez à estante, que abre a lista da caixa.
+  Widget _buildOutroProduto() {
+    return OutlinedButton.icon(
+      key: const Key('qtd_outro_produto_caixa'),
+      onPressed: (_salvando || _carregando || _erroCarga != null)
+          ? null
+          : () {
+              widget.aoPedirOutroProduto?.call();
+              _onSalvar();
+            },
+      icon: const Icon(Icons.add, size: 18),
+      label: Text(widget.rotuloOutroProduto!),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFFf0a35e),
+        side: const BorderSide(color: Color(0x8Ce87722)),
+        minimumSize: const Size(double.infinity, 42),
+      ),
     );
   }
 

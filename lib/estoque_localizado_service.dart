@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:libsql_dart/libsql_dart.dart';
 
+import 'badges_estoque.dart';
 import 'gravacao_lote.dart';
 import 'models.dart';
 import 'turso_service.dart';
@@ -149,204 +150,120 @@ class EstoqueLocalizadoService {
     return TursoService().client;
   }
 
-  // Cache em memória dos endereços desatualizados, carregado uma vez ao abrir
-  // cada cena (e recarregado após salvar no dialog de quantidade) — nunca
-  // consultado durante o paint.
+  // Selos calculados da última vez (ver fetchEnderecosDesatualizados e
+  // fetchEnderecosDivergentes). Ficam em memória para o painter das cenas e o
+  // diálogo consultarem sem ida ao banco.
   Map<String, EnderecoDesatualizado> _desatualizadosCache = {};
-
-  // Cache em memória dos endereços com divergência de contagem, no mesmo
-  // esquema de chave dos desatualizados. Carregado junto e nunca consultado
-  // durante o paint.
   Set<String> _divergentesCache = {};
-
   // Subconjunto de _divergentesCache cuja divergência é POSITIVA (quantidade
-  // contada maior que a do sistema). Preenchido pela mesma query, para as
-  // cenas pintarem essas caixas de azul escuro em vez de vermelho.
+  // contada maior que a do sistema): as cenas pintam de azul escuro em vez de
+  // vermelho.
   Set<String> _divergentesPositivasCache = {};
 
-  // Validade dos dois caches acima entre aberturas de cena. As queries que os
-  // preenchem têm JOIN/GROUP BY caros (varrem inventario_cicli, contagem_itens
-  // e estoque_mestre inteiras) e antes rodavam a CADA abertura. Com um TTL
-  // curto, reabrir uma cena reaproveita o resultado em memória; uma gravação
-  // (upsert/delete/contagem) ou uma sincronização (forceRefresh) invalidam na
-  // hora.
-  DateTime? _desatualizadosCacheEm;
-  DateTime? _divergentesCacheEm;
-  static const Duration _cacheTtl = Duration(minutes: 2);
-
-  // Qual coluna de contagem_itens existe neste ambiente (ver
-  // fetchEnderecosDesatualizados). Descoberto na primeira consulta e reusado
-  // dali em diante: sem isso, num banco sem `confirmado_em`, a query mais cara
-  // do app rodava DUAS vezes a cada chamada — a tentativa e o fallback. Volta a
-  // null se a coluna memorizada falhar, então o app se corrige sozinho caso o
-  // dashboard irmão adicione a coluna depois.
-  String? _colunaConfirmacao;
-
-  // Invalida os caches de badges após uma gravação, para a próxima leitura
-  // refletir o novo atualizado_em / status_ciclo sem esperar o TTL.
-  void _invalidarCachesBadges() {
-    _desatualizadosCacheEm = null;
-    _divergentesCacheEm = null;
-  }
-
-  /// Busca, numa única query (JOIN com subquery de MAX das duas fontes de
-  /// contagem confirmada), todos os endereços cujo atualizado_em é anterior
-  /// à última contagem confirmada do produto. Atualiza o cache em memória e
-  /// devolve o conjunto de chaves (ver [chaveEnderecoEstoque]).
+  /// Os endereços cujo atualizado_em é anterior à última contagem confirmada
+  /// do produto (inventário cíclico ou app de contagem). Atualiza o cache em
+  /// memória e devolve o conjunto de chaves (ver [chaveEnderecoEstoque]).
   ///
-  /// contagem_itens.confirmado_em é uma coluna adicionada por migração no
-  /// dashboard e pode não existir em todos os ambientes: se a query falhar
-  /// por isso, refaz usando registrado_em como fallback.
+  /// Calculado em Dart ([calcularDesatualizados]) a partir de três cópias de
+  /// leitura: as quantidades e a última contagem de cada produto em cada
+  /// fonte. Antes era um JOIN que varria inventario_cicli, contagem_itens e
+  /// estoque_localizado inteiros, forçado a cada dataRevision e a cada linha
+  /// salva — o maior consumo de rows read da loja. Agora recalcular é de
+  /// graça, e cada cópia volta ao banco só quando passa da própria janela.
+  /// Uma gravação deste aparelho já corrige as cópias na hora.
+  ///
+  /// Sem alguma das cópias (e sem rede para buscá-la), devolve o último
+  /// cálculo — como antes, quando a consulta falhava.
+  ///
+  /// [atualizarSeVencida]: espera a releitura das contagens que passaram da
+  /// janela (a tela que volta do bloqueio; as cópias de contagem não avisam
+  /// quando mudam, então releitura por trás não repintaria os selos).
   Future<Set<String>> fetchEnderecosDesatualizados({
     bool forceRefresh = false,
+    bool atualizarSeVencida = false,
   }) async {
-    final em = _desatualizadosCacheEm;
-    if (!forceRefresh &&
-        em != null &&
-        DateTime.now().difference(em) < _cacheTtl) {
-      return _desatualizadosCache.keys.toSet();
-    }
-
-    final client = await _conexao();
-    if (client == null) return _desatualizadosCache.keys.toSet();
-
-    // Ordem de tentativa: a coluna que já funcionou antes primeiro; só se ela
-    // falhar (ou na primeira vez) é que se tenta a outra.
-    final preferida = _colunaConfirmacao ?? 'confirmado_em';
-    final alternativa = preferida == 'confirmado_em'
-        ? 'registrado_em'
-        : 'confirmado_em';
-
-    List<dynamic> rows;
     try {
-      rows = await _queryDesatualizados(client, colunaConfirmacao: preferida);
-      _colunaConfirmacao = preferida;
-    } catch (_) {
-      try {
-        rows = await _queryDesatualizados(
-          client,
-          colunaConfirmacao: alternativa,
+      final turso = TursoService();
+      final resultados = await Future.wait([
+        turso.consultarQuantidades(falharSemCache: true),
+        turso.consultarUltimasContagensCiclico(
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+        ),
+        turso.consultarUltimasContagensItens(
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+        ),
+      ]);
+      final novo = <String, EnderecoDesatualizado>{};
+      for (final a in calcularDesatualizados(
+        enderecos: resultados[0],
+        ultimasContagens: [...resultados[1], ...resultados[2]],
+      )) {
+        final r = a.endereco;
+        final item = EnderecoDesatualizado(
+          produtoCodigo: r['produto_codigo'] as String? ?? '',
+          localTipo: r['local_tipo'] as String? ?? 'gondola',
+          localNum: r['local_num'] as int? ?? 0,
+          faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
+          andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
+          atualizadoEm: r['atualizado_em'] as String? ?? '',
+          ultimaContagemEm: a.ultima,
         );
-        _colunaConfirmacao = alternativa;
-      } catch (_) {
-        _colunaConfirmacao = null;
-        return _desatualizadosCache.keys.toSet();
+        novo[item.chave] = item;
       }
+      _desatualizadosCache = novo;
+    } catch (_) {
+      // Sem cópia e sem rede: fica o último cálculo.
     }
-
-    final novoCache = <String, EnderecoDesatualizado>{};
-    for (final dynamic row in rows) {
-      final r = row as Map<String, dynamic>;
-      final ultima = r['ultima'] as String?;
-      final atual = r['atualizado_em'] as String?;
-      if (ultima == null || atual == null) continue;
-
-      final dtUltima = DateTime.tryParse(ultima);
-      final dtAtual = DateTime.tryParse(atual);
-      if (dtUltima == null || dtAtual == null)
-        continue; // formato inválido: ignora
-      if (!dtAtual.isBefore(dtUltima)) continue;
-
-      final item = EnderecoDesatualizado(
-        produtoCodigo: r['produto_codigo'] as String? ?? '',
-        localTipo: r['local_tipo'] as String? ?? 'gondola',
-        localNum: r['local_num'] as int? ?? 0,
-        faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
-        andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
-        atualizadoEm: atual,
-        ultimaContagemEm: ultima,
-      );
-      novoCache[item.chave] = item;
-    }
-    _desatualizadosCache = novoCache;
-    _desatualizadosCacheEm = DateTime.now();
-    return novoCache.keys.toSet();
+    return _desatualizadosCache.keys.toSet();
   }
 
-  Future<List<dynamic>> _queryDesatualizados(
-    LibsqlClient client, {
-    required String colunaConfirmacao,
-  }) async {
-    final stmt = await client.prepare('''
-      SELECT el.produto_codigo, el.local_tipo, el.local_num, el.face_ou_coluna,
-             el.andar_ou_nivel, el.atualizado_em, uc.ultima
-      FROM estoque_localizado el
-      JOIN (
-        SELECT produto_codigo, MAX(dt) AS ultima FROM (
-          SELECT produto_id AS produto_codigo, contado_em AS dt
-          FROM inventario_cicli WHERE contado_em IS NOT NULL
-          UNION ALL
-          SELECT codigo AS produto_codigo, $colunaConfirmacao AS dt
-          FROM contagem_itens WHERE status != 'pendente' AND $colunaConfirmacao IS NOT NULL
-        )
-        GROUP BY produto_codigo
-      ) uc ON uc.produto_codigo = el.produto_codigo
-    ''');
-    return (await stmt.query()) as List<dynamic>;
-  }
-
-  /// Busca os endereços cujo produto está marcado com divergência de contagem
-  /// no ciclo — estoque_mestre.status_ciclo = 'divergencia', gravado por
-  /// [concluirContagem] quando o total contado difere de qtd_sistema. Como a
-  /// divergência é do produto (qtd_sistema não existe por endereço), todos os
-  /// endereços do produto divergente entram no conjunto, no mesmo formato de
-  /// chave ([chaveEnderecoEstoque]) usado pelos desatualizados. Atualiza o
-  /// cache em memória e devolve o conjunto de chaves.
   /// Subconjunto das divergências (ver [fetchEnderecosDivergentes]) cuja
   /// diferença é positiva — contou-se mais do que o sistema tinha. Lido do
   /// cache preenchido pela última chamada de fetchEnderecosDivergentes, sem
   /// ida ao banco; deve ser consultado depois dela.
   Set<String> get divergentesPositivas => _divergentesPositivasCache;
 
+  /// Os endereços cujo produto está com divergência no ciclo
+  /// (estoque_mestre.status_ciclo = 'divergencia', gravado por
+  /// [concluirContagem] e pelos apps irmãos). Como a divergência é do
+  /// produto, todos os endereços dele entram. Atualiza o cache em memória e
+  /// devolve o conjunto de chaves.
+  ///
+  /// Calculado em Dart ([calcularDivergentes]) a partir da cópia das
+  /// quantidades e da cópia dos produtos divergentes — que, pelo índice de
+  /// status_ciclo, lê só os divergentes.
   Future<Set<String>> fetchEnderecosDivergentes({
     bool forceRefresh = false,
+    bool atualizarSeVencida = false,
   }) async {
-    final em = _divergentesCacheEm;
-    if (!forceRefresh &&
-        em != null &&
-        DateTime.now().difference(em) < _cacheTtl) {
-      return _divergentesCache;
-    }
-
-    final client = await _conexao();
-    if (client == null) return _divergentesCache;
-
     try {
-      final stmt = await client.prepare('''
-        SELECT el.produto_codigo, el.local_tipo, el.local_num,
-               el.face_ou_coluna, el.andar_ou_nivel,
-               em.qtd_contada_ciclo, em.qtd_sistema_na_contagem
-        FROM estoque_localizado el
-        JOIN estoque_mestre em ON em.codigo = el.produto_codigo
-        WHERE em.status_ciclo = 'divergencia'
-      ''');
-      final rows = (await stmt.query()) as List<dynamic>;
-      final novo = <String>{};
-      final novoPositivas = <String>{};
-      for (final dynamic row in rows) {
-        final r = row as Map<String, dynamic>;
-        final chave = chaveEnderecoEstoque(
-          produtoCodigo: r['produto_codigo'] as String? ?? '',
-          localTipo: r['local_tipo'] as String? ?? 'gondola',
-          localNum: r['local_num'] as int? ?? 0,
-          faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
-          andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
-        );
-        novo.add(chave);
-        // Divergência positiva: contou-se mais do que o sistema registrava.
-        final contada = (r['qtd_contada_ciclo'] as num?)?.toDouble();
-        final sistema = (r['qtd_sistema_na_contagem'] as num?)?.toDouble();
-        if (contada != null && sistema != null && contada > sistema) {
-          novoPositivas.add(chave);
-        }
-      }
-      _divergentesCache = novo;
-      _divergentesPositivasCache = novoPositivas;
-      _divergentesCacheEm = DateTime.now();
-      return novo;
+      final turso = TursoService();
+      final resultados = await Future.wait([
+        turso.consultarQuantidades(falharSemCache: true),
+        turso.consultarDivergentesCiclo(
+          forceRefresh: forceRefresh,
+          atualizarSeVencida: atualizarSeVencida,
+        ),
+      ]);
+      final calculo = calcularDivergentes(
+        enderecos: resultados[0],
+        divergentesCiclo: resultados[1],
+      );
+      String chave(Map<String, dynamic> r) => chaveEnderecoEstoque(
+        produtoCodigo: r['produto_codigo'] as String? ?? '',
+        localTipo: r['local_tipo'] as String? ?? 'gondola',
+        localNum: r['local_num'] as int? ?? 0,
+        faceOuColuna: r['face_ou_coluna'] as int? ?? 0,
+        andarOuNivel: r['andar_ou_nivel'] as int? ?? 0,
+      );
+      _divergentesCache = calculo.divergentes.map(chave).toSet();
+      _divergentesPositivasCache = calculo.positivas.map(chave).toSet();
     } catch (_) {
-      return _divergentesCache;
+      // Sem cópia e sem rede: fica o último cálculo.
     }
+    return _divergentesCache;
   }
 
   /// Consulta o cache em memória (sem ida ao banco) — usado pelo painter das
@@ -400,7 +317,11 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ? ORDER BY local_tipo, local_num, face_ou_coluna, andar_ou_nivel',
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
-      return (rows as List<dynamic>).map((dynamic row) {
+      TursoService().contarLeitura(
+        'enderecos_produto',
+        (rows as List<dynamic>).length,
+      );
+      return rows.map((dynamic row) {
         final r = row as Map<String, dynamic>;
         return _enderecoDaLinha(r);
       }).toList();
@@ -450,6 +371,7 @@ class EstoqueLocalizadoService {
       );
       final rows = await stmt.query(positional: [produtoCodigo]);
       final list = rows as List<dynamic>;
+      TursoService().contarLeitura('info_mestre', list.length);
       if (list.isEmpty) return null;
       final r = list.first as Map<String, dynamic>;
       return InfoEstoqueMestre(
@@ -477,6 +399,7 @@ class EstoqueLocalizadoService {
     required int andarOuNivel,
     required double quantidade,
     String origem = 'gondolas_app',
+    bool avisar = true,
   }) async {
     final turso = TursoService();
     final uuid = gerarUuidV4();
@@ -533,31 +456,65 @@ class EstoqueLocalizadoService {
     } catch (_) {
       return false;
     }
-    _invalidarCachesBadges();
-    await turso.marcarGravacaoLocal();
-    // A cópia das quantidades do produto é relida por trás: quem gravou já
-    // tem o número na tela, e esperar essa leitura era mais uma ida ao banco
-    // segurando o "salvando".
-    unawaited(_atualizarCopiaDoProduto(produtoCodigo));
+    // A cópia das quantidades não expira: o produto é relido logo abaixo
+    // (pelo UNIQUE com produto_codigo na frente), e expirar mandaria reler o
+    // estoque_localizado inteiro a cada caixa salva.
+    await turso.marcarGravacaoLocal(expirarQuantidades: false);
+    // A cópia do produto é relida por trás: quem gravou já tem o número na
+    // tela, e esperar essa leitura era mais uma ida ao banco segurando o
+    // "salvando". Os selos se recalculam dela quando o aviso chega.
+    //
+    // Sem aviso (a baixa grava em série e avisa uma vez no fim), a releitura
+    // é esperada: o aviso do fim tem que chegar com a cópia já corrigida,
+    // senão as telas recalculavam do número antigo e ninguém avisava de novo.
+    if (avisar) {
+      unawaited(_atualizarCopiaDoProduto(produtoCodigo));
+    } else {
+      await _atualizarCopiaDoProduto(produtoCodigo, avisar: false);
+    }
     return true;
   }
 
-  Future<void> _atualizarCopiaDoProduto(String produtoCodigo) async {
+  /// Relê do servidor as linhas de UM produto e corrige a cópia das
+  /// quantidades. Corrige ou expira: sem a releitura, a cópia ficaria sem a
+  /// gravação até a janela vencer.
+  Future<void> _atualizarCopiaDoProduto(
+    String produtoCodigo, {
+    bool avisar = true,
+  }) async {
     try {
       final client = await _conexao();
-      if (client == null) return;
+      if (client == null) {
+        _expirarCopia(avisar);
+        return;
+      }
       final rows = await client.query(
         'SELECT id, produto_codigo, local_tipo, local_num, face_ou_coluna, '
         'andar_ou_nivel, quantidade, atualizado_em FROM estoque_localizado '
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura('quantidades_produto', rows.length);
       await TursoService().guardarQuantidadesProduto(
         produtoCodigo,
         rows.map((r) => Map<String, dynamic>.from(r)).toList(),
+        avisar: avisar,
       );
     } catch (_) {
-      // A cópia se corrige no próximo refresh: a cache já foi expirada.
+      _expirarCopia(avisar);
+    }
+  }
+
+  /// A cópia ficou sem a gravação. Expirar só manda a PRÓXIMA leitura ao
+  /// banco — e a tela que já recalculou os selos ao fechar o diálogo não lê
+  /// de novo. Então a releitura sai já, por trás: quando ela trouxer a
+  /// gravação, o aviso de dados novos recalcula as telas. (Quem grava sem
+  /// aviso avisa no fim, e esse aviso faz as telas lerem a cópia expirada.)
+  void _expirarCopia(bool avisar) {
+    final turso = TursoService();
+    turso.expirarQuantidades();
+    if (avisar) {
+      unawaited(turso.consultarQuantidades().then<void>((_) {}, onError: (_) {}));
     }
   }
 
@@ -614,6 +571,10 @@ class EstoqueLocalizadoService {
           faceOuColuna,
           andarOuNivel,
         ],
+      );
+      TursoService().contarLeitura(
+        'gravacao_estado_anterior',
+        rowsAnterior.length,
       );
       final qtdAnterior = rowsAnterior.isEmpty
           ? null
@@ -678,9 +639,14 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura(
+        'quantidades_produto',
+        quantidadesConfirmadas.length,
+      );
       await tx.commit();
-      _invalidarCachesBadges();
-      await TursoService().marcarGravacaoLocal();
+      // A cópia das quantidades é corrigida logo abaixo com as linhas do
+      // produto lidas na própria transação.
+      await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
       await TursoService().guardarQuantidadesProduto(
         produtoCodigo,
         quantidadesConfirmadas
@@ -757,9 +723,14 @@ class EstoqueLocalizadoService {
         'WHERE produto_codigo = ?',
         positional: [produtoCodigo],
       );
+      TursoService().contarLeitura(
+        'quantidades_produto',
+        quantidadesConfirmadas.length,
+      );
       await tx.commit();
-      _invalidarCachesBadges();
-      await TursoService().marcarGravacaoLocal();
+      // A cópia das quantidades é corrigida logo abaixo com as linhas do
+      // produto lidas na própria transação.
+      await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
       await TursoService().guardarQuantidadesProduto(
         produtoCodigo,
         quantidadesConfirmadas
@@ -821,6 +792,7 @@ class EstoqueLocalizadoService {
         'WHERE data_contagem = ? AND produto_id = ? LIMIT 1',
         positional: [hoje, produtoCodigo],
       );
+      TursoService().contarLeitura('gravacao_estado_anterior', existe.length);
 
       if (existe.isEmpty) {
         await tx.execute(
@@ -895,8 +867,12 @@ class EstoqueLocalizadoService {
       await TursoService().carimbarMutacao(tx, mutacao);
       await tx.commit();
 
-      _invalidarCachesBadges();
-      await TursoService().marcarGravacaoLocal();
+      // A contagem não grava estoque_localizado: a cópia das quantidades
+      // segue valendo. As cópias dos selos ganham a contagem nova na hora —
+      // relidas só no produto, sem varrer inventario_cicli nem
+      // estoque_mestre inteiros.
+      await TursoService().marcarGravacaoLocal(expirarQuantidades: false);
+      await TursoService().registrarContagemConcluida(produtoCodigo);
       return ResultadoContagem(
         total: total,
         qtdSistema: info.qtdSistema,

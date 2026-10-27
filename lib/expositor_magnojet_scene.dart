@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'caixa_mista.dart';
+import 'galpao_saldo.dart';
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
         corEnderecoDivergentePositiva;
@@ -23,7 +25,8 @@ import 'scene_gestures.dart';
 // A base (o pé do expositor) também recebe produtos: 5 caixas apoiadas no
 // deck, rotuladas 1–5. Ela entra como linha extra APÓS os ganchos
 // (linha = linhas, ou seja, nivel 6 na grade padrão), pra não invalidar os
-// endereços A–X já salvos no banco.
+// endereços A–X já salvos no banco. Cada caixa da base é uma caixa mista,
+// como as das estantes: até 5 produtos (caixa_mista.dart).
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ExpositorCell {
@@ -220,6 +223,19 @@ class ExpositorMagnojetGeometry {
   }
 
   // ── Caixa apoiada num espaço da base (como no Nellore/Monitor) ─────────────
+  //
+  /// O volume da caixa da base — o mesmo de [addCaixaProduto]; a caixa mista
+  /// (caixa_mista.dart) é desenhada nele, em fatias.
+  static VolumeCaixa volumeCaixa(ExpositorCell celula) {
+    final z1 = _baseD - 0.03;
+    return (
+      x0: celula.xCenter - wCaixa / 2, x1: celula.xCenter + wCaixa / 2,
+      y0: celula.yCenter,              y1: celula.yCenter + hCaixa,
+      z0: z1 - dCaixa,                 z1: z1,
+      tamanhoBadge: wCaixa * 0.45,
+    );
+  }
+
   static void addCaixaProduto(
     List<Face> faces, {
     required ExpositorCell celula,
@@ -414,6 +430,8 @@ class ExpositorMagnojetPainter extends CustomPainter {
   final bool                       wireframe;
   final bool                       showLabels;
   final List<Face>                 extraFaces;
+  // Selo "+N" das caixas mistas (ver caixa_mista.dart).
+  final List<SeloCaixa>                selos;
 
   static final Vec3 _lightDir = Vec3(4, 10, 5).normalized;
 
@@ -421,6 +439,7 @@ class ExpositorMagnojetPainter extends CustomPainter {
     this.wireframe  = false,
     this.showLabels = true,
     this.extraFaces = const [],
+    this.selos      = const [],
   });
 
   @override
@@ -434,6 +453,7 @@ class ExpositorMagnojetPainter extends CustomPainter {
     _draw(canvas, faces);
     _drawMarca(canvas, size);
     if (showLabels) _drawLabels(canvas, size);
+    desenharSelos(canvas, size, camera, selos, fovGraus: 42);
   }
 
   (Offset, double)? _projectPoint(Vec3 v, Size size) {
@@ -631,6 +651,7 @@ class ExpositorMagnojetPainter extends CustomPainter {
       old.wireframe           != wireframe           ||
       old.showLabels          != showLabels          ||
       old.extraFaces          != extraFaces          ||
+      old.selos               != selos               ||
       old.geometry.colunas      != geometry.colunas      ||
       old.geometry.intercalados != geometry.intercalados ||
       old.geometry.linhas       != geometry.linhas       ||
@@ -651,7 +672,8 @@ class ExpositorMagnojetScene extends StatefulWidget {
   final bool                      showLabels;
   // Reutiliza CaixaColocadaEstante: coluna = coluna do gancho (ou espaço
   // 0–4 da base), nivel = linha do gancho (linhaBase = deck), slot = 0
-  // sempre (um produto por endereço).
+  // sempre. Gancho tem um produto; a caixa da base é mista (até 5 produtos,
+  // várias linhas no mesmo endereço).
   final List<CaixaColocadaEstante> caixas;
   final String?                    produtoSelecionadoId;
   final Map<String, Color>         corPorProduto;
@@ -662,6 +684,8 @@ class ExpositorMagnojetScene extends StatefulWidget {
   final Set<String>                divergentes;
   final Set<String>                divergentesPositivas;
   final Set<String>                destacadosCodigos;
+  // Saldo dos produtos das caixas mistas — pinta as fatias.
+  final Map<String, SaldoProduto>  saldos;
 
   const ExpositorMagnojetScene({
     super.key,
@@ -679,6 +703,7 @@ class ExpositorMagnojetScene extends StatefulWidget {
     this.divergentes          = const {},
     this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
+    this.saldos               = const {},
   });
 
   @override
@@ -834,7 +859,33 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
+    final celulas = <(int, int), ExpositorCell>{
+      for (final c in widget.geometry.cells) (c.coluna, c.linha): c,
+    };
+    bool naBase(CaixaColocadaEstante c) =>
+        celulas[(c.coluna, c.nivel)]?.ehBase ?? false;
+    // Caixas da base: caixa mista, como nas estantes (fatias + selo "+N").
+    final selos = montarCaixasDaEstante(
+      extraFaces,
+      linhas:               widget.caixas.where(naBase),
+      estanteNum:           expositorMagnojetNum,
+      corPorProduto:        widget.corPorProduto,
+      saldos:               widget.saldos,
+      destacadoCodigo:      widget.destacadoCodigo,
+      destacadosCodigos:    widget.destacadosCodigos,
+      divergentes:          widget.divergentes,
+      divergentesPositivas: widget.divergentesPositivas,
+      desatualizados:       widget.desatualizados,
+      corConferencia:       corConferenciaCiano,
+      volume: (caixa) => ExpositorMagnojetGeometry.volumeCaixa(
+          celulas[(caixa.coluna, caixa.nivel)]!),
+      caixaLisa: (caixa, cor, desatualizado) =>
+          ExpositorMagnojetGeometry.addCaixaProduto(extraFaces,
+              celula: celulas[(caixa.coluna, caixa.nivel)]!,
+              color: cor, desatualizado: desatualizado),
+    );
     for (final caixa in widget.caixas) {
+      if (naBase(caixa)) continue;
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
       final celulaList = widget.geometry.cells
@@ -864,14 +915,9 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
                   : divergente
                       ? corEnderecoDivergente
                       : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      // Ganchos penduram sacolinhas; a base apoia caixas no deck.
-      if (celula.ehBase) {
-        ExpositorMagnojetGeometry.addCaixaProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
-      } else {
-        ExpositorMagnojetGeometry.addPacoteProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
-      }
+      // Ganchos penduram sacolinhas (as caixas da base já foram acima).
+      ExpositorMagnojetGeometry.addPacoteProduto(extraFaces,
+          celula: celula, color: cor, desatualizado: desatualizado);
     }
 
     return Listener(
@@ -886,7 +932,8 @@ class _ExpositorMagnojetSceneState extends State<ExpositorMagnojetScene>
           painter: ExpositorMagnojetPainter(_camera, widget.geometry,
               wireframe:  widget.wireframe,
               showLabels: widget.showLabels,
-              extraFaces: extraFaces),
+              extraFaces: extraFaces,
+              selos:      selos),
           child:   const SizedBox.expand(),
         ),
       ),

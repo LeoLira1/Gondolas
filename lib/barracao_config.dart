@@ -3,11 +3,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // O barracão é um galpão de alvenaria simples: um retângulo de 35 m × 10 m com
-// pé-direito de 6 m, sem racks e sem pilha. A unidade de armazenagem é o
-// PALETE de madeira apoiado no chão, com um bag de 1000 kg em cima — e cada
-// palete é UM endereço, com UM produto. Não há nível, não há ordem na pilha:
-// o endereço é o próprio palete, e por isso ele nunca renumera (a lição que
-// moldou o galpão, ver galpao_config.dart, aqui simplesmente não se aplica).
+// pé-direito de 6 m, sem racks fixos. A unidade de armazenagem é a GAIOLA:
+// palete de madeira com a carga em cima. Cada endereço é um lugar no chão e
+// leva uma pilha de até [BarracaoConfig.gaiolasMax] gaiolas, uma em cima da
+// outra, com a mesma regra do galpão: a nova entra no topo, e tirar uma de
+// baixo faz as de cima descerem. O RÓTULO (BAR-07) é o endereço e nunca
+// renumera; o nível na pilha é dado, como a ordem do galpão.
 //
 // ATENÇÃO À UNIDADE. O barracão inteiro — a planta desta tabela, as colunas
 // pos_x/pos_z no Turso e as coordenadas do mundo 3D da cena — trabalha em
@@ -125,6 +126,12 @@ class BarracaoConfig {
   /// Pé-direito.
   static const double peDireito = 600;
 
+  /// Altura com que as paredes são DESENHADAS: baixinhas, em corte, como o
+  /// modo "Paredes: em corte" do Gemeo. Com os 6 m reais elas tapavam as
+  /// pilhas de gaiolas de quase todo ângulo; a mureta ainda marca o contorno
+  /// do barracão e os vãos das aberturas, sem esconder a carga.
+  static const double alturaParede = 130;
+
   /// Espessura de qualquer parede.
   static const double espessuraParede = 20;
 
@@ -150,27 +157,30 @@ class BarracaoConfig {
         tipo: TipoAbertura.porta,  x0: 2300, x1: 2500, altura: 300),
   ];
 
-  /// Os panos cheios da parede da frente, do chão ao pé-direito: o que sobra
-  /// de [largura] depois de tirar as [aberturas]. Sai em ordem de X.
+  /// Os panos cheios da parede da frente, do chão a [alturaParede]: o que
+  /// sobra de [largura] depois de tirar as [aberturas]. Sai em ordem de X.
   static List<TrechoParede> get panosDaFrente {
     final panos = <TrechoParede>[];
     var x = 0.0;
     for (final a in aberturas) {
       if (a.x0 > x) {
-        panos.add(TrechoParede(x0: x, x1: a.x0, y0: 0, y1: peDireito));
+        panos.add(TrechoParede(x0: x, x1: a.x0, y0: 0, y1: alturaParede));
       }
       x = a.x1;
     }
     if (x < largura) {
-      panos.add(TrechoParede(x0: x, x1: largura, y0: 0, y1: peDireito));
+      panos.add(TrechoParede(x0: x, x1: largura, y0: 0, y1: alturaParede));
     }
     return panos;
   }
 
-  /// A verga de cada abertura: parede do topo do vão até o pé-direito.
+  /// A verga de cada abertura: parede do topo do vão até [alturaParede].
+  /// Com a parede em corte, mais baixa que os vãos, não sobra verga nenhuma —
+  /// as aberturas ficam como cortes na mureta.
   static List<TrechoParede> get vergas => [
         for (final a in aberturas)
-          TrechoParede(x0: a.x0, x1: a.x1, y0: a.altura, y1: peDireito),
+          if (a.altura < alturaParede)
+            TrechoParede(x0: a.x0, x1: a.x1, y0: a.altura, y1: alturaParede),
       ];
 
   // ── Palete e bag (centímetros) ─────────────────────────────────────────────
@@ -185,8 +195,18 @@ class BarracaoConfig {
   static const double bagZ = 85;
   static const double bagAltura = 130;
 
-  /// Altura do conjunto palete + bag — o teto do volume que recebe o toque.
+  /// Altura do conjunto palete + bag — uma GAIOLA, e o passo da pilha.
   static const double alturaCarga = paleteAltura + bagAltura;
+
+  // ── Pilha de gaiolas ───────────────────────────────────────────────────────
+
+  /// Quantas gaiolas cabem empilhadas num endereço, a do chão incluída — a
+  /// mesma regra do galpão (GalpaoConfig.niveisMax). 4 × [alturaCarga] =
+  /// 580 cm, abaixo dos 600 do pé-direito.
+  static const int gaiolasMax = 4;
+
+  /// Y da base da gaiola do nível [nivel] (1 = a do chão).
+  static double yDoNivel(int nivel) => (nivel - 1) * alturaCarga;
 
   // ── Layout padrão dos paletes ──────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import 'estoque_localizado_service.dart';
 import 'galpao_saldo.dart' show SaldoProduto;
-import 'models.dart' show localTipoGalpao;
+import 'models.dart' show localTipoBarracao, localTipoGalpao;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Baixa automática do que foi vendido, a partir da contagem
@@ -185,6 +185,11 @@ int prioridadeDoLocal(EnderecoLocalizado e) => e.ehGondola
         ? 2
         : 1;
 
+/// True quando a baixa pode tirar quantidade do endereço. O barracão fica de
+/// fora: ver o laço de [planejarBaixa].
+bool removivelPelaBaixa(EnderecoLocalizado e) =>
+    e.localTipo != localTipoBarracao;
+
 /// Os endereços na ordem em que perdem quantidade.
 ///
 /// Dentro da loja (gôndola e estante), o mais CHEIO primeiro — a mesma regra
@@ -275,6 +280,11 @@ PlanoBaixa planejarBaixa({
   for (final e in ordenarParaBaixa(enderecos)) {
     if (restante <= SaldoProduto.tolerancia) break;
     if (e.quantidade <= 0) continue;
+    // O palete do barracão conta na soma (ele é carga endereçada), mas não é
+    // fonte de retirada: a fonte dele é barracao_enderecos, e baixar só o
+    // espelho em estoque_localizado era desfeito na próxima gravação daquele
+    // palete. O que sobrar fica em [PlanoBaixa.naoCoberto], para uma pessoa.
+    if (!removivelPelaBaixa(e)) continue;
     final tira = restante < e.quantidade ? restante : e.quantidade;
     ajustes.add(AjusteEndereco(
       endereco:    e,

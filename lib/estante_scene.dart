@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'caixa_mista.dart';
+import 'galpao_saldo.dart';
 import 'gondola_scene.dart';
 import 'models.dart';
 import 'scene_gestures.dart';
@@ -148,6 +150,18 @@ class EstanteGeometry {
     faces.add(Face([Vec3(x0,y0,z0), Vec3(x0,y0,z1), Vec3(x0,y1,z1), Vec3(x0,y1,z0)], color)); // left
   }
 
+  /// O volume da caixa no slot — o mesmo de [addBoxProduto]; a caixa mista
+  /// (caixa_mista.dart) é desenhada nele, em fatias.
+  static VolumeCaixa volumeCaixa(CelulaEstante celula, int slot) {
+    final xCenter = celula.xMin + wCaixa / 2 + slot * (wCaixa + gap);
+    return (
+      x0: xCenter - wCaixa / 2, x1: xCenter + wCaixa / 2,
+      y0: celula.yTop,          y1: celula.yTop + hCaixa,
+      z0: -dCaixa / 2,          z1: dCaixa / 2,
+      tamanhoBadge: wCaixa * 0.4,
+    );
+  }
+
   static void addBoxProduto(
     List<Face> faces, {
     required CelulaEstante celula,
@@ -179,6 +193,8 @@ class EstantePainter extends CustomPainter {
   final List<Face> extraFaces;
   final bool       showLabels;
   final int        estanteAtual;
+  // Selo "+N" das caixas mistas (ver caixa_mista.dart).
+  final List<SeloCaixa> selos;
 
   static final Vec3 _lightDir = Vec3(5, 10, 7).normalized;
 
@@ -186,6 +202,7 @@ class EstantePainter extends CustomPainter {
     this.extraFaces  = const <Face>[],
     this.showLabels  = true,
     this.estanteAtual = 1,
+    this.selos       = const <SeloCaixa>[],
   });
 
   @override
@@ -197,6 +214,7 @@ class EstantePainter extends CustomPainter {
     faces.sort((a, b) => b.depth.compareTo(a.depth));
     _draw(canvas, faces);
     if (showLabels) _drawLabels(canvas, size);
+    desenharSelos(canvas, size, camera, selos);
   }
 
   void _project(List<Face> faces, Size size) {
@@ -328,7 +346,8 @@ class EstantePainter extends CustomPainter {
       old.camera.dist   != camera.dist   ||
       old.showLabels    != showLabels    ||
       old.estanteAtual  != estanteAtual  ||
-      old.extraFaces    != extraFaces;
+      old.extraFaces    != extraFaces    ||
+      old.selos         != selos;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -359,6 +378,8 @@ class EstanteScene extends StatefulWidget {
   // destacadoCodigo para acender várias caixas de uma vez, vindas de fora
   // (não da busca). Cor própria (ciano) pra não se confundir com a busca.
   final Set<String> destacadosCodigos;
+  // Saldo dos produtos das caixas mistas: pinta as fatias delas.
+  final Map<String, SaldoProduto> saldos;
 
   const EstanteScene({
     super.key,
@@ -374,6 +395,7 @@ class EstanteScene extends StatefulWidget {
     this.divergentes          = const {},
     this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
+    this.saldos               = const {},
   });
 
   @override
@@ -548,38 +570,31 @@ class _EstanteSceneState extends State<EstanteScene>
       for (final c in EstanteGeometry.celulasPara(widget.estanteAtual))
         (c.coluna, c.nivel): c,
     };
-    for (final caixa in widget.caixas) {
-      final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
-      final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
+    final selos = montarCaixasDaEstante(
+      extraFaces,
+      linhas:               widget.caixas,
+      estanteNum:           widget.estanteAtual,
+      corPorProduto:        widget.corPorProduto,
+      saldos:               widget.saldos,
+      destacadoCodigo:      widget.destacadoCodigo,
+      destacadosCodigos:    widget.destacadosCodigos,
+      divergentes:          widget.divergentes,
+      divergentesPositivas: widget.divergentesPositivas,
+      desatualizados:       widget.desatualizados,
+      corConferencia:       corConferenciaCiano,
       // Caixa em endereço que não existe mais nesta estante (layout antigo):
       // antes o firstWhere estourava; agora simplesmente não desenha.
-      final celula = celulas[(caixa.coluna, caixa.nivel)];
-      if (celula == null) continue;
-      final chave = chaveEnderecoEstoque(
-        produtoCodigo: caixa.produtoId,
-        localTipo:     'estante',
-        localNum:      widget.estanteAtual,
-        faceOuColuna:  caixa.coluna,
-        andarOuNivel:  caixa.nivel,
-      );
-      // Divergência de contagem pinta a caixa inteira: azul escuro quando é
-      // positiva (contado > sistema), vermelho nas demais. Destaques de
-      // conferência e busca (momentâneos) têm prioridade sobre ela.
-      final isDivergente = widget.divergentes.contains(chave);
-      final isDivergentePositiva = widget.divergentesPositivas.contains(chave);
-      final cor = isConferencia
-          ? corConferenciaCiano
-          : isHighlighted
-              ? const Color(0xFFe87722)
-              : isDivergentePositiva
-                  ? corEnderecoDivergentePositiva
-                  : isDivergente
-                      ? corEnderecoDivergente
-                      : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      EstanteGeometry.addBoxProduto(extraFaces,
-          celula: celula, slot: caixa.slot, color: cor,
-          desatualizado: widget.desatualizados.contains(chave));
-    }
+      volume: (caixa) {
+        final celula = celulas[(caixa.coluna, caixa.nivel)];
+        return celula == null
+            ? null
+            : EstanteGeometry.volumeCaixa(celula, caixa.slot);
+      },
+      caixaLisa: (caixa, cor, desatualizado) =>
+          EstanteGeometry.addBoxProduto(extraFaces,
+              celula: celulas[(caixa.coluna, caixa.nivel)]!, slot: caixa.slot,
+              color: cor, desatualizado: desatualizado),
+    );
 
     return Listener(
       onPointerDown:   aoEncostarDedo,
@@ -593,7 +608,8 @@ class _EstanteSceneState extends State<EstanteScene>
           painter: EstantePainter(_camera,
               extraFaces:   extraFaces,
               showLabels:   widget.showLabels,
-              estanteAtual: widget.estanteAtual),
+              estanteAtual: widget.estanteAtual,
+              selos:        selos),
           child:   const SizedBox.expand(),
         ),
       ),

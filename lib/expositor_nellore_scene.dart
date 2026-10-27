@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'caixa_mista.dart';
+import 'galpao_saldo.dart';
 import 'gondola_scene.dart'
     show Vec3, Camera, Face, addBadgeEnderecoDesatualizado, corEnderecoDivergente,
         corEnderecoDivergentePositiva;
@@ -23,6 +25,8 @@ import 'scene_gestures.dart';
 //   níveis 1–2 = prateleiras, 5 espaços — letras T–X e O–S
 //   nível 3    = cestos bin, 4 cestos   — letras K–N
 //   níveis 4–5 = ganchos, 5 por fileira — letras F–J e A–E (topo)
+// As caixas das prateleiras e dos cestos são caixas mistas, como as das
+// estantes: até 5 produtos (caixa_mista.dart). Gancho tem um produto só.
 //
 // O nível 0 era a base (deck, rotulada 1–4), mas a estante real não tem essa
 // prateleira: a base continua desenhada (o pé da estrutura existe), só não
@@ -194,12 +198,10 @@ class ExpositorNelloreGeometry {
   }
 
   // ── Caixa apoiada (prateleiras, base e cestos, como nas estantes) ──────────
-  static void addCaixaProduto(
-    List<Face> faces, {
-    required ExpositorNelloreCell celula,
-    required Color color,
-    bool desatualizado = false,
-  }) {
+  //
+  /// O volume da caixa — o mesmo de [addCaixaProduto]; a caixa mista
+  /// (caixa_mista.dart) é desenhada nele, em fatias.
+  static VolumeCaixa volumeCaixa(ExpositorNelloreCell celula) {
     final xc = celula.xCenter;
     final double w, h, z0, z1;
     if (celula.tipo == NelloreTipoNivel.cesto) {
@@ -215,14 +217,29 @@ class ExpositorNelloreGeometry {
       z1 = zFrente + 0.015 + dCaixa;
     }
     final y0 = celula.ySurface + (celula.tipo == NelloreTipoNivel.cesto ? 0.02 : 0.0);
-    _box(faces,
+    return (
       x0: xc - w / 2, x1: xc + w / 2,
       y0: y0,          y1: y0 + h,
       z0: z0,          z1: z1,
+      tamanhoBadge: w * 0.45,
+    );
+  }
+
+  static void addCaixaProduto(
+    List<Face> faces, {
+    required ExpositorNelloreCell celula,
+    required Color color,
+    bool desatualizado = false,
+  }) {
+    final v = volumeCaixa(celula);
+    _box(faces,
+      x0: v.x0, x1: v.x1,
+      y0: v.y0, y1: v.y1,
+      z0: v.z0, z1: v.z1,
       color: color);
     if (desatualizado) {
       addBadgeEnderecoDesatualizado(faces,
-          x1: xc + w / 2, y1: y0 + h, z1: z1, tamanho: w * 0.45);
+          x1: v.x1, y1: v.y1, z1: v.z1, tamanho: v.tamanhoBadge);
     }
   }
 
@@ -377,6 +394,8 @@ class ExpositorNellorePainter extends CustomPainter {
   final bool                      wireframe;
   final bool                      showLabels;
   final List<Face>                extraFaces;
+  // Selo "+N" das caixas mistas (ver caixa_mista.dart).
+  final List<SeloCaixa>               selos;
 
   static final Vec3 _lightDir = Vec3(4, 10, 5).normalized;
 
@@ -384,6 +403,7 @@ class ExpositorNellorePainter extends CustomPainter {
     this.wireframe  = false,
     this.showLabels = true,
     this.extraFaces = const [],
+    this.selos      = const [],
   });
 
   @override
@@ -397,6 +417,7 @@ class ExpositorNellorePainter extends CustomPainter {
     _draw(canvas, faces);
     _drawMarca(canvas, size);
     if (showLabels) _drawLabels(canvas, size);
+    desenharSelos(canvas, size, camera, selos, fovGraus: 42);
   }
 
   (Offset, double)? _projectPoint(Vec3 v, Size size) {
@@ -623,6 +644,7 @@ class ExpositorNellorePainter extends CustomPainter {
       old.wireframe          != wireframe          ||
       old.showLabels         != showLabels         ||
       old.extraFaces         != extraFaces         ||
+      old.selos              != selos              ||
       old.geometry.width     != geometry.width     ||
       old.geometry.height    != geometry.height    ||
       old.geometry.showFloor != geometry.showFloor;
@@ -638,7 +660,9 @@ class ExpositorNelloreScene extends StatefulWidget {
   final bool                     autoRotate;
   final bool                     showLabels;
   // Reutiliza CaixaColocadaEstante: coluna = coluna, nivel = nível (0 = base,
-  // 5 = ganchos do topo), slot = 0 sempre (um produto por endereço).
+  // 5 = ganchos do topo), slot = 0 sempre. Gancho tem um produto; as caixas
+  // das prateleiras e dos cestos são mistas (até 5 produtos, várias linhas
+  // no mesmo endereço).
   final List<CaixaColocadaEstante> caixas;
   final String?                    produtoSelecionadoId;
   final Map<String, Color>         corPorProduto;
@@ -649,6 +673,8 @@ class ExpositorNelloreScene extends StatefulWidget {
   final Set<String>                divergentes;
   final Set<String>                divergentesPositivas;
   final Set<String>                destacadosCodigos;
+  // Saldo dos produtos das caixas mistas — pinta as fatias.
+  final Map<String, SaldoProduto>  saldos;
 
   const ExpositorNelloreScene({
     super.key,
@@ -666,6 +692,7 @@ class ExpositorNelloreScene extends StatefulWidget {
     this.divergentes          = const {},
     this.divergentesPositivas = const {},
     this.destacadosCodigos    = const {},
+    this.saldos               = const {},
   });
 
   @override
@@ -819,7 +846,35 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
   @override
   Widget build(BuildContext context) {
     final extraFaces = <Face>[];
+    final celulas = <(int, int), ExpositorNelloreCell>{
+      for (final c in widget.geometry.cells) (c.coluna, c.nivel): c,
+    };
+    bool ehCaixa(CaixaColocadaEstante c) {
+      final celula = celulas[(c.coluna, c.nivel)];
+      return celula != null && celula.tipo != NelloreTipoNivel.gancho;
+    }
+    // Prateleiras e cestos: caixa mista, como nas estantes (fatias + "+N").
+    final selos = montarCaixasDaEstante(
+      extraFaces,
+      linhas:               widget.caixas.where(ehCaixa),
+      estanteNum:           expositorNelloreNum,
+      corPorProduto:        widget.corPorProduto,
+      saldos:               widget.saldos,
+      destacadoCodigo:      widget.destacadoCodigo,
+      destacadosCodigos:    widget.destacadosCodigos,
+      divergentes:          widget.divergentes,
+      divergentesPositivas: widget.divergentesPositivas,
+      desatualizados:       widget.desatualizados,
+      corConferencia:       corConferenciaCiano,
+      volume: (caixa) => ExpositorNelloreGeometry.volumeCaixa(
+          celulas[(caixa.coluna, caixa.nivel)]!),
+      caixaLisa: (caixa, cor, desatualizado) =>
+          ExpositorNelloreGeometry.addCaixaProduto(extraFaces,
+              celula: celulas[(caixa.coluna, caixa.nivel)]!,
+              color: cor, desatualizado: desatualizado),
+    );
     for (final caixa in widget.caixas) {
+      if (ehCaixa(caixa)) continue;
       final isConferencia = widget.destacadosCodigos.contains(caixa.produtoId);
       final isHighlighted = caixa.produtoId == widget.destacadoCodigo;
       final celulaList = widget.geometry.cells
@@ -849,14 +904,9 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
                   : divergente
                       ? corEnderecoDivergente
                       : (widget.corPorProduto[caixa.produtoId] ?? const Color(0xFF888888));
-      // Ganchos penduram pacotes; cestos, prateleiras e base empilham caixas.
-      if (celula.tipo == NelloreTipoNivel.gancho) {
-        ExpositorNelloreGeometry.addPacoteProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
-      } else {
-        ExpositorNelloreGeometry.addCaixaProduto(extraFaces,
-            celula: celula, color: cor, desatualizado: desatualizado);
-      }
+      // Ganchos penduram pacotes (as caixas já foram acima).
+      ExpositorNelloreGeometry.addPacoteProduto(extraFaces,
+          celula: celula, color: cor, desatualizado: desatualizado);
     }
 
     return Listener(
@@ -871,7 +921,8 @@ class _ExpositorNelloreSceneState extends State<ExpositorNelloreScene>
           painter: ExpositorNellorePainter(_camera, widget.geometry,
               wireframe:  widget.wireframe,
               showLabels: widget.showLabels,
-              extraFaces: extraFaces),
+              extraFaces: extraFaces,
+              selos:      selos),
           child:   const SizedBox.expand(),
         ),
       ),

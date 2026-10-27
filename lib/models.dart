@@ -161,6 +161,43 @@ const int fileirasPalete   = 3;   // posições na profundidade (1,00 m ÷ 3 ≈
 
 bool ehPalete(int estanteNum) => estanteNum >= paleteNumMin;
 
+// Ilha de paletes: 12 paletes encostados no corredor central da loja (entre a
+// Gôndola 7 e a Gôndola 6), forrados com o mesmo tapume verde — uma peça FIXA,
+// desenhada no mapa, diferente dos paletes soltos (101+) cadastrados em
+// runtime. Cada palete é um ESPAÇO (1–12) com até 5 produtos lado a lado.
+// Reutiliza a infra de estante: local_tipo 'estante', número próprio, slot
+// sempre 0, `nivel` = espaço (0–11) e `coluna` = produto no espaço (0–4).
+// Geometria e numeração dos espaços em lib/ilha_paletes_scene.dart.
+const int ilhaPaletesNum        = 22;
+const int espacosIlhaPaletes    = 12;
+const int colunasEspacosIlha    = 2;   // paletes lado a lado na largura
+const int produtosPorEspacoIlha = 5;
+
+bool ehIlhaPaletes(int estanteNum) => estanteNum == ilhaPaletesNum;
+
+/// Número do espaço (1–12) da ilha a partir do `nivel` gravado (0–11).
+int espacoIlhaPaletes(int nivel) => nivel + 1;
+
+/// Número do produto (1–5) dentro do espaço a partir da `coluna` (0–4).
+int produtoIlhaPaletes(int coluna) => coluna + 1;
+
+// Mostruário: um palete de madeira no chão, na parede da direita da loja
+// (entre a Estante 1 e a cozinha), com uns 20 tipos de ferragem e ferramenta
+// à mostra — porcas, arruelas, barras, correntes, pá, rastelo. Peça FIXA do
+// mapa, como a ilha. 20 POSIÇÕES numeradas 1–20 numa grade de 5 × 4.
+// Reutiliza a infra de estante: local_tipo 'estante', número próprio, slot
+// sempre 0, `nivel` = posição (0–19) e `coluna` sempre 0 — a busca agrupa por
+// nível e assim já diz a posição exata. Geometria em lib/mostruario_scene.dart.
+const int mostruarioNum      = 23;
+const int posicoesMostruario = 20;
+const int colunasMostruario  = 5;   // posições na frente do palete (1,20 m)
+const int fileirasMostruario = posicoesMostruario ~/ colunasMostruario;
+
+bool ehMostruario(int estanteNum) => estanteNum == mostruarioNum;
+
+/// Número da posição (1–20) do mostruário a partir do `nivel` gravado (0–19).
+int posicaoMostruario(int nivel) => nivel + 1;
+
 /// Rótulo curto de uma estrutura, do jeito que ela é etiquetada na loja:
 /// "G7", "E5", "P101". Paletes reutilizam local_tipo 'estante' no banco, mas
 /// nunca são apresentados como estante ao usuário.
@@ -168,7 +205,11 @@ String rotuloCurtoEstrutura(String tipo, int numero) => tipo == 'gondola'
     ? 'G$numero'
     : ehPalete(numero)
         ? 'P$numero'
-        : 'E$numero';
+        : ehIlhaPaletes(numero)
+            ? 'Ilha'
+            : ehMostruario(numero)
+                ? 'Mostruário'
+                : 'E$numero';
 
 /// "1 produto" / "3 produtos" — contagem já flexionada.
 ///
@@ -184,7 +225,11 @@ String nomeEstrutura(String tipo, int numero) => tipo == 'gondola'
     ? 'Gôndola $numero'
     : ehPalete(numero)
         ? 'Palete $numero'
-        : 'Estante $numero';
+        : ehIlhaPaletes(numero)
+            ? 'Ilha de paletes'
+            : ehMostruario(numero)
+                ? 'Mostruário'
+                : 'Estante $numero';
 
 /// Posição global P1–P12 da parede — derivada, nunca persistida (mesma
 /// filosofia do faceFromPos): cada seção contribui com 2 posições.
@@ -192,17 +237,19 @@ int posicaoGlobalParede(int estanteNum, int coluna) =>
     (estanteNum - estanteParedeMin) * colunasParede + coluna + 1;
 
 /// Parte FIXA da ordem de navegação do carrossel de estantes. As seções da
-/// parede (13–18) ocupam o lugar onde ficavam as estantes 3 e 4.
+/// parede (13–18) ocupam o lugar onde ficavam as estantes 3 e 4; a ilha de
+/// paletes (22) e o mostruário (23) entram depois dos expositores.
 const List<int> ordemNavegacaoBase = [
   1, 2, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20,
+  ilhaPaletesNum, mostruarioNum,
   expositorMadeiraNum,
 ];
 
 /// Ordem completa do carrossel: a base fixa seguida dos paletes ativos
-/// (ordenados por número), no fim — depois dos expositores 19, 20 e 24. É um
-/// getter, não const, porque paletes são cadastrados em runtime; a lista é
-/// remontada a cada leitura para refletir cadastros/desativações sem
-/// reiniciar o app.
+/// (ordenados por número), no fim — depois dos expositores, da ilha (22), do
+/// mostruário (23) e do Expositor de Madeira (24). É um getter, não const,
+/// porque paletes são cadastrados em runtime; a lista é remontada a cada
+/// leitura para refletir cadastros/desativações sem reiniciar o app.
 List<int> get ordemNavegacaoEstantes =>
     [...ordemNavegacaoBase, ...PaleteRegistry().ativos.map((p) => p.num)];
 
@@ -210,6 +257,16 @@ List<int> get ordemNavegacaoEstantes =>
 /// antigas delas continuam no Turso, mas esses endereços não aparecem mais em
 /// busca nem em conferência — o produto deve ser recadastrado na parede.
 const Set<int> estantesRemovidas = {3, 4};
+
+/// A linha de estante_layout entra na busca do mapa? Fora as estantes
+/// removidas e a base do Expositor Nellore (nível 0, que saiu dos endereços).
+/// É o WHERE que a consulta da busca fazia no banco, agora sobre a cópia
+/// completa da tabela.
+bool linhaDeEstanteBuscavel(Map<String, dynamic> r) {
+  final numero = r['estante_num'];
+  if (estantesRemovidas.contains(numero)) return false;
+  return !(numero == expositorNelloreNum && r['nivel'] == 0);
+}
 
 bool temNivelTopoPara(int estanteNum) =>
     estantesComLabelEstendido.contains(estanteNum);
@@ -221,6 +278,8 @@ bool temNivelTopoPara(int estanteNum) =>
 // única família cujo conjunto de números cresce em runtime.
 int niveisProdutoPara(int estanteNum) {
   if (ehPalete(estanteNum)) return fileirasPalete;
+  if (ehIlhaPaletes(estanteNum)) return espacosIlhaPaletes;
+  if (ehMostruario(estanteNum)) return posicoesMostruario;
   return ehEstanteEdr300(estanteNum)
     ? niveisProdutoEdr300
     : estanteNum == expositorMagnojetNum
@@ -242,6 +301,8 @@ int niveisProdutoPara(int estanteNum) {
 /// encontrada numa busca sem estourar a grade real da estrutura.
 int numColunasPara(int estanteNum) {
   if (ehPalete(estanteNum)) return colunasPalete;
+  if (ehIlhaPaletes(estanteNum)) return produtosPorEspacoIlha;
+  if (ehMostruario(estanteNum)) return 1;
   return estanteNum == estanteEdr300Num
     ? 1
     : estanteNum == estanteEdr300TriplaNum
@@ -299,6 +360,14 @@ String letraEstanteCelula(int estanteNum, int coluna, int nivel) {
   if (ehPalete(estanteNum)) {
     return '${nivel * colunasPalete + coluna + 1}';
   }
+  // Na ilha de paletes o endereço é "espaço-produto": 3-2 é o produto 2 do
+  // espaço 3. É como se fala na loja — "no palete 3, o segundo" — e evita uma
+  // contagem corrida de 1 a 60 que ninguém acha no chão.
+  if (ehIlhaPaletes(estanteNum)) {
+    return '${espacoIlhaPaletes(nivel)}-${produtoIlhaPaletes(coluna)}';
+  }
+  // No mostruário a posição já é o endereço inteiro: 1–20.
+  if (ehMostruario(estanteNum)) return '${posicaoMostruario(nivel)}';
   final nNiveis  = niveisProdutoPara(estanteNum);
   if (ehEstanteParede(estanteNum)) {
     final numero = (estanteNum - estanteParedeMin) * nNiveis * colunasParede +
@@ -382,8 +451,8 @@ const String localTipoGalpao = 'galpao';
 ///
 /// `local_num` é o **id** da linha em `barracao_enderecos`, não o número do
 /// rótulo: o rótulo é texto ('BAR-07') e a coluna é inteira. face_ou_coluna e
-/// andar_ou_nivel ficam em 0 — o palete do barracão não tem face, coluna nem
-/// nível, ele É o endereço. Como no galpão, os ids se sobrepõem aos números de
+/// andar_ou_nivel ficam em 0 — o endereço é o lugar no chão, e as gaiolas
+/// empilhadas nele entram somadas por produto numa linha só. Como no galpão, os ids se sobrepõem aos números de
 /// estante e de posição do galpão: qualquer agrupamento de estoque_localizado
 /// tem de levar o local_tipo na chave, nunca só o local_num.
 const String localTipoBarracao = 'barracao';
@@ -561,18 +630,34 @@ class ProdutoEncontrado {
       );
 }
 
+/// Uma linha de estante_layout na tela: UM produto numa caixa. Uma caixa com
+/// vários produtos (caixa mista, ver caixa_mista.dart) é mais de uma linha no
+/// mesmo (coluna, nivel, slot).
 class CaixaColocadaEstante {
   final int    coluna;
   final int    nivel;
   final int    slot;
   final String produtoId;
 
+  /// Nome opcional da caixa (ex.: "Peças Hoppner"), o mesmo em todas as
+  /// linhas dela — estante_layout.caixa_nome.
+  final String? nomeCaixa;
+
   const CaixaColocadaEstante({
     required this.coluna,
     required this.nivel,
     required this.slot,
     required this.produtoId,
+    this.nomeCaixa,
   });
+
+  CaixaColocadaEstante comNomeCaixa(String? nome) => CaixaColocadaEstante(
+        coluna:    coluna,
+        nivel:     nivel,
+        slot:      slot,
+        produtoId: produtoId,
+        nomeCaixa: nome,
+      );
 }
 
 class CaixaLayoutEstante {
@@ -583,6 +668,7 @@ class CaixaLayoutEstante {
   final String produtoCodigo;
   final String produtoNome;
   final String corHex;
+  final String? nomeCaixa;
 
   const CaixaLayoutEstante({
     required this.estanteNum,
@@ -592,5 +678,6 @@ class CaixaLayoutEstante {
     required this.produtoCodigo,
     required this.produtoNome,
     required this.corHex,
+    this.nomeCaixa,
   });
 }
