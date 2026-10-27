@@ -107,4 +107,73 @@ void main() {
     );
     expect(resumoOcupacao(totalVagas: 10, codigos: []), '10 livres');
   });
+
+  group('baixa automática do estocado entregue', () {
+    const vantacor = ItemEstocado(
+      cooperado: 'MARCELO FRANCO PAES LEME',
+      produto: 'INSETICIDA VANTACOR 1L',
+      codigo: 'US278180',
+      armazem: '01',
+      documento: '1',
+      emissao: '2026-10-01',
+      saldo: 4,
+    );
+    const boral = ItemEstocado(
+      cooperado: 'JOÃO DA SILVA',
+      produto: 'HERBICIDA BORAL 500 SC 20L',
+      codigo: '254185',
+      armazem: '01',
+      documento: '1',
+      emissao: '2026-10-01',
+      saldo: 10,
+    );
+    final paletes = [
+      (c: 'EST:US278180', n: 'INSETICIDA VANTACOR 1L · MARCELO FRANCO PAES LEME'),
+      (c: 'EST:254185', n: 'HERBICIDA BORAL 500 SC 20L · JOÃO DA SILVA'),
+      (c: '254185', n: 'HERBICIDA BORAL 500 SC 20L'),
+    ];
+    List<({String c, String n})> entregues(List<ItemEstocado> comSaldo) =>
+        paletesEstocadosEntregues<({String c, String n})>(
+          comSaldo: comSaldo,
+          paletes: paletes,
+          codigo: (p) => p.c,
+          nome: (p) => p.n,
+        );
+
+    test('palete cujo item saiu da lista é baixado; o da loja nunca', () {
+      expect(entregues([boral]).map((p) => p.n), [
+        'INSETICIDA VANTACOR 1L · MARCELO FRANCO PAES LEME',
+      ]);
+    });
+
+    test('item ainda com saldo fica no endereço', () {
+      expect(entregues([boral, vantacor]), isEmpty);
+    });
+
+    test('acento, maiúscula e espaço a mais não contam como entregue', () {
+      const outroJeito = ItemEstocado(
+        cooperado: 'joao  da silva ',
+        produto: 'Herbicida Boral 500 SC 20L',
+        codigo: '254185',
+        armazem: '01',
+        documento: '2',
+        emissao: '2026-10-02',
+        saldo: 1,
+      );
+      expect(entregues([outroJeito, vantacor]), isEmpty);
+    });
+
+    test('lista vazia (leitura ruim) não baixa nada', () {
+      expect(entregues(const []), isEmpty);
+    });
+
+    test('aviso cita o endereço', () {
+      expect(
+        avisoBaixaEstocados([(nome: 'VANTACOR · MARCELO', endereco: 'Galpão 43 · N3')]),
+        'Baixa automática: VANTACOR · MARCELO saiu de Galpão 43 · N3 '
+        '(entregue ao cooperado).',
+      );
+      expect(avisoBaixaEstocados(const []), '');
+    });
+  });
 }

@@ -173,6 +173,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
     if (!mounted) return;
     unawaited(_carregarEnderecos());
     unawaited(_carregarCatalogo());
+    unawaited(_carregarEstocados());
     if (_modoConferencia && _consultandoConferencia) {
       unawaited(_carregarConferencia());
     }
@@ -215,6 +216,7 @@ class _BarracaoPageState extends State<BarracaoPage> {
         _abrir(inicial);
       }
     });
+    _baixarEstocadosEntregues();
   }
 
   Future<void> _carregarCatalogo() async {
@@ -243,11 +245,14 @@ class _BarracaoPageState extends State<BarracaoPage> {
       final itens = await carregarEstocados();
       if (!mounted) return;
       setState(() {
+        _itensEstocados = itens;
         _estocados = itens.map(produtoDeEstocado).toList();
         _aplicarCatalogo(_catalogo);
       });
+      _baixarEstocadosEntregues();
     } catch (_) {
-      // Sem a lista, o painel segue com o catálogo da loja.
+      // Sem a lista, o painel segue com o catálogo da loja — e sem baixa
+      // automática: sem saber o saldo, nenhum palete sai.
     }
   }
 
@@ -268,6 +273,43 @@ class _BarracaoPageState extends State<BarracaoPage> {
     }
     _selecionadoId = id;
     _selecionadoNivel = nivel;
+  }
+
+  /// A lista de `materiais_terceiros` (saldo > 0). Null até a primeira
+  /// leitura dar certo.
+  List<ItemEstocado>? _itensEstocados;
+
+  /// Baixa automática do estocado entregue (ver o galpão): palete "EST:" cujo
+  /// item saiu da lista é esvaziado sozinho, como no "Esvaziar" do painel.
+  void _baixarEstocadosEntregues() {
+    final itens = _itensEstocados;
+    if (!_persistindo || itens == null || _carregandoEnderecos) return;
+    // Um por nível: no barracão a pilha tem gaiolas, cada uma com o seu produto.
+    final niveis = [
+      for (final e in _enderecos)
+        for (final g in e.gaiolas)
+          (id: e.id, rotulo: e.rotulo, nivel: g.nivel, codigo: g.codigo, nome: g.nome),
+    ];
+    final entregues = paletesEstocadosEntregues(
+      comSaldo: itens,
+      paletes: niveis,
+      codigo: (g) => g.codigo,
+      nome: (g) => g.nome,
+    )
+      // De cima para baixo: esvaziar um nível desce os de cima, e o nível dos
+      // de baixo continua valendo.
+      ..sort((a, b) => b.nivel.compareTo(a.nivel));
+    if (entregues.isEmpty) return;
+    for (final g in entregues) {
+      _esvaziar(g.id, g.nivel);
+    }
+    _avisar(avisoBaixaEstocados([
+      for (final g in entregues.reversed)
+        (
+          nome: g.nome.isEmpty ? g.codigo : g.nome,
+          endereco: g.nivel == 1 ? g.rotulo : '${g.rotulo} · N${g.nivel}',
+        ),
+    ]));
   }
 
   EnderecoBarracao? _porId(int id) {
