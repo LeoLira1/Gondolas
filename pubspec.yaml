@@ -14,7 +14,9 @@ dependencies:
   shared_preferences: ^2.2.0
   # Zebra ZT410 por Bluetooth clássico (SPP/RFCOMM) — tela Etiquetas – Vendidos.
   flutter_blue_classic: ^0.1.1
-  permission_handler: ^13.0.2
+  # 12.x: o 13 puxa permission_handler_android 14, que exige compileSdk 37
+  # e o projeto gerado pelo flutter create compila com 36.
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
