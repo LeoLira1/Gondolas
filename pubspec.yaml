@@ -12,6 +12,9 @@ dependencies:
   libsql_dart: ^0.9.0
   path_provider: ^2.1.0
   shared_preferences: ^2.2.0
+  # Zebra ZT410 por Bluetooth clássico (SPP/RFCOMM) — tela Etiquetas – Vendidos.
+  flutter_blue_classic: ^0.1.1
+  permission_handler: ^13.0.2
 
 dev_dependencies:
   flutter_test:

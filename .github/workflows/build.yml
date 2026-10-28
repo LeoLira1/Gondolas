@@ -24,6 +24,7 @@ on:
       - "claude/new-session-okic0g"
       - "claude/workflow-failure-fix-a418bh"
       - "claude/galpao-concrete-floor-texture-pxhp8w"
+      - "claude/etiquetas-vendidos-zebra-9gu3z6"
   workflow_dispatch:
 
 jobs:
@@ -69,6 +70,14 @@ jobs:
           # ambas no manifesto principal; sem elas o DNS falha em release.
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
             sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <application|' \
+              "$MANIFEST"
+
+          # Bluetooth clássico (SPP) da tela Etiquetas – Vendidos: a Zebra
+          # ZT410 imprime pelo mesmo canal do Serial Bluetooth Terminal.
+          # Android 12+ pede BLUETOOTH_CONNECT/SCAN em tempo de execução; as
+          # antigas ficam só para Android 11 ou menor.
+          grep -q 'android.permission.BLUETOOTH_CONNECT' "$MANIFEST" || \
+            sed -i 's|<application|<uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>\n    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>\n    <application|' \
               "$MANIFEST"
 
           cp -r /tmp/scaffold/android .
