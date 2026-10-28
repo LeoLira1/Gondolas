@@ -13,6 +13,7 @@ import 'estante_parede_scene.dart';
 import 'estante_scene.dart';
 import 'estocados_busca.dart' show chaveDestaque;
 import 'estoque_localizado_service.dart';
+import 'etiquetas_vendidos_page.dart';
 import 'fila_gravacao.dart';
 import 'expositor_magnojet_scene.dart';
 import 'expositor_monitor_scene.dart';
@@ -766,7 +767,23 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                           onTap: _toggleModoConferencia,
                         ),
                         const Spacer(),
-                        const _LegendRow(),
+                        // Etiquetas embaixo da legenda: na linha dos botões
+                        // um quinto botão de 46 px estoura a largura de um
+                        // celular de 360 dp.
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            const _LegendRow(),
+                            const SizedBox(height: 8),
+                            _EtiquetasButton(
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        const EtiquetasVendidosPage()),
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -1103,6 +1120,37 @@ class _BarracaoButton extends StatelessWidget {
         ),
         child: const Icon(Icons.inventory_2_outlined,
             color: Color(0xFF8a877f), size: 20),
+      ),
+    );
+  }
+}
+
+// ── _EtiquetasButton ─────────────────────────────────────────────────────────
+
+/// Porta de entrada da tela "Etiquetas – Vendidos" (impressão na Zebra por
+/// Bluetooth). Mesmo formato dos botões do galpão e do barracão.
+class _EtiquetasButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _EtiquetasButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Etiquetas – Vendidos',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 46,
+          width:  46,
+          decoration: BoxDecoration(
+            color:        const Color(0xEE141518),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          ),
+          child: const Icon(Icons.print_outlined,
+              color: Color(0xFF8a877f), size: 20),
+        ),
       ),
     );
   }
