@@ -738,10 +738,14 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                       onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
                     ),
                     const SizedBox(height: 8),
-                    // Segunda linha: ações e legenda. Sincronizar, galpão e
-                    // conferência à esquerda; a legenda encostada à direita.
+                    // Segunda linha: os cinco botões de ação. A legenda
+                    // ficava à direita deles numa coluna (um chip por linha,
+                    // com Etiquetas embaixo); com Paletes e Mostruário ela
+                    // cresceu para ~180 px e empurrava o banner de conferência
+                    // e o título para cima do mapa. Sem a legenda na linha,
+                    // os cinco botões de 46 px (270 dp) cabem num celular de
+                    // 360 dp.
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _SyncButton(
                           sincronizando: _sincronizando,
@@ -766,26 +770,19 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
                         ),
-                        const Spacer(),
-                        // Etiquetas embaixo da legenda: na linha dos botões
-                        // um quinto botão de 46 px estoura a largura de um
-                        // celular de 360 dp.
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            const _LegendRow(),
-                            const SizedBox(height: 8),
-                            _EtiquetasButton(
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        const EtiquetasVendidosPage()),
-                              ),
-                            ),
-                          ],
+                        const SizedBox(width: 10),
+                        _EtiquetasButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    const EtiquetasVendidosPage()),
+                          ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 8),
+                    // Legenda numa linha só, logo abaixo dos botões.
+                    const _LegendRow(),
                     const SizedBox(height: 8),
                     // Antes do banner de conferência: a baixa fala do mapa que
                     // acabou de mudar, e é a primeira pergunta de quem abre o
@@ -1562,14 +1559,15 @@ class _LegendRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    // Wrap e não Row: numa tela estreita a legenda quebra em duas linhas em
+    // vez de estourar a largura.
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
       children: [
         _chip(corGondolaLoja, 'Gôndola', hexagon: true),
-        const SizedBox(height: 6),
         _chip(corEstanteLoja, 'Estante'),
-        const SizedBox(height: 6),
         _chip(IlhaPaletesGeometry.corTapume, 'Paletes'),
-        const SizedBox(height: 6),
         _chip(MostruarioGeometry.corMadeira, 'Mostruário'),
       ],
     );
