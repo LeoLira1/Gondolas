@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'baixa_por_contagem.dart';
 import 'baixa_por_contagem_service.dart';
@@ -738,10 +737,11 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                       onClear:       _searchCtrl.text.isNotEmpty ? _limparBusca : null,
                     ),
                     const SizedBox(height: 8),
-                    // Segunda linha: ações e legenda. Sincronizar, galpão e
-                    // conferência à esquerda; a legenda encostada à direita.
+                    // Segunda linha: os cinco botões de ação (270 dp, cabem
+                    // num celular de 360 dp). Não há legenda de cores: ela
+                    // virou uma coluna de chips que empurrava o banner de
+                    // conferência e o título para cima do mapa.
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _SyncButton(
                           sincronizando: _sincronizando,
@@ -766,23 +766,13 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                           ativo: _modoConferencia,
                           onTap: _toggleModoConferencia,
                         ),
-                        const Spacer(),
-                        // Etiquetas embaixo da legenda: na linha dos botões
-                        // um quinto botão de 46 px estoura a largura de um
-                        // celular de 360 dp.
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            const _LegendRow(),
-                            const SizedBox(height: 8),
-                            _EtiquetasButton(
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        const EtiquetasVendidosPage()),
-                              ),
-                            ),
-                          ],
+                        const SizedBox(width: 10),
+                        _EtiquetasButton(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    const EtiquetasVendidosPage()),
+                          ),
                         ),
                       ],
                     ),
@@ -1553,73 +1543,6 @@ class _SearchBox extends StatelessWidget {
       ],
     );
   }
-}
-
-// ── _LegendRow ────────────────────────────────────────────────────────────────
-
-class _LegendRow extends StatelessWidget {
-  const _LegendRow();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _chip(corGondolaLoja, 'Gôndola', hexagon: true),
-        const SizedBox(height: 6),
-        _chip(corEstanteLoja, 'Estante'),
-        const SizedBox(height: 6),
-        _chip(IlhaPaletesGeometry.corTapume, 'Paletes'),
-        const SizedBox(height: 6),
-        _chip(MostruarioGeometry.corMadeira, 'Mostruário'),
-      ],
-    );
-  }
-
-  Widget _chip(Color cor, String label, {bool hexagon = false}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: const Color(0x8C141416),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ClipPath(
-            clipper: hexagon ? _HexClipper() : null,
-            child: Container(
-              width: 8, height: 8,
-              decoration: BoxDecoration(
-                color: cor,
-                borderRadius: hexagon ? null : BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(width: 5),
-          Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFFcfcdc7))),
-        ],
-      ),
-    );
-  }
-}
-
-class _HexClipper extends CustomClipper<Path> {
-  @override
-  Path getClip(Size s) {
-    final path = Path();
-    for (var i = 0; i < 6; i++) {
-      final angle = i * 2 * math.pi / 6 - math.pi / 6;
-      final px = s.width  / 2 + s.width  / 2 * math.cos(angle);
-      final py = s.height / 2 + s.height / 2 * math.sin(angle);
-      i == 0 ? path.moveTo(px, py) : path.lineTo(px, py);
-    }
-    path.close();
-    return path;
-  }
-
-  @override
-  bool shouldReclip(_) => false;
 }
 
 // ── _LocationCard ─────────────────────────────────────────────────────────────
