@@ -364,7 +364,27 @@ class ModoConferenciaService {
     }
   }
 
-  Future<List<ItemPendente>> _buscarPendentes(LibsqlClient client) async {
+  /// Os pendentes vêm do banco ONLINE sempre que der (ver
+  /// TursoService.clienteOnline): contagem_itens é escrita pelo app de
+  /// contagem e pelo dashboard, e a cópia local podia ficar dias atrás. Sem
+  /// rede, cai na cópia local — melhor um ciano velho que nenhum.
+  Future<List<ItemPendente>> _buscarPendentes(LibsqlClient local) async {
+    final online = await TursoService().clienteOnline();
+    if (online != null && !identical(online, local)) {
+      try {
+        // Prazo curto: na rede ruim da loja, esperar o online não pode
+        // travar a cena — a cópia local responde na hora.
+        return await _consultarPendentes(online)
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {
+        // Conexão caiu no meio: aposenta e segue com a cópia local.
+        TursoService().descartarClienteOnline(online);
+      }
+    }
+    return _consultarPendentes(local);
+  }
+
+  Future<List<ItemPendente>> _consultarPendentes(LibsqlClient client) async {
     final stmt = await client.prepare(
       "SELECT codigo, produto, categoria, qtd_estoque FROM contagem_itens "
       "WHERE status = 'pendente'",
