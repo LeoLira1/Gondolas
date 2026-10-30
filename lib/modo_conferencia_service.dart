@@ -425,7 +425,44 @@ class ModoConferenciaService {
     );
   }
 
-  Future<List<ItemPendente>> _buscarPendentes(LibsqlClient client) async {
+  /// Só os códigos pendentes agora, sem cruzar com endereço nenhum. É o que
+  /// a gôndola/estante aberta em Modo Conferência usa para revalidar a lista
+  /// que recebeu do mapa: aquela lista é uma foto do momento em que a cena
+  /// abriu, e um item confirmado no app de contagem depois disso (ou numa
+  /// sincronização que trouxe a confirmação) continuaria ciano para sempre.
+  /// Null quando a consulta falha — quem chama mantém o que já tinha.
+  Future<Set<String>?> buscarCodigosPendentes() async {
+    final client = await _conexao();
+    if (client == null) return null;
+    try {
+      final pendentes = await _buscarPendentes(client);
+      return pendentes.map((p) => p.codigo).toSet();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Os pendentes vêm do banco ONLINE sempre que der (ver
+  /// TursoService.clienteOnline): contagem_itens é escrita pelo app de
+  /// contagem e pelo dashboard, e a cópia local podia ficar dias atrás. Sem
+  /// rede, cai na cópia local — melhor um ciano velho que nenhum.
+  Future<List<ItemPendente>> _buscarPendentes(LibsqlClient local) async {
+    final online = await TursoService().clienteOnline();
+    if (online != null && !identical(online, local)) {
+      try {
+        // Prazo curto: na rede ruim da loja, esperar o online não pode
+        // travar a cena — a cópia local responde na hora.
+        return await _consultarPendentes(online)
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {
+        // Conexão caiu no meio: aposenta e segue com a cópia local.
+        TursoService().descartarClienteOnline(online);
+      }
+    }
+    return _consultarPendentes(local);
+  }
+
+  Future<List<ItemPendente>> _consultarPendentes(LibsqlClient client) async {
     final stmt = await client.prepare(
       "SELECT codigo, produto, categoria, qtd_estoque FROM contagem_itens "
       "WHERE status = 'pendente'",
