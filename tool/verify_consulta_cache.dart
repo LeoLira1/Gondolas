@@ -120,6 +120,35 @@ Future<void> main() async {
   );
   pendente.complete([]);
   await Future<void>.delayed(Duration.zero);
+
+  // Recarga do Sincronizar: uma consulta que falha não derruba as outras, e
+  // elas rodam uma de cada vez (sem fila disputando a mesma conexão).
+  final recarga = ConsultaCache(
+    lerDisco: (_) async => null,
+    gravarDisco: (_, __) async {},
+    aoAtualizar: () {},
+  );
+  var simultaneas = 0;
+  var maxSimultaneas = 0;
+  Future<LinhasConsulta> Function() lenta(String nome) => () async {
+    simultaneas++;
+    if (simultaneas > maxSimultaneas) maxSimultaneas = simultaneas;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    simultaneas--;
+    return [
+      {'v': nome},
+    ];
+  };
+  await recarga.ler('a', lenta('a1'));
+  await recarga.ler('b', falhar, usarCache: false);
+  await recarga.ler('c', lenta('c1'));
+  maxSimultaneas = 0;
+  final semAtualizar = await recarga.atualizar();
+  conferir(semAtualizar == 1, 'Só a consulta que falhou conta como falha');
+  conferir(maxSimultaneas == 1, 'Recarga deve rodar uma consulta por vez');
+  conferir(!recarga.atualizando, 'Recarga com falha libera a trava');
+  final esgotado = await recarga.atualizar(prazo: Duration.zero);
+  conferir(esgotado == 3, 'Prazo esgotado conta as que ficaram para depois');
   print(
     'Cache: leitura imediata, deduplicação, corrida com commit, reinício, bancos separados, falhas e vazio OK',
   );

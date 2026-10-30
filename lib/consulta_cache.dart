@@ -129,11 +129,35 @@ class ConsultaCache {
     _emAndamento.clear();
   }
 
-  Future<void> atualizar() async {
-    if (atualizando) return;
+  /// Relê todas as consultas registradas e devolve quantas NÃO atualizaram.
+  ///
+  /// Uma de cada vez: todas usam a mesma conexão, e disparadas juntas elas
+  /// faziam fila nela — o prazo de cada uma corria enquanto esperava a vez, e
+  /// na rede da loja a última estourava os 45 s sem nem ter saído. Uma que
+  /// falha não derruba as outras: a cópia anterior dela continua valendo.
+  ///
+  /// [prazo] limita a rodada inteira. Estourou, as que faltam ficam com a
+  /// cópia de antes (e contam como não atualizadas) — a próxima abertura da
+  /// tela revalida em segundo plano.
+  Future<int> atualizar({Duration? prazo}) async {
+    if (atualizando) return 0;
     atualizando = true;
+    final inicio = DateTime.now();
+    var falhas = 0;
     try {
-      await Future.wait(_consultas.keys.toList().map(_atualizar));
+      final chaves = _consultas.keys.toList();
+      for (var i = 0; i < chaves.length; i++) {
+        if (prazo != null && DateTime.now().difference(inicio) >= prazo) {
+          falhas += chaves.length - i;
+          break;
+        }
+        try {
+          await _atualizar(chaves[i]);
+        } catch (_) {
+          falhas++;
+        }
+      }
+      return falhas;
     } finally {
       atualizando = false;
     }
