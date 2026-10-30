@@ -1629,6 +1629,9 @@ class TursoService {
   // reabrir usa _timeoutConexao (20s) e sincronizar usa _timeoutSync. Nenhum
   // uso rotineiro do app espera por este limite.
   static const Duration _timeoutSync = Duration(minutes: 3);
+  // Quanto o Sincronizar espera, no total, pela recarga das telas depois que
+  // o banco já respondeu. O que não couber fica com a cópia anterior.
+  static const Duration _prazoRecargaNoSync = Duration(seconds: 40);
 
   Future<String> _caminhoCacheLocal() async {
     final dir = await getApplicationSupportDirectory();
@@ -2380,9 +2383,24 @@ class TursoService {
         if (!await _clienteRespondendo())
           return const SincronizacaoNaoConfirmada();
       }
-      await _consultaCache.atualizar();
+      // O banco já respondeu, então o Sincronizar deu certo. Recarregar as
+      // cópias das telas é bônus: uma consulta pesada que estoura o prazo na
+      // rede lenta não pode virar "Não foi possível sincronizar" — era isso
+      // que aparecia depois de mais de um minuto esperando.
+      final semAtualizar =
+          await _consultaCache.atualizar(prazo: _prazoRecargaNoSync);
+      if (semAtualizar > 0) {
+        _ultimoAvisoSync = semAtualizar == 1
+            ? 'Banco online respondendo ✓ — 1 tela não recarregou a tempo '
+                '(rede lenta); ela se atualiza ao abrir'
+            : 'Banco online respondendo ✓ — $semAtualizar telas não '
+                'recarregaram a tempo (rede lenta); elas se atualizam ao abrir';
+      }
       // O sync pode ter trazido paletes cadastrados em outro dispositivo.
-      await PaleteRegistry().carregar();
+      await PaleteRegistry().carregar().timeout(
+        _timeoutConexao,
+        onTimeout: () {},
+      );
       // Antes do dataRevision — ver a nota em _estabelecerBaseLocal.
       _invalidarCachesDeLeitura();
       await _registrarSincronizacao();

@@ -376,13 +376,22 @@ class ConsultaCache {
   ///
   /// Sem filtro (o Sincronizar) espera a passada em andamento e relê TUDO —
   /// antes, ele voltava na hora sem reler nada e ainda avisava sucesso.
-  Future<void> atualizar({
+  ///
+  /// Uma de cada vez: todas usam a mesma conexão, e disparadas juntas elas
+  /// faziam fila nela — o prazo de cada uma corria enquanto esperava a vez, e
+  /// na rede da loja a última estourava os 45 s sem nem ter saído. Uma que
+  /// falha não derruba as outras: a cópia anterior dela continua valendo.
+  ///
+  /// [prazo] limita a passada inteira. Estourou, as que faltam ficam com a
+  /// cópia de antes. Devolve quantas NÃO atualizaram (falha ou prazo).
+  Future<int> atualizar({
     bool soVencidas = false,
     bool soUsadas = false,
+    Duration? prazo,
   }) async {
     final emCurso = _passada;
     if (emCurso != null) {
-      if (soVencidas) return;
+      if (soVencidas) return 0;
       await emCurso.then<void>((_) {}, onError: (_) {});
     }
     final agora = DateTime.now();
@@ -391,13 +400,32 @@ class ConsultaCache {
       if (!soUsadas) return true;
       return _usadas.contains(chave) && !_semVolta.contains(chave);
     }).toList();
-    final futuro = Future.wait(chaves.map(_atualizar));
+    final futuro = _relerEmSequencia(chaves, agora, prazo);
     _passada = futuro;
     try {
-      await futuro;
+      return await futuro;
     } finally {
       if (identical(_passada, futuro)) _passada = null;
     }
+  }
+
+  Future<int> _relerEmSequencia(
+    List<String> chaves,
+    DateTime inicio,
+    Duration? prazo,
+  ) async {
+    var falhas = 0;
+    for (var i = 0; i < chaves.length; i++) {
+      if (prazo != null && DateTime.now().difference(inicio) >= prazo) {
+        return falhas + chaves.length - i;
+      }
+      try {
+        await _atualizar(chaves[i]);
+      } catch (_) {
+        falhas++;
+      }
+    }
+    return falhas;
   }
 
   bool _tentativaVencida(String chave, DateTime agora) {
