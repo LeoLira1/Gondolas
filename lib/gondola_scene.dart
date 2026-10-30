@@ -402,13 +402,18 @@ class GondolaGeometry {
     ], color));
   }
 
+  // Volume da caixa — o mesmo para desenhar e para o toque acertar.
+  static const double caixaLargura      = 0.40;
+  static const double caixaAltura       = 0.52;
+  static const double caixaProfundidade = 0.40;
+
   /// Adds 5 visible faces of a box sitting on a shelf surface at (cx, cy, cz).
   static void addBox(List<Face> faces, {
     required double cx, required double cy, required double cz,
     required Color color,
     bool desatualizado = false,
   }) {
-    const w = 0.40, h = 0.52, d = 0.40;
+    const w = caixaLargura, h = caixaAltura, d = caixaProfundidade;
     final x0 = cx - w / 2, x1 = cx + w / 2;
     final y0 = cy,          y1 = cy + h;
     final z0 = cz - d / 2, z1 = cz + d / 2;
@@ -742,12 +747,65 @@ class _GondolaSceneState extends State<GondolaScene>
     // 2) Prateleira: coloca caixa (se há produto ativo) ou seleciona a face
     //    derivada do atan2 do ponto de interseção.
     final hit = _hitTest(local, rb.size);
-    if (hit == null) return;
     if (widget.onTapAndar != null && widget.produtoSelecionadoId != null) {
+      if (hit == null) return;
       widget.onTapAndar!(hit.andar, hit.x, hit.z);
-    } else {
-      widget.onFaceTap?.call(faceFromPos(hit.x, hit.z), hit.andar, hit.x, hit.z);
+      return;
     }
+    // Selecionar: a caixa que o raio atravessa primeiro vence a prateleira.
+    // Só com o plano da prateleira, tocar na lateral ou no topo de uma caixa
+    // "vazava": o raio seguia até o chão da prateleira ATRÁS dela e
+    // selecionava a caixa vizinha (ou outra face) — tocar no Texaco abria o
+    // Lubrax do lado, dependendo do ângulo.
+    final caixa = _hitTestCaixa(local, rb.size);
+    if (caixa != null && (hit == null || caixa.t <= hit.t)) {
+      final c = caixa.caixa;
+      widget.onFaceTap?.call(faceFromPos(c.x, c.z), c.andar, c.x, c.z);
+      return;
+    }
+    if (hit == null) return;
+    widget.onFaceTap?.call(faceFromPos(hit.x, hit.z), hit.andar, hit.x, hit.z);
+  }
+
+  /// Raio da câmera passando pelo pixel tocado.
+  ({Vec3 eye, Vec3 dir}) _raio(Offset tap, Size size) {
+    final eye   = _camera.position;
+    final fwd   = (_camera.target - eye).normalized;
+    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
+    final up    = right.cross(fwd).normalized;
+
+    const fovY = 45.0 * math.pi / 180.0;
+    final tanH   = math.tan(fovY / 2);
+    final aspect = size.width / size.height;
+
+    final ndcX = 2 * tap.dx / size.width  - 1;
+    final ndcY = 1 - 2 * tap.dy / size.height;
+
+    final dir = (right * (ndcX * tanH * aspect) +
+                 up    * (ndcY * tanH) +
+                 fwd).normalized;
+    return (eye: eye, dir: dir);
+  }
+
+  /// Caixa mais próxima atravessada pelo raio do toque (interseção com o
+  /// mesmo volume que [GondolaGeometry.addBox] desenha), com a distância t.
+  ({CaixaColocada caixa, double t})? _hitTestCaixa(Offset tap, Size size) {
+    final r = _raio(tap, size);
+    ({CaixaColocada caixa, double t})? melhor;
+    for (final c in widget.caixas) {
+      final yBase = GondolaGeometry.andares[c.andar].yTop;
+      final t = intersecaoRaioCaixa(
+        r.eye, r.dir,
+        min: Vec3(c.x - GondolaGeometry.caixaLargura / 2, yBase,
+                  c.z - GondolaGeometry.caixaProfundidade / 2),
+        max: Vec3(c.x + GondolaGeometry.caixaLargura / 2,
+                  yBase + GondolaGeometry.caixaAltura,
+                  c.z + GondolaGeometry.caixaProfundidade / 2),
+      );
+      if (t == null || t <= 0.1) continue;
+      if (melhor == null || t < melhor.t) melhor = (caixa: c, t: t);
+    }
+    return melhor;
   }
 
   /// Hit circular nos labels de face (raio do disco + 8px de folga),
@@ -789,23 +847,10 @@ class _GondolaSceneState extends State<GondolaScene>
 
   /// Ray-plane intersection against each shelf's horizontal surface.
   /// Returns the nearest hit (smallest positive t) that lands within the shelf radius.
-  ({int andar, double x, double z})? _hitTest(Offset tap, Size size) {
-    final eye   = _camera.position;
-    final fwd   = (_camera.target - eye).normalized;
-    final right = fwd.cross(const Vec3(0, 1, 0)).normalized;
-    final up    = right.cross(fwd).normalized;
-
-    const fovY = 45.0 * math.pi / 180.0;
-    final tanH   = math.tan(fovY / 2);
-    final aspect = size.width / size.height;
-
-    final ndcX = 2 * tap.dx / size.width  - 1;
-    final ndcY = 1 - 2 * tap.dy / size.height;
-
-    // Ray direction through this screen pixel
-    final dir = (right * (ndcX * tanH * aspect) +
-                 up    * (ndcY * tanH) +
-                 fwd).normalized;
+  ({int andar, double x, double z, double t})? _hitTest(Offset tap, Size size) {
+    final r   = _raio(tap, size);
+    final eye = r.eye;
+    final dir = r.dir;
 
     ({int andar, double x, double z, double t})? nearest;
 
@@ -834,7 +879,7 @@ class _GondolaSceneState extends State<GondolaScene>
       }
     }
 
-    return nearest == null ? null : (andar: nearest.andar, x: nearest.x, z: nearest.z);
+    return nearest;
   }
 
   @override
@@ -888,4 +933,35 @@ class _GondolaSceneState extends State<GondolaScene>
       ),
     );
   }
+}
+
+/// Interseção raio × caixa alinhada aos eixos (método das "slabs"). Devolve
+/// o t de entrada do raio [origem] + t·[dir] na caixa [min]–[max], ou null se
+/// não atravessa. Pura, para testar sem Flutter.
+double? intersecaoRaioCaixa(Vec3 origem, Vec3 dir,
+    {required Vec3 min, required Vec3 max}) {
+  var tMin = double.negativeInfinity;
+  var tMax = double.infinity;
+  final o  = [origem.x, origem.y, origem.z];
+  final d  = [dir.x, dir.y, dir.z];
+  final lo = [min.x, min.y, min.z];
+  final hi = [max.x, max.y, max.z];
+  for (var i = 0; i < 3; i++) {
+    if (d[i].abs() < 1e-9) {
+      if (o[i] < lo[i] || o[i] > hi[i]) return null;
+      continue;
+    }
+    var t1 = (lo[i] - o[i]) / d[i];
+    var t2 = (hi[i] - o[i]) / d[i];
+    if (t1 > t2) {
+      final tmp = t1;
+      t1 = t2;
+      t2 = tmp;
+    }
+    if (t1 > tMin) tMin = t1;
+    if (t2 < tMax) tMax = t2;
+    if (tMin > tMax) return null;
+  }
+  if (tMax < 0) return null;
+  return tMin >= 0 ? tMin : tMax;
 }
