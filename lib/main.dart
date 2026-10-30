@@ -345,59 +345,8 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
       return;
     }
 
-    final produto = _produtoSelecionado != null
-        ? ProdutoLoja(
-            nome:          _produtoSelecionado!.nome,
-            tipo:          _produtoSelecionado!.tipo,
-            numero:        _produtoSelecionado!.numero,
-            nivel:         _produtoSelecionado!.nivelDescricao,
-            produtoCodigo: _produtoSelecionado!.produtoCodigo,
-            face:          _produtoSelecionado!.face,
-            andar:         _produtoSelecionado!.andar,
-          )
-        : null;
-    if (tipo == localTipoGalpao) {
-      // O galpão não tem maquete no mapa da loja (é outro prédio): a busca
-      // leva direto à tela dele, marcando a posição escolhida na lista e
-      // acendendo TODAS as posições do produto — ele quase nunca está num
-      // palete só, e a busca devolve uma linha por endereço.
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => GalpaoPage(
-          posicaoInicial:  numero,
-          codigoDestacado: produto == null
-              ? null
-              : chaveDestaque(produto.produtoCodigo, produto.nome),
-        ),
-      ));
-    } else if (tipo == localTipoBarracao) {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => BarracaoPage(
-          enderecoInicialId: numero,
-          codigoDestacado: produto == null
-              ? null
-              : chaveDestaque(produto.produtoCodigo, produto.nome),
-        ),
-      ));
-    } else if (tipo == 'gondola') {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => GondolaPage(
-          gondolaInicial:   numero,
-          produtoDestacado: produto,
-        ),
-      ));
-    } else {
-      // Se a busca apontou uma seção específica da parede (13–18), abre nela;
-      // sem produto, o retângulo da parede abre pela seção 1 (E13).
-      final estanteInicial = produto != null && produto.tipo == 'estante'
-          ? produto.numero
-          : numero;
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => EstantePage(
-          estanteInicial:   estanteInicial,
-          produtoDestacado: produto,
-        ),
-      ));
-    }
+    await abrirEnderecoNoMapa(context,
+        tipo: tipo, numero: numero, encontrado: _produtoSelecionado);
   }
 
   // ── Modo Conferência (Fase 3) ──────────────────────────────────────────────
@@ -770,8 +719,13 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
                         _EtiquetasButton(
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
-                                builder: (_) =>
-                                    const EtiquetasVendidosPage()),
+                                builder: (_) => EtiquetasVendidosPage(
+                                      abrirEndereco: (ctx, e) =>
+                                          abrirEnderecoNoMapa(ctx,
+                                              tipo: e.tipo,
+                                              numero: e.numero,
+                                              encontrado: e),
+                                    )),
                           ),
                         ),
                       ],
@@ -832,6 +786,70 @@ class _LojaPageState extends State<LojaPage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+}
+
+/// Abre a tela de um endereço com o produto aceso: galpão e barracão na tela
+/// deles, gôndola e estantes na cena de detalhe. Usada pela busca do mapa e
+/// pelo "onde está" das telas de Etiquetas e Repor loja.
+Future<void> abrirEnderecoNoMapa(
+  BuildContext context, {
+  required String tipo,
+  required int numero,
+  ProdutoEncontrado? encontrado,
+}) async {
+  final produto = encontrado != null
+      ? ProdutoLoja(
+          nome:          encontrado.nome,
+          tipo:          encontrado.tipo,
+          numero:        encontrado.numero,
+          nivel:         encontrado.nivelDescricao,
+          produtoCodigo: encontrado.produtoCodigo,
+          face:          encontrado.face,
+          andar:         encontrado.andar,
+        )
+      : null;
+  if (tipo == localTipoGalpao) {
+    // O galpão não tem maquete no mapa da loja (é outro prédio): a busca
+    // leva direto à tela dele, marcando a posição escolhida na lista e
+    // acendendo TODAS as posições do produto — ele quase nunca está num
+    // palete só, e a busca devolve uma linha por endereço.
+    Navigator.push<void>(context, MaterialPageRoute(
+      builder: (_) => GalpaoPage(
+        posicaoInicial:  numero,
+        codigoDestacado: produto == null
+            ? null
+            : chaveDestaque(produto.produtoCodigo, produto.nome),
+      ),
+    ));
+  } else if (tipo == localTipoBarracao) {
+    Navigator.push<void>(context, MaterialPageRoute(
+      builder: (_) => BarracaoPage(
+        enderecoInicialId: numero,
+        codigoDestacado: produto == null
+            ? null
+            : chaveDestaque(produto.produtoCodigo, produto.nome),
+      ),
+    ));
+  } else if (tipo == 'gondola') {
+    Navigator.push<void>(context, MaterialPageRoute(
+      builder: (_) => GondolaPage(
+        gondolaInicial:   numero,
+        produtoDestacado: produto,
+      ),
+    ));
+  } else {
+    // Se a busca apontou uma seção específica da parede (13–18), abre nela;
+    // sem produto, o retângulo da parede abre pela seção 1 (E13).
+    final estanteInicial = produto != null && produto.tipo == 'estante'
+        ? produto.numero
+        : numero;
+    Navigator.push<void>(context, MaterialPageRoute(
+      builder: (_) => EstantePage(
+        estanteInicial:   estanteInicial,
+        produtoDestacado: produto,
+      ),
+    ));
   }
 }
 
