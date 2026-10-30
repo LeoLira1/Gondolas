@@ -11,7 +11,10 @@ const List<String> _andarNomes = ['Base', 'Meio', 'Topo'];
 
 /// Abre o dialog de quantidades por endereço de um produto. Chamado ao tocar
 /// numa caixa existente (gôndola ou estante), fora do modo de edição de layout.
-Future<void> mostrarQuantidadeDialog(
+/// Devolve true quando o usuário concluiu a contagem do produto com sucesso
+/// (botão "Concluir contagem") — quem abriu usa isso pra apagar o destaque do
+/// Modo Conferência daquele produto na hora.
+Future<bool> mostrarQuantidadeDialog(
   BuildContext context, {
   required String produtoCodigo,
   required String produtoNome,
@@ -19,8 +22,8 @@ Future<void> mostrarQuantidadeDialog(
   required int localNum,
   required int faceOuColuna,
   required int andarOuNivel,
-}) {
-  return showDialog<void>(
+}) async {
+  final concluiu = await showDialog<bool>(
     context: context,
     builder: (_) => _QuantidadeDialog(
       produtoCodigo: produtoCodigo,
@@ -31,6 +34,7 @@ Future<void> mostrarQuantidadeDialog(
       andarOuNivel: andarOuNivel,
     ),
   );
+  return concluiu ?? false;
 }
 
 String _labelEndereco(EnderecoLocalizado e) {
@@ -526,7 +530,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     final salvouEditados = await _salvarEditados();
     final resultado = await _service.concluirContagem(widget.produtoCodigo);
     if (!mounted) return;
-    Navigator.pop(context);
+    Navigator.pop(context, resultado != null && salvouEditados);
 
     if (resultado == null || !salvouEditados) {
       ScaffoldMessenger.of(context).showSnackBar(

@@ -347,6 +347,23 @@ class ModoConferenciaService {
     }
   }
 
+  /// Só os códigos pendentes agora, sem cruzar com endereço nenhum. É o que
+  /// a gôndola/estante aberta em Modo Conferência usa para revalidar a lista
+  /// que recebeu do mapa: aquela lista é uma foto do momento em que a cena
+  /// abriu, e um item confirmado no app de contagem depois disso (ou numa
+  /// sincronização que trouxe a confirmação) continuaria ciano para sempre.
+  /// Null quando a consulta falha — quem chama mantém o que já tinha.
+  Future<Set<String>?> buscarCodigosPendentes() async {
+    final client = await _conexao();
+    if (client == null) return null;
+    try {
+      final pendentes = await _buscarPendentes(client);
+      return pendentes.map((p) => p.codigo).toSet();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<List<ItemPendente>> _buscarPendentes(LibsqlClient client) async {
     final stmt = await client.prepare(
       "SELECT codigo, produto, categoria, qtd_estoque FROM contagem_itens "
