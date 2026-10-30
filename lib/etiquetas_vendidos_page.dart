@@ -4,13 +4,20 @@ import 'package:flutter/material.dart';
 
 import 'etiquetas_vendidos.dart';
 import 'etiquetas_vendidos_service.dart';
+import 'onde_esta.dart';
+import 'repor_loja_tab.dart';
 import 'zebra_bluetooth.dart';
 
 /// Tela "Etiquetas – Vendidos": lista os produtos vendidos num dia que ficam
 /// na loja (mesma regra da ferramenta etiquetas_vendidos_loja do MCP) e
 /// imprime direto na Zebra ZT410 por Bluetooth clássico, um comando por vez.
+///
+/// Segunda aba: a lista do Repor loja do camda-estoque. Nas duas, tocar no
+/// nome do produto mostra onde ele está nos mapas ([abrirEndereco]).
 class EtiquetasVendidosPage extends StatefulWidget {
-  const EtiquetasVendidosPage({super.key});
+  final AbrirEndereco? abrirEndereco;
+
+  const EtiquetasVendidosPage({super.key, this.abrirEndereco});
 
   @override
   State<EtiquetasVendidosPage> createState() => _EtiquetasVendidosPageState();
@@ -28,8 +35,16 @@ const _verdeClaro = Color(0xFF4a9d6a);
 const _cinza = Color(0xFF8a9aa8);
 const _laranja = Color(0xFFe8a022);
 
-class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage> {
+class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage>
+    with SingleTickerProviderStateMixin {
   final _service = const EtiquetasVendidosService();
+  late final TabController _abas = TabController(length: 2, vsync: this)
+    ..addListener(() {
+      if (mounted) setState(() {});
+    });
+  final _reporKey = GlobalKey<ReporLojaTabState>();
+
+  bool get _naAbaVendidos => _abas.index == 0;
   final _zebra = ZebraBluetooth.instance;
 
   DateTime _dia = EtiquetasVendidosService.hojeBrasilia();
@@ -57,6 +72,7 @@ class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage> {
   @override
   void dispose() {
     _parar = true;
+    _abas.dispose();
     unawaited(_zebra.desconectar());
     super.dispose();
   }
@@ -364,28 +380,52 @@ class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage> {
         appBar: AppBar(
           backgroundColor: _fundo,
           elevation: 0,
-          title: const Text('Etiquetas – Vendidos',
-              style: TextStyle(fontSize: 17)),
+          title: Text(
+              _naAbaVendidos ? 'Etiquetas – Vendidos' : 'Repor loja',
+              style: const TextStyle(fontSize: 17)),
           actions: [
             IconButton(
               icon: const Icon(Icons.refresh, color: _cinza),
               tooltip: 'Buscar de novo',
-              onPressed: _carregando || _imprimindo ? null : _buscar,
+              onPressed: !_naAbaVendidos
+                  ? () => _reporKey.currentState?.recarregar()
+                  : _carregando || _imprimindo
+                      ? null
+                      : _buscar,
             ),
-            IconButton(
-              icon: const Icon(Icons.settings_outlined, color: _cinza),
-              tooltip: 'Impressora e intervalo',
-              onPressed: _imprimindo ? null : _abrirConfiguracoes,
-            ),
+            if (_naAbaVendidos)
+              IconButton(
+                icon: const Icon(Icons.settings_outlined, color: _cinza),
+                tooltip: 'Impressora e intervalo',
+                onPressed: _imprimindo ? null : _abrirConfiguracoes,
+              ),
+          ],
+          bottom: TabBar(
+            controller: _abas,
+            // Trocar de aba no meio da impressão esconderia o botão Parar.
+            onTap: (i) {
+              if (_imprimindo && i != 0) _abas.index = 0;
+            },
+            tabs: const [
+              Tab(text: 'Vendidos'),
+              Tab(text: 'Repor loja'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          controller: _abas,
+          physics: _imprimindo ? const NeverScrollableScrollPhysics() : null,
+          children: [
+            Column(children: [
+              if (_carregando) const LinearProgressIndicator(minHeight: 2),
+              _barraTopo(),
+              if (_erroImpressao != null) _bannerErro(),
+              Expanded(child: _lista(produtos)),
+            ]),
+            ReporLojaTab(key: _reporKey, abrirEndereco: widget.abrirEndereco),
           ],
         ),
-        body: Column(children: [
-          if (_carregando) const LinearProgressIndicator(minHeight: 2),
-          _barraTopo(),
-          if (_erroImpressao != null) _bannerErro(),
-          Expanded(child: _lista(produtos)),
-        ]),
-        bottomNavigationBar: _rodape(produtos),
+        bottomNavigationBar: _naAbaVendidos ? _rodape(produtos) : null,
       ),
     );
   }
@@ -550,20 +590,29 @@ class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage> {
                   v == true ? _marcados.add(i) : _marcados.remove(i)),
         ),
         Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(p.descricao,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(
-                  '${p.codigo} · ${p.local} · etiqueta: ${p.textoEtiqueta}',
-                  style: const TextStyle(color: _cinza, fontSize: 12),
-                ),
-              ],
+          // Tocar no nome mostra onde o produto está nos mapas.
+          child: InkWell(
+            onTap: widget.abrirEndereco == null
+                ? null
+                : () => mostrarOndeEsta(context,
+                    codigo: p.codigo,
+                    nome: p.descricao,
+                    abrir: widget.abrirEndereco!),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p.descricao,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${p.codigo} · ${p.local} · etiqueta: ${p.textoEtiqueta}',
+                    style: const TextStyle(color: _cinza, fontSize: 12),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
