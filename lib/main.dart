@@ -1683,6 +1683,9 @@ class _GondolaPageState extends State<GondolaPage> {
 
   // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
   late Set<String> _destacadosCodigos;
+  // Produtos com "Concluir contagem" feito nesta cena: saem do ciano na hora,
+  // mesmo que a lista de pendentes do dashboard ainda não tenha virado.
+  final Set<String> _concluidosNaCena = {};
 
   List<Produto> _produtos           = [];
   bool          _dbConectado        = false;
@@ -1760,6 +1763,7 @@ class _GondolaPageState extends State<GondolaPage> {
     _faceParaCamera     = widget.produtoDestacado?.face;
     _destacadosCodigos  = widget.codigosConferencia ?? {};
     _inicializar();
+    unawaited(_revalidarConferencia());
     TursoService().dataRevision.addListener(_aoAtualizarDados);
   }
 
@@ -1832,6 +1836,22 @@ class _GondolaPageState extends State<GondolaPage> {
     // sincronizar() zera o cache do catálogo, então ele precisa ser relido —
     // era o que o _inicializar do botão Sincronizar fazia.
     unawaited(_carregarCatalogo());
+    unawaited(_revalidarConferencia());
+  }
+
+  /// Tira do ciano o que deixou de estar pendente desde que o mapa abriu esta
+  /// cena (ver ModoConferenciaService.buscarCodigosPendentes). Só apaga, nunca
+  /// acende: a lista do mapa é a que diz o que mora nesta estrutura.
+  Future<void> _revalidarConferencia() async {
+    final inicial = widget.codigosConferencia;
+    if (inicial == null || inicial.isEmpty) return;
+    final pendentes = await ModoConferenciaService().buscarCodigosPendentes();
+    if (!mounted || pendentes == null) return;
+    setState(() {
+      _destacadosCodigos = inicial
+          .where((c) => pendentes.contains(c) && !_concluidosNaCena.contains(c))
+          .toSet();
+    });
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -2009,7 +2029,7 @@ class _GondolaPageState extends State<GondolaPage> {
     final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
         _nomesDoLayout[produtoCodigo] ??
         produtoCodigo;
-    await mostrarQuantidadeDialog(
+    final concluiu = await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
       produtoNome:   produtoNome,
@@ -2018,6 +2038,12 @@ class _GondolaPageState extends State<GondolaPage> {
       faceOuColuna:  faceOuColuna,
       andarOuNivel:  andarOuNivel,
     );
+    if (concluiu && mounted) {
+      setState(() {
+        _concluidosNaCena.add(produtoCodigo);
+        _destacadosCodigos = {..._destacadosCodigos}..remove(produtoCodigo);
+      });
+    }
     // O dialog pode ter alterado atualizado_em de algum endereço: recarrega
     // o conjunto de desatualizados pro badge refletir o estado atual.
     _carregarDesatualizados();
@@ -2369,6 +2395,7 @@ class _GondolaPageState extends State<GondolaPage> {
       _caixaSelecionada     = null;
       _faceParaCamera       = null;
       _destacadosCodigos    = widget.codigosConferencia ?? {};
+      _concluidosNaCena.clear();
     });
     _ctrl1.clear();
     _ctrl2.clear();
@@ -3181,6 +3208,9 @@ class _EstantePageState extends State<EstantePage> {
 
   // Códigos acesos pelo Modo Conferência (Fase 3), vindos do mapa.
   late Set<String> _destacadosCodigos;
+  // Produtos com "Concluir contagem" feito nesta cena: saem do ciano na hora,
+  // mesmo que a lista de pendentes do dashboard ainda não tenha virado.
+  final Set<String> _concluidosNaCena = {};
 
   List<Produto> _produtos           = [];
   bool          _dbConectado        = false;
@@ -3246,6 +3276,7 @@ class _EstantePageState extends State<EstantePage> {
     _destacadoCodigo   = widget.produtoDestacado?.produtoCodigo;
     _destacadosCodigos = widget.codigosConferencia ?? {};
     _inicializar();
+    unawaited(_revalidarConferencia());
     TursoService().dataRevision.addListener(_aoAtualizarDados);
   }
 
@@ -3307,6 +3338,22 @@ class _EstantePageState extends State<EstantePage> {
     _carregarLayout(_estanteAtual);
     unawaited(_carregarDesatualizados(forceRefresh: true));
     unawaited(_carregarCatalogo());
+    unawaited(_revalidarConferencia());
+  }
+
+  /// Tira do ciano o que deixou de estar pendente desde que o mapa abriu esta
+  /// cena (ver ModoConferenciaService.buscarCodigosPendentes). Só apaga, nunca
+  /// acende: a lista do mapa é a que diz o que mora nesta estrutura.
+  Future<void> _revalidarConferencia() async {
+    final inicial = widget.codigosConferencia;
+    if (inicial == null || inicial.isEmpty) return;
+    final pendentes = await ModoConferenciaService().buscarCodigosPendentes();
+    if (!mounted || pendentes == null) return;
+    setState(() {
+      _destacadosCodigos = inicial
+          .where((c) => pendentes.contains(c) && !_concluidosNaCena.contains(c))
+          .toSet();
+    });
   }
 
   Future<void> _carregarDesatualizados({bool forceRefresh = false}) async {
@@ -3574,7 +3621,7 @@ class _EstantePageState extends State<EstantePage> {
     final produtoNome = _produtoPorCodigo[produtoCodigo]?.nome ??
         _nomesDoLayout[produtoCodigo] ??
         produtoCodigo;
-    await mostrarQuantidadeDialog(
+    final concluiu = await mostrarQuantidadeDialog(
       context,
       produtoCodigo: produtoCodigo,
       produtoNome:   produtoNome,
@@ -3583,6 +3630,12 @@ class _EstantePageState extends State<EstantePage> {
       faceOuColuna:  faceOuColuna,
       andarOuNivel:  andarOuNivel,
     );
+    if (concluiu && mounted) {
+      setState(() {
+        _concluidosNaCena.add(produtoCodigo);
+        _destacadosCodigos = {..._destacadosCodigos}..remove(produtoCodigo);
+      });
+    }
     // O dialog pode ter alterado atualizado_em de algum endereço: recarrega
     // o conjunto de desatualizados pro badge refletir o estado atual.
     _carregarDesatualizados();
@@ -3961,6 +4014,7 @@ class _EstantePageState extends State<EstantePage> {
       _nivelSelecionado     = null;
       _slotSelecionado      = null;
       _destacadosCodigos    = widget.codigosConferencia ?? {};
+      _concluidosNaCena.clear();
     });
     _ctrl1.clear();
     _ctrl2.clear();
