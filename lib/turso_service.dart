@@ -1731,6 +1731,39 @@ class TursoService {
     }
   }
 
+  /// Cliente que lê direto do banco online, mesmo com o cache local ligado.
+  ///
+  /// Para tabelas que OUTROS apps escrevem e este só lê — `contagem_itens`,
+  /// do dashboard e do app de contagem. A réplica local não é confiável pra
+  /// elas: o carimbo do Sincronizar só confere as tabelas deste app, e uma
+  /// confirmação feita no app de contagem chegou a ficar dias sem aparecer
+  /// aqui (o Modo Conferência acendia em ciano produto já conferido). Null
+  /// sem rede ou sem credenciais — quem chama cai no cliente de sempre.
+  Future<LibsqlClient?> clienteOnline() async {
+    if (!_modoLocal) return _client;
+    final aberto = _clienteOnline;
+    if (aberto != null && _clienteOnlineUrl == _urlAtiva) return aberto;
+    final url = _urlAtiva;
+    final token = _tokenAtivo;
+    if (url == null || token == null) return null;
+    // Conexão própria, não a sonda do carimbo: duas conversas no mesmo
+    // stream disputariam o baton do libsql (ver _renovarClienteDeLeitura).
+    final novo = await _conectarRemoto(url, token);
+    if (novo == null) return null;
+    _clienteOnline = novo;
+    _clienteOnlineUrl = url;
+    return novo;
+  }
+
+  /// Aposenta a conexão de [clienteOnline] depois de uma falha — a próxima
+  /// chamada abre outra.
+  void descartarClienteOnline(LibsqlClient falhou) {
+    if (identical(_clienteOnline, falhou)) _clienteOnline = null;
+  }
+
+  LibsqlClient? _clienteOnline;
+  String? _clienteOnlineUrl;
+
   /// A conexão de sondagem, aberta sob demanda e reaproveitada entre as
   /// chamadas. Null quando não há credenciais ou o handshake não completa.
   Future<LibsqlClient?> _sondaRemota() async {

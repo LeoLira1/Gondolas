@@ -14,6 +14,9 @@ const List<String> _andarNomes = ['Base', 'Meio', 'Topo'];
 ///
 /// Devolve os endereços excluídos na lixeira, para a tela tirar do layout a
 /// caixa do produto que estava neles.
+///
+/// [onContagemConcluida] é chamado depois de fechado, quando o "Concluir
+/// contagem" deu certo — a tela apaga o ciano do Modo Conferência na hora.
 Future<List<EnderecoLocalizado>> mostrarQuantidadeDialog(
   BuildContext context, {
   required String produtoCodigo,
@@ -27,9 +30,11 @@ Future<List<EnderecoLocalizado>> mostrarQuantidadeDialog(
   // digitado, fecha o diálogo e, depois de fechado, chama [onOutroProduto].
   String? rotuloOutroProduto,
   VoidCallback? onOutroProduto,
+  VoidCallback? onContagemConcluida,
 }) async {
   final excluidos = <EnderecoLocalizado>[];
   var pediuOutroProduto = false;
+  var concluiuContagem = false;
   await showDialog<void>(
     context: context,
     builder: (_) => _QuantidadeDialog(
@@ -42,8 +47,10 @@ Future<List<EnderecoLocalizado>> mostrarQuantidadeDialog(
       excluidos: excluidos,
       rotuloOutroProduto: onOutroProduto == null ? null : rotuloOutroProduto,
       aoPedirOutroProduto: () => pediuOutroProduto = true,
+      aoConcluirContagem: () => concluiuContagem = true,
     ),
   );
+  if (concluiuContagem) onContagemConcluida?.call();
   if (pediuOutroProduto) onOutroProduto?.call();
   return excluidos;
 }
@@ -121,6 +128,7 @@ class _QuantidadeDialog extends StatefulWidget {
   // Rótulo do "Outro produto nesta caixa" — null esconde o botão.
   final String? rotuloOutroProduto;
   final VoidCallback? aoPedirOutroProduto;
+  final VoidCallback? aoConcluirContagem;
 
   const _QuantidadeDialog({
     required this.produtoCodigo,
@@ -132,6 +140,7 @@ class _QuantidadeDialog extends StatefulWidget {
     required this.excluidos,
     this.rotuloOutroProduto,
     this.aoPedirOutroProduto,
+    this.aoConcluirContagem,
   });
 
   @override
@@ -551,6 +560,7 @@ class _QuantidadeDialogState extends State<_QuantidadeDialog> {
     final salvouEditados = await _salvarEditados();
     final resultado = await _service.concluirContagem(widget.produtoCodigo);
     if (!mounted) return;
+    if (resultado != null && salvouEditados) widget.aoConcluirContagem?.call();
     Navigator.pop(context);
 
     if (resultado == null || !salvouEditados) {
