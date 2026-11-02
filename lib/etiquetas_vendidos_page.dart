@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'etiquetas_vendidos.dart';
 import 'etiquetas_vendidos_service.dart';
+import 'fila_etiquetas_tab.dart';
 import 'onde_esta.dart';
 import 'repor_loja_tab.dart';
 import 'zebra_bluetooth.dart';
@@ -12,8 +13,9 @@ import 'zebra_bluetooth.dart';
 /// na loja (mesma regra da ferramenta etiquetas_vendidos_loja do MCP) e
 /// imprime direto na Zebra ZT410 por Bluetooth clássico, um comando por vez.
 ///
-/// Segunda aba: a lista do Repor loja do camda-estoque. Nas duas, tocar no
-/// nome do produto mostra onde ele está nos mapas ([abrirEndereco]).
+/// Segunda aba: a lista do Repor loja do camda-estoque. Terceira: a fila do
+/// app Etiquetas CAMDA. Nas três, tocar no nome do produto mostra onde ele
+/// está nos mapas ([abrirEndereco]).
 class EtiquetasVendidosPage extends StatefulWidget {
   final AbrirEndereco? abrirEndereco;
 
@@ -38,11 +40,12 @@ const _laranja = Color(0xFFe8a022);
 class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage>
     with SingleTickerProviderStateMixin {
   final _service = const EtiquetasVendidosService();
-  late final TabController _abas = TabController(length: 2, vsync: this)
+  late final TabController _abas = TabController(length: 3, vsync: this)
     ..addListener(() {
       if (mounted) setState(() {});
     });
   final _reporKey = GlobalKey<ReporLojaTabState>();
+  final _filaKey = GlobalKey<FilaEtiquetasTabState>();
 
   bool get _naAbaVendidos => _abas.index == 0;
   final _zebra = ZebraBluetooth.instance;
@@ -381,14 +384,20 @@ class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage>
           backgroundColor: _fundo,
           elevation: 0,
           title: Text(
-              _naAbaVendidos ? 'Etiquetas – Vendidos' : 'Repor loja',
+              switch (_abas.index) {
+                0 => 'Etiquetas – Vendidos',
+                1 => 'Repor loja',
+                _ => 'Fila de etiquetas',
+              },
               style: const TextStyle(fontSize: 17)),
           actions: [
             IconButton(
               icon: const Icon(Icons.refresh, color: _cinza),
               tooltip: 'Buscar de novo',
               onPressed: !_naAbaVendidos
-                  ? () => _reporKey.currentState?.recarregar()
+                  ? () => _abas.index == 1
+                      ? _reporKey.currentState?.recarregar()
+                      : _filaKey.currentState?.recarregar()
                   : _carregando || _imprimindo
                       ? null
                       : _buscar,
@@ -409,6 +418,7 @@ class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage>
             tabs: const [
               Tab(text: 'Vendidos'),
               Tab(text: 'Repor loja'),
+              Tab(text: 'Etiquetas'),
             ],
           ),
         ),
@@ -423,6 +433,8 @@ class _EtiquetasVendidosPageState extends State<EtiquetasVendidosPage>
               Expanded(child: _lista(produtos)),
             ]),
             ReporLojaTab(key: _reporKey, abrirEndereco: widget.abrirEndereco),
+            FilaEtiquetasTab(
+                key: _filaKey, abrirEndereco: widget.abrirEndereco),
           ],
         ),
         bottomNavigationBar: _naAbaVendidos ? _rodape(produtos) : null,
